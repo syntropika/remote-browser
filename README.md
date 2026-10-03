@@ -27,6 +27,31 @@ Open <http://localhost:8080> and create your account with a username and a passw
 
 The browser profile, account, API keys and saved files live in the `browser-data` volume. Keep that volume when updating the container.
 
+## Published Docker image
+
+The versioned image is available on [Docker Hub](https://hub.docker.com/r/syntropika/remote-browser) as `syntropika/remote-browser:v0.1.0` for `linux/amd64`. The publishing workflow builds new tags for both `linux/amd64` and `linux/arm64`; Docker selects the matching architecture when pulling a multi-platform tag. There is no `latest` tag. The existing `v0.1.0` image remains amd64-only; ARM64 deployments need a tag published with the updated workflow.
+
+```sh
+docker pull syntropika/remote-browser:v0.1.0
+```
+
+To use the published image with the repository's port, persistence and sandbox settings, clone the repository as shown above and create `compose.image.yaml` in its root:
+
+```yaml
+services:
+  browser:
+    image: syntropika/remote-browser:v0.1.0
+```
+
+Start the container without building locally:
+
+```sh
+docker compose -f compose.yaml -f compose.image.yaml pull
+docker compose -f compose.yaml -f compose.image.yaml up --no-build -d --wait
+```
+
+Open <http://localhost:8080> and follow the same account setup and MCP connection steps. Keep using both Compose files when managing this deployment. To update, change the image tag in `compose.image.yaml` and run the two commands again, preserving the `browser-data` volume. See [Docker Hub releases](docs/releases.md) for the publishing workflow.
+
 ## Connect your agent
 
 In the dashboard, open **More options → API keys**, create a named key and copy it into your MCP client's secret storage. Configure a Streamable HTTP connection:

@@ -4,7 +4,9 @@ The GitHub Actions workflow in `.github/workflows/docker-publish.yml` publishes 
 
 Configure the repository's Actions secret `DOCKER_TOKEN` with a Docker Hub access token for `syntropika` that has write access to `syntropika/remote-browser`. The token is used only by the registry login step; it is not passed to the Docker build.
 
-The workflow installs the locked dependencies, checks TypeScript and runs the unit and gateway tests before building and publishing the production Dockerfile. The Dockerfile also checks and compiles TypeScript. Published images target `linux/amd64`. BuildKit uses the GitHub Actions cache, and published images carry source and revision labels.
+The workflow installs the locked dependencies, checks TypeScript and runs the unit and gateway tests before building and publishing the production Dockerfile. The Dockerfile also checks and compiles TypeScript. Buildx builds `linux/amd64` and `linux/arm64` images and publishes both under one multi-platform tag, using QEMU to build ARM64 on the amd64 runner. Docker selects the matching architecture when pulling that tag. BuildKit uses the GitHub Actions cache, and published images carry source and revision labels.
+
+The existing `v0.1.0` image supports only `linux/amd64`. Multi-platform images require a new tag pointing to a commit with the updated workflow; do not move or overwrite an existing release tag. Building an ARM64 image does not verify Chromium's sandbox or browser behavior on a native ARM64 host. Only x86-64 runtime behavior is currently tested.
 
 Each image uses the Git tag, including a leading `v`. For example, pushing `v1.0.0` publishes `syntropika/remote-browser:v1.0.0`. Docker Metadata sanitizes characters that Docker tags do not allow. No `latest` or version aliases are published, so prereleases and older releases do not change a shared release tag.
 
