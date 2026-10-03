@@ -1,0 +1,31 @@
+services:
+  browser:
+    build: .
+    image: remote-browser:local
+    ports:
+      - "${BROWSER_BIND_ADDRESS:-127.0.0.1}:${BROWSER_PORT:-8080}:8080"
+    volumes:
+      - "${BROWSER_DATA_PATH:-browser-data}:/data"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    environment:
+      TZ: "${BROWSER_TIMEZONE:-UTC}"
+      SCREEN_WIDTH: "${SCREEN_WIDTH:-1280}"
+      SCREEN_HEIGHT: "${SCREEN_HEIGHT:-800}"
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
+    shm_size: 1gb
+    restart: unless-stopped
+    stop_grace_period: 40s
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp.json
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - KILL
+      - SETGID
+      - SETUID
+
+volumes:
+  browser-data:

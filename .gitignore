@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.impeccable/
+data/
+deploy/
+test-results/
+playwright-report/
+*.pem
+*.key
+*.log
+coverage/
+.DS_Store
+__pycache__/
+*.pyc
+dist/

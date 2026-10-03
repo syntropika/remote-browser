@@ -1,0 +1,7 @@
+Remote Browser
+Copyright 2026 Syntropika and contributors
+
+This project includes a modified seccomp profile derived from Playwright.
+Copyright Microsoft Corporation. Licensed under the Apache License, Version 2.0.
+See docker/THIRD_PARTY.md and docker/PLAYWRIGHT-LICENSE for provenance and
+modifications. Other installed dependencies retain their own licenses.
