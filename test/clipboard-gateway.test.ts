@@ -1,17 +1,16 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createGateway } from "../src/server.js";
+import test from "node:test";
+
 import { validateClipboardText } from "../src/clipboard.js";
+import { createGateway } from "../src/server.js";
 
 const token = "clipboard-gateway-test-token-".repeat(3);
 async function fixture(t, overrides = {}) {
-  const directory = await mkdtemp(
-    path.join(tmpdir(), "remote-browser-clipboard-"),
-  );
+  const directory = await mkdtemp(path.join(tmpdir(), "remote-browser-clipboard-"));
   let text = "Synthetic clipboard";
   const gateway = createGateway({
     token,
@@ -32,9 +31,9 @@ async function fixture(t, overrides = {}) {
   const base = `http://127.0.0.1:${gateway.server.address().port}`;
   const session = gateway.auth.createSession();
   const cookie = gateway.auth.cookie(session).split(";")[0];
-  const get = (headers = {}) =>
+  const get = async (headers = {}) =>
     fetch(`${base}/api/clipboard`, { headers: { Cookie: cookie, ...headers } });
-  const post = (body, headers = {}, route = "/api/clipboard") =>
+  const post = async (body, headers = {}, route = "/api/clipboard") =>
     fetch(base + route, {
       method: "POST",
       headers: {
@@ -47,7 +46,9 @@ async function fixture(t, overrides = {}) {
     });
   t.after(async () => {
     gateway.server.closeAllConnections();
-    await new Promise((resolve) => gateway.server.close(resolve));
+    await new Promise((resolve) => {
+      gateway.server.close(resolve);
+    });
     await rm(directory, { recursive: true, force: true });
   });
   return { ...gateway, session, cookie, base, get, post, text: () => text };
@@ -58,8 +59,7 @@ test("clipboard access requires its dashboard control owner and same-origin writ
   assert.equal((await f.get({ Cookie: "" })).status, 401);
   assert.equal((await f.get({ Authorization: `Bearer ${token}` })).status, 403);
   assert.equal(
-    (await f.post({ text: "blocked" }, { Authorization: `Bearer ${token}` }))
-      .status,
+    (await f.post({ text: "blocked" }, { Authorization: `Bearer ${token}` })).status,
     403,
   );
   assert.equal((await f.get()).status, 409);
@@ -67,24 +67,18 @@ test("clipboard access requires its dashboard control owner and same-origin writ
   f.control.take(f.session);
   const other = f.auth.cookie(f.auth.createSession()).split(";")[0];
   assert.equal((await f.get({ Cookie: other })).status, 409);
-  assert.equal(
-    (await f.post({ text: "blocked" }, { Cookie: other })).status,
-    409,
-  );
-  assert.equal(
-    (await f.post({ text: "blocked" }, { Origin: "http://evil.invalid" }))
-      .status,
-    403,
-  );
+  assert.equal((await f.post({ text: "blocked" }, { Cookie: other })).status, 409);
+  assert.equal((await f.post({ text: "blocked" }, { Origin: "http://evil.invalid" })).status, 403);
   assert.equal((await f.post({ text: "blocked" }, { Origin: "" })).status, 403);
   const text = "café 😀 日本語 العربية\nSecond line";
   assert.equal((await f.post({ text })).status, 200);
   const read = await f.get();
   assert.equal(read.headers.get("cache-control"), "no-store");
   assert.deepEqual(await read.json(), { text });
-  for (const value of [null, 12, "text\0more"])
+  for (const value of [null, 12, "text\0more"]) {
     assert.equal((await f.post({ text: value })).status, 400);
-  assert.equal((await f.post({ text: "😀".repeat(16385) })).status, 413);
+  }
+  assert.equal((await f.post({ text: "😀".repeat(16_385) })).status, 413);
   assert.equal(f.text(), text);
 });
 
@@ -96,7 +90,8 @@ test("clipboard transfer is unavailable when the desktop is unavailable", async 
 });
 
 test("pending clipboard writes keep MCP blocked after releasing human control", async (t) => {
-  let resume, started;
+  let resume;
+  let started;
   const entered = new Promise((resolve) => {
     started = resolve;
   });
@@ -116,7 +111,7 @@ test("pending clipboard writes keep MCP blocked after releasing human control", 
   await entered;
   assert.equal((await f.post({ text: "overlap" })).status, 409);
   f.control.release(f.session);
-  assert.throws(() => f.control.begin(), /Another browser operation/);
+  assert.throws(() => f.control.begin(), /Another browser operation/u);
   resume();
   assert.equal((await pending).status, 200);
   assert.equal(f.control.active, 0);
@@ -125,7 +120,8 @@ test("pending clipboard writes keep MCP blocked after releasing human control", 
 
 test("a clipboard read is not returned after its session or lease ends", async (t) => {
   for (const change of ["logout", "release"]) {
-    let resume, started;
+    let resume;
+    let started;
     const entered = new Promise((resolve) => {
       started = resolve;
     });
@@ -143,8 +139,11 @@ test("a clipboard read is not returned after its session or lease ends", async (
     f.control.take(f.session);
     const pending = f.get();
     await entered;
-    if (change === "logout") await f.post({}, {}, "/api/logout");
-    else f.control.release(f.session);
+    if (change === "logout") {
+      await f.post({}, {}, "/api/logout");
+    } else {
+      f.control.release(f.session);
+    }
     resume();
     const response = await pending;
     assert.equal(response.status, change === "logout" ? 401 : 409);
@@ -153,7 +152,8 @@ test("a clipboard read is not returned after its session or lease ends", async (
 });
 
 test("clipboard mutation rechecks authorization after asynchronous preparation", async (t) => {
-  let resume, started;
+  let resume;
+  let started;
   let mutated = false;
   const entered = new Promise((resolve) => {
     started = resolve;

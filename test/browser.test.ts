@@ -1,14 +1,13 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
 import { once } from "node:events";
+import http from "node:http";
+import test from "node:test";
+
 import { WebSocketServer } from "ws";
+
 import { BrowserService, navigationUrl } from "../src/browser.js";
 
-async function fixture(
-  t,
-  { timeoutMs = 1000, maxInflight = 16, intercept = () => false } = {},
-) {
+async function fixture(t, { timeoutMs = 1000, maxInflight = 16, intercept = () => false } = {}) {
   const state = {
     targets: [
       {
@@ -35,14 +34,18 @@ async function fixture(
     socket.on("message", (data) => {
       const message = JSON.parse(data);
       state.messages.push(message);
-      const reply = (result = {}) =>
+      const reply = (result = {}) => {
         socket.send(JSON.stringify({ id: message.id, result }));
-      if (intercept(message, reply, socket)) return;
+      };
+      if (intercept(message, reply, socket)) {
+        return;
+      }
       const { method, params } = message;
-      if (method === "Target.getTargets") reply({ targetInfos: state.targets });
-      else if (method === "Target.attachToTarget")
+      if (method === "Target.getTargets") {
+        reply({ targetInfos: state.targets });
+      } else if (method === "Target.attachToTarget") {
         reply({ sessionId: params.targetId });
-      else if (method === "Runtime.evaluate")
+      } else if (method === "Runtime.evaluate") {
         reply({
           result: {
             value: {
@@ -51,7 +54,7 @@ async function fixture(
             },
           },
         });
-      else if (method === "Target.createTarget") {
+      } else if (method === "Target.createTarget") {
         const targetId = `tab-${++state.nextTab}`;
         state.targets.push({
           targetId,
@@ -62,21 +65,19 @@ async function fixture(
         state.activeId = targetId;
         reply({ targetId });
       } else if (method === "Target.closeTarget") {
-        state.targets = state.targets.filter(
-          (target) => target.targetId !== params.targetId,
-        );
+        state.targets = state.targets.filter((target) => target.targetId !== params.targetId);
         reply({ success: true });
       } else if (method === "Target.activateTarget") {
         state.activeId = params.targetId;
         reply();
       } else if (method === "Page.navigate") {
-        state.targets.find(
-          (target) => target.targetId === message.sessionId,
-        ).url = params.url;
+        state.targets.find((target) => target.targetId === message.sessionId).url = params.url;
         reply({ frameId: "frame-1" });
-      } else if (method === "Page.getNavigationHistory")
+      } else if (method === "Page.getNavigationHistory") {
         reply({ currentIndex: 1, entries: [{ id: 4 }, { id: 5 }, { id: 6 }] });
-      else reply();
+      } else {
+        reply();
+      }
     }),
   );
   server.listen(0, "127.0.0.1");
@@ -88,10 +89,16 @@ async function fixture(
   });
   t.after(async () => {
     service.close();
-    for (const socket of wss.clients) socket.terminate();
-    await new Promise((resolve) => wss.close(resolve));
+    for (const socket of wss.clients) {
+      socket.terminate();
+    }
+    await new Promise((resolve) => {
+      wss.close(resolve);
+    });
     server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => {
+      server.close(resolve);
+    });
   });
   return { state, service };
 }
@@ -100,10 +107,7 @@ test("address input accepts web URLs and searches while excluding executable and
   assert.equal(navigationUrl("example.org/path"), "https://example.org/path");
   assert.equal(navigationUrl("localhost:8080"), "https://localhost:8080/");
   assert.equal(navigationUrl("http://router.local"), "http://router.local/");
-  assert.equal(
-    navigationUrl(" two words "),
-    "https://www.google.com/search?q=two%20words",
-  );
+  assert.equal(navigationUrl(" two words "), "https://www.google.com/search?q=two%20words");
   assert.equal(navigationUrl("about:blank"), "about:blank");
   for (const input of [
     "javascript:alert(1)",
@@ -122,17 +126,19 @@ test("address input accepts web URLs and searches while excluding executable and
 
 test("tab listing excludes non-page targets and follows a tab selected through the remote display", async (t) => {
   const { state, service } = await fixture(t);
-  state.targets.push({
-    targetId: "worker-1",
-    type: "service_worker",
-    url: "https://example.org/worker.js",
-  });
-  state.targets.push({
-    targetId: "tab-2",
-    type: "page",
-    title: "Second",
-    url: "https://example.net/",
-  });
+  state.targets.push(
+    {
+      targetId: "worker-1",
+      type: "service_worker",
+      url: "https://example.org/worker.js",
+    },
+    {
+      targetId: "tab-2",
+      type: "page",
+      title: "Second",
+      url: "https://example.net/",
+    },
+  );
   assert.equal((await service.listTabs()).activeId, "tab-1");
   state.activeId = "tab-2";
   const result = await service.listTabs();
@@ -159,7 +165,9 @@ test("closing the final tab creates a replacement before closing it", async (t) 
 test("navigation follows a newly focused window instead of the previously selected visible tab", async (t) => {
   const { state, service } = await fixture(t, {
     intercept: (message, reply) => {
-      if (message.method !== "Runtime.evaluate") return false;
+      if (message.method !== "Runtime.evaluate") {
+        return false;
+      }
       reply({
         result: {
           value: { visible: true, focused: message.sessionId === "tab-2" },
@@ -177,8 +185,7 @@ test("navigation follows a newly focused window instead of the previously select
   service.activeId = "tab-1";
   await service.action({ action: "navigate", url: "https://example.com/" });
   assert.equal(
-    state.messages.find((message) => message.method === "Page.navigate")
-      .sessionId,
+    state.messages.find((message) => message.method === "Page.navigate").sessionId,
     "tab-2",
   );
   assert.equal((await service.listTabs()).activeId, "tab-2");
@@ -217,7 +224,7 @@ test("authorization is rechecked immediately before a mutation after asynchronou
         },
       },
     ),
-    /session ended/,
+    /session ended/u,
   );
   assert.equal(
     state.messages.some((message) => message.method === "Page.navigate"),
@@ -240,11 +247,13 @@ test("missing mutation completion is distinguished from an ordinary protocol rej
   );
   const rejected = await fixture(t, {
     intercept: (message, reply, socket) => {
-      if (message.method !== "Page.navigate") return false;
+      if (message.method !== "Page.navigate") {
+        return false;
+      }
       socket.send(
         JSON.stringify({
           id: message.id,
-          error: { code: -32602, message: "Rejected" },
+          error: { code: -32_602, message: "Rejected" },
         }),
       );
       return true;

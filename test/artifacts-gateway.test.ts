@@ -1,10 +1,11 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
+import http from "node:http";
 import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
 import { ArtifactService } from "../src/artifacts.js";
 import { createGateway } from "../src/server.js";
 
@@ -15,9 +16,7 @@ const png = Buffer.from(
 );
 
 async function fixture(t) {
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "remote-browser-artifact-gateway-"),
-  );
+  const directory = await mkdtemp(path.join(os.tmpdir(), "remote-browser-artifact-gateway-"));
   const artifactService = new ArtifactService({
     directory: path.join(directory, "artifacts"),
     socketPath: path.join(directory, "artifacts.sock"),
@@ -35,7 +34,7 @@ async function fixture(t) {
   const cookie = gateway.auth.cookie(session).split(";")[0];
   const headers = { Cookie: cookie };
   const bearer = { Authorization: `Bearer ${token}` };
-  const post = (route, body = {}, extra = {}) =>
+  const post = async (route, body = {}, extra = {}) =>
     fetch(base + route, {
       method: "POST",
       headers: {
@@ -53,8 +52,11 @@ async function fixture(t) {
   });
   t.after(async () => {
     gateway.server.closeAllConnections();
-    if (gateway.server.listening)
-      await new Promise((resolve) => gateway.server.close(resolve));
+    if (gateway.server.listening) {
+      await new Promise((resolve) => {
+        gateway.server.close(resolve);
+      });
+    }
     await artifactService.close();
     await rm(directory, { recursive: true, force: true });
   });
@@ -73,10 +75,11 @@ async function fixture(t) {
 
 test("file listing and downloads require authentication and work for dashboard sessions or API keys", async (t) => {
   const f = await fixture(t);
-  for (const route of ["/api/artifacts", f.saved.url])
+  for (const route of ["/api/artifacts", f.saved.url]) {
     assert.equal((await fetch(f.base + route)).status, 401);
+  }
   for (const headers of [f.headers, f.bearer]) {
-    const response = await fetch(f.base + "/api/artifacts", { headers });
+    const response = await fetch(`${f.base}/api/artifacts`, { headers });
     assert.equal(response.status, 200);
     const listing = await response.json();
     assert.deepEqual(listing.files, [f.saved]);
@@ -89,13 +92,13 @@ test("file listing and downloads require authentication and work for dashboard s
     assert.equal(downloaded.headers.get("x-content-type-options"), "nosniff");
     assert.match(
       downloaded.headers.get("content-disposition"),
-      /attachment;.*filename\*=UTF-8''Screenshot%20%22one%22%20%CE%A9.png/,
+      /attachment;.*filename\*=UTF-8''Screenshot%20%22one%22%20%CE%A9.png/u,
     );
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), png);
   }
   assert.equal(
     (
-      await fetch(f.base + "/api/artifacts/unknown/download", {
+      await fetch(`${f.base}/api/artifacts/unknown/download`, {
         headers: f.headers,
       })
     ).status,
@@ -103,7 +106,7 @@ test("file listing and downloads require authentication and work for dashboard s
   );
   assert.equal(
     (
-      await fetch(f.base + "/api/artifacts/%2Fetc%2Fpasswd/download", {
+      await fetch(`${f.base}/api/artifacts/%2Fetc%2Fpasswd/download`, {
         headers: f.headers,
       })
     ).status,
@@ -113,8 +116,8 @@ test("file listing and downloads require authentication and work for dashboard s
 
 test("human upload requires same-origin session and generic previews cannot execute active content", async (t) => {
   const f = await fixture(t);
-  const upload = (headers = {}) =>
-    fetch(f.base + "/api/artifacts/upload", {
+  const upload = async (headers = {}) =>
+    fetch(`${f.base}/api/artifacts/upload`, {
       method: "POST",
       headers: {
         ...f.headers,
@@ -131,12 +134,11 @@ test("human upload requires same-origin session and generic previews cannot exec
   assert.equal(created.status, 201);
   const file = await created.json();
   assert.equal(file.kind, "upload");
-  const preview = await fetch(
-    f.base + file.url.replace("/download", "/preview"),
-    { headers: f.headers },
-  );
+  const preview = await fetch(f.base + file.url.replace("/download", "/preview"), {
+    headers: f.headers,
+  });
   assert.equal(preview.headers.get("content-type"), "application/octet-stream");
-  assert.match(preview.headers.get("content-disposition"), /^attachment;/);
+  assert.match(preview.headers.get("content-disposition"), /^attachment;/u);
   assert.equal(preview.headers.get("x-content-type-options"), "nosniff");
 });
 
@@ -158,11 +160,9 @@ test("gallery previews remain authenticated and support single byte ranges and H
   await writeFile(path.join(f.artifactService.directory, `${id}.bin`), video, {
     mode: 0o600,
   });
-  await writeFile(
-    path.join(f.artifactService.directory, `${id}.json`),
-    JSON.stringify(metadata),
-    { mode: 0o600 },
-  );
+  await writeFile(path.join(f.artifactService.directory, `${id}.json`), JSON.stringify(metadata), {
+    mode: 0o600,
+  });
   const preview = `${f.base}/api/artifacts/${id}/preview`;
   const anonymous = await fetch(preview, { headers: { Range: "bytes=0-7" } });
   assert.equal(anonymous.status, 401);
@@ -172,7 +172,7 @@ test("gallery previews remain authenticated and support single byte ranges and H
     assert.equal(complete.status, 200);
     assert.equal(complete.headers.get("content-type"), "video/mp4");
     assert.equal(complete.headers.get("accept-ranges"), "bytes");
-    assert.match(complete.headers.get("content-disposition"), /^inline;/);
+    assert.match(complete.headers.get("content-disposition"), /^inline;/u);
     assert.deepEqual(Buffer.from(await complete.arrayBuffer()), video);
     for (const [range, start, end] of [
       ["bytes=0-7", 0, 7],
@@ -184,18 +184,9 @@ test("gallery previews remain authenticated and support single byte ranges and H
         headers: { ...headers, Range: range },
       });
       assert.equal(response.status, 206);
-      assert.equal(
-        response.headers.get("content-range"),
-        `bytes ${start}-${end}/${video.length}`,
-      );
-      assert.equal(
-        response.headers.get("content-length"),
-        String(end - start + 1),
-      );
-      assert.deepEqual(
-        Buffer.from(await response.arrayBuffer()),
-        video.subarray(start, end + 1),
-      );
+      assert.equal(response.headers.get("content-range"), `bytes ${start}-${end}/${video.length}`);
+      assert.equal(response.headers.get("content-length"), String(end - start + 1));
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), video.subarray(start, end + 1));
     }
     const head = await fetch(preview, {
       method: "HEAD",
@@ -218,18 +209,14 @@ test("gallery previews remain authenticated and support single byte ranges and H
       headers: { ...f.headers, Range: range },
     });
     assert.equal(response.status, 416, range);
-    assert.equal(
-      response.headers.get("content-range"),
-      `bytes */${video.length}`,
-    );
+    assert.equal(response.headers.get("content-range"), `bytes */${video.length}`);
   }
-  const image = await fetch(
-    f.base + f.saved.url.replace("/download", "/preview"),
-    { headers: f.headers },
-  );
+  const image = await fetch(f.base + f.saved.url.replace("/download", "/preview"), {
+    headers: f.headers,
+  });
   assert.equal(image.status, 200);
   assert.equal(image.headers.get("content-type"), "image/png");
-  assert.match(image.headers.get("content-disposition"), /^inline;/);
+  assert.match(image.headers.get("content-disposition"), /^inline;/u);
   assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
 });
 
@@ -241,22 +228,10 @@ test("only a same-origin dashboard session can stop a recording or delete a file
     return f.saved;
   };
   for (const route of ["/api/recording/stop", "/api/artifacts/delete"]) {
+    assert.equal((await fetch(f.base + route, { method: "POST", body: "{}" })).status, 401);
+    assert.equal((await f.post(route, { id: f.saved.id }, f.bearer)).status, 403);
     assert.equal(
-      (await fetch(f.base + route, { method: "POST", body: "{}" })).status,
-      401,
-    );
-    assert.equal(
-      (await f.post(route, { id: f.saved.id }, f.bearer)).status,
-      403,
-    );
-    assert.equal(
-      (
-        await f.post(
-          route,
-          { id: f.saved.id },
-          { Origin: "http://other.invalid" },
-        )
-      ).status,
+      (await f.post(route, { id: f.saved.id }, { Origin: "http://other.invalid" })).status,
       403,
     );
     assert.equal(
@@ -280,10 +255,7 @@ test("only a same-origin dashboard session can stop a recording or delete a file
   const deleted = await f.post("/api/artifacts/delete", { id: f.saved.id });
   assert.equal(deleted.status, 200);
   assert.deepEqual(await deleted.json(), { deleted: true });
-  assert.equal(
-    (await fetch(f.base + f.saved.url, { headers: f.headers })).status,
-    404,
-  );
+  assert.equal((await fetch(f.base + f.saved.url, { headers: f.headers })).status, 404);
 });
 
 test("expired sessions cannot receive a file listing completed after an asynchronous read", async (t) => {
@@ -301,7 +273,7 @@ test("expired sessions cannot receive a file listing completed after an asynchro
     });
     return listing;
   };
-  const pending = fetch(f.base + "/api/artifacts", { headers: f.headers });
+  const pending = fetch(`${f.base}/api/artifacts`, { headers: f.headers });
   await started;
   f.auth.sessions.delete(f.session);
   release();
@@ -322,7 +294,7 @@ test("a revoked API key cannot receive a download opened after revocation", asyn
   });
   f.artifactService.openFile = async (id) => {
     const file = await openFile(id);
-    stream = file.stream;
+    ({ stream } = file);
     entered();
     await new Promise((resolve) => {
       release = resolve;
@@ -427,7 +399,7 @@ test("status includes recording state without giving API keys dashboard mutation
   };
   f.artifactService.status = () => recording;
   for (const headers of [f.headers, f.bearer]) {
-    const response = await fetch(f.base + "/api/status", { headers });
+    const response = await fetch(`${f.base}/api/status`, { headers });
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).recording, recording);
   }

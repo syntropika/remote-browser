@@ -1,4 +1,4 @@
-export interface DomElements {
+export type DomElements = {
   "icon-arrow": SVGSymbolElement;
   "icon-back": SVGSymbolElement;
   "icon-forward": SVGSymbolElement;
@@ -136,11 +136,14 @@ export interface DomElements {
   "agent-handoff-countdown": HTMLElement;
   "agent-handoff-cancel": HTMLButtonElement;
   "agent-handoff-error": HTMLElement;
-}
+};
 
 /** Resolve the stable ids declared by the dashboard HTML. */
 export function element<K extends keyof DomElements>(id: K): DomElements[K] {
   const value = document.getElementById(id);
-  if (!value) throw new Error(`Missing dashboard element: ${id}`);
+  if (!value) {
+    throw new Error(`Missing dashboard element: ${id}`);
+  }
+  // SAFETY: These IDs and element types are declared together in the checked-in dashboard HTML; missing IDs are rejected above.
   return value as DomElements[K];
 }

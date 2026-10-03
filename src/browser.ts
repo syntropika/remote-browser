@@ -1,30 +1,32 @@
-import { nativeError } from "./effects.js";
-import type { RawData } from "ws";
-import type { Protocol } from "../node_modules/playwright-core/types/protocol.js";
 import { Data, Effect } from "effect";
-import { attempt, run } from "./effects.js";
-export interface BrowserTab {
+import type { RawData } from "ws";
+import { WebSocket } from "ws";
+
+import type { Protocol } from "../node_modules/playwright-core/types/protocol.js";
+import { attempt, nativeError, run } from "./effects.js";
+import { isRecord, jsonObject, required } from "./invariants.js";
+
+export type BrowserTab = {
   id: string;
   title: string;
   url: string;
-}
-export interface BrowserTabs {
+};
+export type BrowserTabs = {
   tabs: BrowserTab[];
   activeId: string | null;
-}
-interface CommandOptions {
+};
+type CommandOptions = {
   deadline: number;
   sessionId?: string;
   mutating?: boolean;
   beforeMutation?: () => void;
-}
-interface PendingCommand {
+};
+type PendingCommand = {
   timer: NodeJS.Timeout;
   mutating: boolean;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-}
-import { WebSocket } from "ws";
+};
 
 export class BrowserError extends Data.TaggedError("BrowserError")<{
   status: number;
@@ -38,29 +40,30 @@ export class BrowserError extends Data.TaggedError("BrowserError")<{
 
 export function navigationUrl(input: unknown) {
   if (typeof input !== "string" || !input.trim() || input.length > 4096) {
-    throw new BrowserError(
-      "Enter a URL or search query of up to 4096 characters.",
-      400,
-    );
+    throw new BrowserError("Enter a URL or search query of up to 4096 characters.", 400);
   }
   const value = input.trim();
-  if (value === "about:blank") return value;
+  if (value === "about:blank") {
+    return value;
+  }
   const host =
     /^(?:localhost|(?:[\p{L}\p{N}_-]+\.)+[\p{L}\p{N}_-]+|\[[a-f\d:]+\])(?::\d+)?(?:[/?#][^\s]*)?$/iu;
   let candidate;
-  if (host.test(value)) candidate = `https://${value}`;
-  else if (/^[a-z][a-z\d+.-]*:/i.test(value)) candidate = value;
-  else return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  if (host.test(value)) {
+    candidate = `https://${value}`;
+  } else if (/^[a-z][a-z\d+.-]*:/iu.test(value)) {
+    candidate = value;
+  } else {
+    return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  }
   try {
     const url = new URL(candidate);
-    if (!["http:", "https:"].includes(url.protocol) || !url.hostname)
-      throw new Error();
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname) {
+      throw new Error("Invalid browser connection or URL.");
+    }
     return url.href;
   } catch {
-    throw new BrowserError(
-      "Use an HTTP or HTTPS address, or enter a search query.",
-      400,
-    );
+    throw new BrowserError("Use an HTTP or HTTPS address, or enter a search query.", 400);
   }
 }
 
@@ -78,11 +81,7 @@ export class BrowserService {
   connecting: Promise<WebSocket> | null;
   listing: Promise<BrowserTabs> | null;
 
-  constructor({
-    endpoint = "http://127.0.0.1:9222",
-    timeoutMs = 8000,
-    maxInflight = 16,
-  } = {}) {
+  constructor({ endpoint = "http://127.0.0.1:9222", timeoutMs = 8000, maxInflight = 16 } = {}) {
     this.endpoint = endpoint;
     this.timeoutMs = timeoutMs;
     this.maxInflight = maxInflight;
@@ -97,42 +96,59 @@ export class BrowserService {
 
   remaining(deadline: number) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0)
+    if (remaining <= 0) {
       throw new BrowserError("The browser took too long to respond.", 504);
+    }
     return remaining;
   }
 
   async connect(deadline: number) {
-    if (this.socket?.readyState === WebSocket.OPEN) return this.socket;
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      return this.socket;
+    }
     if (!this.connecting) {
       this.connecting = (async () => {
         try {
           const response = await fetch(`${this.endpoint}/json/version`, {
             signal: AbortSignal.timeout(this.remaining(deadline)),
           });
-          if (!response.ok) throw new Error();
-          const info = await response.json();
+          if (!response.ok) {
+            throw new Error("Invalid browser connection or URL.");
+          }
+          const info = jsonObject(await response.text());
+          if (typeof info.webSocketDebuggerUrl !== "string") {
+            throw new TypeError("Missing browser WebSocket address.");
+          }
           const address = new URL(info.webSocketDebuggerUrl);
           const expected = new URL(this.endpoint);
           if (
             !["ws:", "wss:"].includes(address.protocol) ||
             address.hostname !== expected.hostname ||
             address.port !== expected.port
-          )
-            throw new Error();
+          ) {
+            throw new Error("Invalid browser connection or URL.");
+          }
           const socket = new WebSocket(address, {
             handshakeTimeout: this.remaining(deadline),
             maxPayload: 2 * 1024 * 1024,
             perMessageDeflate: false,
           });
           await new Promise<void>((resolve, reject) => {
-            socket.once("open", () => resolve());
+            socket.once("open", () => {
+              resolve();
+            });
             socket.once("error", reject);
           });
           this.socket = socket;
-          socket.on("message", (data) => this.receive(data));
-          socket.on("close", () => this.disconnected(socket));
-          socket.on("error", () => this.disconnected(socket));
+          socket.on("message", (data) => {
+            this.receive(data);
+          });
+          socket.on("close", () => {
+            this.disconnected(socket);
+          });
+          socket.on("error", () => {
+            this.disconnected(socket);
+          });
           return socket;
         } catch {
           throw new BrowserError("The browser service is unavailable.", 503);
@@ -147,41 +163,51 @@ export class BrowserService {
   }
 
   disconnected(socket: WebSocket) {
-    if (socket !== this.socket) return;
+    if (socket !== this.socket) {
+      return;
+    }
     this.socket = null;
     this.sessions.clear();
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
       this.pending.delete(id);
       pending.reject(
-        new BrowserError(
-          "The browser connection was interrupted.",
-          502,
-          pending.mutating,
-        ),
+        new BrowserError("The browser connection was interrupted.", 502, pending.mutating),
       );
     }
   }
 
   receive(data: RawData) {
-    let message;
+    let message: Record<string, unknown>;
     try {
-      message = JSON.parse(data.toString());
+      const bytes = Array.isArray(data)
+        ? Buffer.concat(data)
+        : data instanceof ArrayBuffer
+          ? Buffer.from(data)
+          : data;
+      message = jsonObject(bytes.toString("utf-8"));
+      if (typeof message.id !== "number") {
+        return;
+      }
     } catch {
       return;
     }
     const pending = this.pending.get(message.id);
-    if (!pending) return;
+    if (!pending) {
+      return;
+    }
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
-    if (message.error)
+    if (message.error) {
       pending.reject(
         new BrowserError(
           "The browser could not complete this action. Refresh the tab list and try again.",
           502,
         ),
       );
-    else pending.resolve(message.result || {});
+    } else {
+      pending.resolve(message.result || {});
+    }
   }
 
   async command<M extends keyof Protocol.CommandParameters>(
@@ -191,60 +217,56 @@ export class BrowserService {
       deadline,
       sessionId,
       mutating = false,
-      beforeMutation = () => {},
+      beforeMutation = (): void => undefined,
     }: CommandOptions,
   ): Promise<Protocol.CommandReturnValues[M]> {
     const socket = await this.connect(deadline);
-    if (this.pending.size >= this.maxInflight)
+    if (this.pending.size >= this.maxInflight) {
       throw new BrowserError("The browser is busy. Try again shortly.", 503);
+    }
     const timeout = this.remaining(deadline);
-    if (mutating) beforeMutation();
-    return await new Promise<Protocol.CommandReturnValues[M]>(
-      (resolve, reject) => {
-        const id = ++this.nextId;
-        const timer = setTimeout(() => {
+    if (mutating) {
+      beforeMutation();
+    }
+    return new Promise<Protocol.CommandReturnValues[M]>((resolve, reject) => {
+      const id = ++this.nextId;
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new BrowserError("The browser took too long to respond.", 504, mutating));
+        // A command may still be executing. Its caller keeps the control gate
+        // closed when the missing response belongs to a mutation.
+        socket.terminate();
+      }, timeout);
+      this.pending.set(id, {
+        resolve: (value) => {
+          // SAFETY: The pending command ID binds this CDP response to method M and its protocol return type.
+          resolve(value as Protocol.CommandReturnValues[M]);
+        },
+        reject,
+        timer,
+        mutating,
+      });
+      socket.send(
+        JSON.stringify({
+          id,
+          method,
+          params,
+          ...(sessionId ? { sessionId } : {}),
+        }),
+        (error) => {
+          if (!error) {
+            return;
+          }
+          const pending = this.pending.get(id);
+          if (!pending) {
+            return;
+          }
+          clearTimeout(timer);
           this.pending.delete(id);
-          reject(
-            new BrowserError(
-              "The browser took too long to respond.",
-              504,
-              mutating,
-            ),
-          );
-          // A command may still be executing. Its caller keeps the control gate
-          // closed when the missing response belongs to a mutation.
-          socket.terminate();
-        }, timeout);
-        this.pending.set(id, {
-          resolve: (value) => resolve(value as Protocol.CommandReturnValues[M]),
-          reject,
-          timer,
-          mutating,
-        });
-        socket.send(
-          JSON.stringify({
-            id,
-            method,
-            params,
-            ...(sessionId ? { sessionId } : {}),
-          }),
-          (error) => {
-            if (!error) return;
-            const pending = this.pending.get(id);
-            if (!pending) return;
-            clearTimeout(timer);
-            this.pending.delete(id);
-            reject(
-              new BrowserError(
-                "The browser connection was interrupted.",
-                502,
-                mutating,
-              ),
-            );
-          },
-        );
-      },
-    );
+          reject(new BrowserError("The browser connection was interrupted.", 502, mutating));
+        },
+      );
+    });
   }
 
   async pageSession(tabId: string, deadline: number) {
@@ -255,25 +277,22 @@ export class BrowserService {
         { deadline },
       )
         .then(({ sessionId }) => {
-          if (!sessionId)
+          if (!sessionId) {
             throw new BrowserError("This tab is no longer available.", 409);
+          }
           return sessionId;
         })
-        .catch((error) => {
-          this.sessions.delete(tabId!);
-          throw error;
+        .catch((cause: unknown) => {
+          this.sessions.delete(tabId);
+          throw cause;
         });
       this.sessions.set(tabId, attaching);
     }
-    return await this.sessions.get(tabId)!;
+    return required(this.sessions.get(tabId));
   }
 
   async targets(deadline: number) {
-    const { targetInfos = [] } = await this.command(
-      "Target.getTargets",
-      {},
-      { deadline },
-    );
+    const { targetInfos } = await this.command("Target.getTargets", {}, { deadline });
     const tabs = targetInfos
       .filter((target) => target.type === "page")
       .map((target) => ({
@@ -282,8 +301,11 @@ export class BrowserService {
         url: target.url || "about:blank",
       }));
     const ids = new Set(tabs.map((tab) => tab.id));
-    for (const id of this.sessions.keys())
-      if (!ids.has(id)) this.sessions.delete(id);
+    for (const id of this.sessions.keys()) {
+      if (!ids.has(id)) {
+        this.sessions.delete(id);
+      }
+    }
     return tabs;
   }
 
@@ -291,7 +313,7 @@ export class BrowserService {
     // Browser CDP has no active-tab field. Read visibility and focus from each
     // page without executing site callbacks. Preserve our selected tab when
     // several browser windows have a visible page at the same time.
-    const ordered = [...tabs].sort(
+    const ordered = [...tabs].toSorted(
       (a, b) => Number(b.id === this.activeId) - Number(a.id === this.activeId),
     );
     let visible: string | null = null;
@@ -309,21 +331,24 @@ export class BrowserService {
           },
           { deadline, sessionId },
         );
-        if (result?.value?.visible) {
+        const visibility: unknown = result.value;
+        if (isRecord(visibility) && visibility.visible === true) {
           visible ||= tab.id;
-          if (result.value.focused) return tab.id;
+          if (visibility.focused === true) {
+            return tab.id;
+          }
         }
-      } catch (errorCause) {
-        const error = nativeError(errorCause);
-        if (Date.now() >= deadline || error.status === 503) break;
+      } catch (cause) {
+        const error = nativeError(cause);
+        if (Date.now() >= deadline || error.status === 503) {
+          break;
+        }
         this.sessions.delete(tab.id);
       }
     }
     return (
       visible ||
-      (tabs.some((tab) => tab.id === this.activeId)
-        ? this.activeId
-        : tabs[0]?.id) ||
+      (tabs.some((tab) => tab.id === this.activeId) ? this.activeId : tabs[0]?.id) ||
       null
     );
   }
@@ -341,14 +366,14 @@ export class BrowserService {
         this.listing = null;
       });
     }
-    return await this.listing;
+    return this.listing;
   }
 
   listTabsEffect() {
-    return attempt(() => this.listTabs());
+    return attempt(async () => this.listTabs());
   }
 
-  action(
+  async action(
     input: Parameters<BrowserService["actionEffect"]>[0],
     options: Parameters<BrowserService["actionEffect"]>[1] = {},
   ) {
@@ -357,18 +382,10 @@ export class BrowserService {
 
   actionEffect(
     input: { action?: string; tabId?: string; url?: unknown } | null,
-    { beforeMutation = () => {} } = {},
+    { beforeMutation = (): void => undefined } = {},
   ) {
     return Effect.gen({ self: this }, function* () {
-      const allowed = [
-        "navigate",
-        "new-tab",
-        "activate",
-        "close",
-        "back",
-        "forward",
-        "reload",
-      ];
+      const allowed = ["navigate", "new-tab", "activate", "close", "back", "forward", "reload"];
       if (
         !input ||
         typeof input !== "object" ||
@@ -376,123 +393,98 @@ export class BrowserService {
         !input.action ||
         !allowed.includes(input.action)
       ) {
-        return yield* Effect.fail(
-          new BrowserError("Choose a supported browser action.", 400),
-        );
+        return yield* Effect.fail(new BrowserError("Choose a supported browser action.", 400));
       }
       if (
         input.tabId !== undefined &&
-        (typeof input.tabId !== "string" ||
-          !/^[a-z\d_-]{1,128}$/i.test(input.tabId))
+        (typeof input.tabId !== "string" || !/^[a-z\d_-]{1,128}$/iu.test(input.tabId))
       ) {
-        return yield* Effect.fail(
-          new BrowserError("Choose a valid browser tab.", 400),
-        );
+        return yield* Effect.fail(new BrowserError("Choose a valid browser tab.", 400));
       }
       const url = ["navigate", "new-tab"].includes(input.action)
         ? yield* attempt(() =>
             navigationUrl(
-              input.url === undefined && input.action === "new-tab"
-                ? "about:blank"
-                : input.url,
+              input.url === undefined && input.action === "new-tab" ? "about:blank" : input.url,
             ),
           )
         : null;
       const deadline = Date.now() + this.timeoutMs;
       const options = { deadline, mutating: true, beforeMutation };
-      const tabs = yield* attempt(() => this.targets(deadline));
+      const tabs = yield* attempt(async () => this.targets(deadline));
       let tabId: string | null | undefined = input.tabId;
       if (input.action !== "new-tab") {
-        tabId ||= yield* attempt(() => this.activeTab(tabs, deadline));
-        if (!tabs.some((tab) => tab.id === tabId))
+        tabId ||= yield* attempt(async () => this.activeTab(tabs, deadline));
+        if (!tabs.some((tab) => tab.id === tabId)) {
           return yield* Effect.fail(
-            new BrowserError(
-              "This tab is no longer available. Refresh the tab list.",
-              409,
-            ),
+            new BrowserError("This tab is no longer available. Refresh the tab list.", 409),
           );
+        }
       }
       if (input.action === "new-tab") {
-        const created = yield* attempt(() =>
-          this.command("Target.createTarget", { url: url! }, options),
+        const created = yield* attempt(async () =>
+          this.command("Target.createTarget", { url: required(url) }, options),
         );
         tabId = created.targetId;
-        yield* attempt(() =>
-          this.command("Target.activateTarget", { targetId: tabId! }, options),
+        yield* attempt(async () =>
+          this.command("Target.activateTarget", { targetId: required(tabId) }, options),
         );
-        this.activeId = tabId!;
+        this.activeId = required(tabId);
       } else if (input.action === "activate") {
-        yield* attempt(() =>
-          this.command("Target.activateTarget", { targetId: tabId! }, options),
+        yield* attempt(async () =>
+          this.command("Target.activateTarget", { targetId: required(tabId) }, options),
         );
-        this.activeId = tabId!;
+        this.activeId = required(tabId);
       } else if (input.action === "close") {
         // Chromium exits when its last page closes, taking every session with it.
         if (tabs.length === 1) {
-          const created = yield* attempt(() =>
-            this.command(
-              "Target.createTarget",
-              { url: "about:blank" },
-              options,
-            ),
+          const created = yield* attempt(async () =>
+            this.command("Target.createTarget", { url: "about:blank" }, options),
           );
           this.activeId = created.targetId;
         }
-        const { success } = yield* attempt(() =>
-          this.command("Target.closeTarget", { targetId: tabId! }, options),
+        const { success } = yield* attempt(async () =>
+          this.command("Target.closeTarget", { targetId: required(tabId) }, options),
         );
-        if (!success)
+        if (!success) {
           return yield* Effect.fail(
-            new BrowserError(
-              "This tab could not be closed. Refresh the tab list.",
-              409,
-            ),
+            new BrowserError("This tab could not be closed. Refresh the tab list.", 409),
           );
-        this.sessions.delete(tabId!);
+        }
+        this.sessions.delete(required(tabId));
       } else {
-        const sessionId = yield* attempt(() =>
-          this.pageSession(tabId!, deadline),
-        );
+        const sessionId = yield* attempt(async () => this.pageSession(required(tabId), deadline));
         const pageOptions = { ...options, sessionId };
         if (input.action === "navigate") {
-          const result = yield* attempt(() =>
-            this.command("Page.navigate", { url: url! }, pageOptions),
+          const result = yield* attempt(async () =>
+            this.command("Page.navigate", { url: required(url) }, pageOptions),
           );
-          if (result.errorText)
+          if (result.errorText) {
             return yield* Effect.fail(
               new BrowserError(
                 "This address could not be loaded. Check the address and try again.",
                 422,
               ),
             );
+          }
         } else if (input.action === "reload") {
-          yield* attempt(() => this.command("Page.reload", {}, pageOptions));
+          yield* attempt(async () => this.command("Page.reload", {}, pageOptions));
         } else {
-          const history = yield* attempt(() =>
-            this.command(
-              "Page.getNavigationHistory",
-              {},
-              { deadline, sessionId },
-            ),
+          const history = yield* attempt(async () =>
+            this.command("Page.getNavigationHistory", {}, { deadline, sessionId }),
           );
           const entry =
-            history.entries?.[
-              history.currentIndex + (input.action === "back" ? -1 : 1)
-            ];
-          if (entry)
-            yield* attempt(() =>
-              this.command(
-                "Page.navigateToHistoryEntry",
-                { entryId: entry.id },
-                pageOptions,
-              ),
+            history.entries?.[history.currentIndex + (input.action === "back" ? -1 : 1)];
+          if (entry) {
+            yield* attempt(async () =>
+              this.command("Page.navigateToHistoryEntry", { entryId: entry.id }, pageOptions),
             );
+          }
         }
       }
       // Fetch a fresh snapshot after the mutation rather than returning an older
       // poll that may have started while this action was running.
-      const updated = yield* attempt(() => this.targets(deadline));
-      this.activeId = yield* attempt(() => this.activeTab(updated, deadline));
+      const updated = yield* attempt(async () => this.targets(deadline));
+      this.activeId = yield* attempt(async () => this.activeTab(updated, deadline));
       return { tabs: updated, activeId: this.activeId };
     });
   }

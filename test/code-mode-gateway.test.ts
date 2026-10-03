@@ -1,10 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import test from "node:test";
+
+import { asyncHandler } from "../src/async-boundary.js";
 import { createGateway } from "../src/server.js";
 
 const token = "synthetic-code-mode-token-".repeat(3);
@@ -14,8 +16,7 @@ const call = (name, args = {}) => ({
   method: "tools/call",
   params: { name, arguments: args },
 });
-const execution = () =>
-  call("browser_execute", { code: "return await page.title();" });
+const execution = () => call("browser_execute", { code: "return await page.title();" });
 const completion = (value = "Fixture", fields = {}) => ({
   jsonrpc: "2.0",
   id: 1,
@@ -34,20 +35,22 @@ async function listen(server) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 async function fixture(t, handler, options = {}) {
-  const upstreamServer = http.createServer(async (req, res) => {
-    try {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      const body = Buffer.concat(chunks).toString();
-      await handler(req, res, body ? JSON.parse(body) : null);
-    } catch (error) {
-      res.destroy(error);
-    }
-  });
-  const upstream = await listen(upstreamServer);
-  const directory = await mkdtemp(
-    path.join(tmpdir(), "remote-browser-code-mode-"),
+  const upstreamServer = http.createServer(
+    asyncHandler(async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      try {
+        const chunks = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks).toString();
+        await handler(req, res, body ? JSON.parse(body) : null);
+      } catch (cause) {
+        res.destroy(cause);
+      }
+    }),
   );
+  const upstream = await listen(upstreamServer);
+  const directory = await mkdtemp(path.join(tmpdir(), "remote-browser-code-mode-"));
   const gateway = createGateway({
     token,
     accountFile: path.join(directory, "account.json"),
@@ -58,8 +61,8 @@ async function fixture(t, handler, options = {}) {
   const base = await listen(gateway.server);
   const session = gateway.auth.createSession();
   const cookie = gateway.auth.cookie(session).split(";")[0];
-  const rpc = (message, extra = {}) =>
-    fetch(base + "/mcp", {
+  const rpc = async (message, extra = {}) =>
+    fetch(`${base}/mcp`, {
       ...extra,
       method: "POST",
       headers: {
@@ -71,7 +74,7 @@ async function fixture(t, handler, options = {}) {
       },
       body: JSON.stringify(message),
     });
-  const post = (route, body = {}) =>
+  const post = async (route, body = {}) =>
     fetch(base + route, {
       method: "POST",
       headers: {
@@ -85,8 +88,12 @@ async function fixture(t, handler, options = {}) {
     gateway.server.closeAllConnections();
     upstreamServer.closeAllConnections();
     await Promise.all([
-      new Promise((resolve) => gateway.server.close(resolve)),
-      new Promise((resolve) => upstreamServer.close(resolve)),
+      new Promise((resolve) => {
+        gateway.server.close(resolve);
+      }),
+      new Promise((resolve) => {
+        upstreamServer.close(resolve);
+      }),
     ]);
     await rm(directory, { recursive: true, force: true });
   });
@@ -112,12 +119,9 @@ test("docs work during human control and execution requires a connected handoff 
   assert.equal((await f.post("/api/control/take")).status, 200);
   const docs = await f.rpc(call("browser_docs", { topic: "interaction" }));
   assert.equal(docs.headers.get("mcp-session-id"), "fixture-session");
-  assert.match((await docs.json()).result.content[0].text, /getByRole/);
+  assert.match((await docs.json()).result.content[0].text, /getByRole/u);
   assert.deepEqual(seen, [{ jsonrpc: "2.0", id: 1, method: "ping" }]);
-  assert.match(
-    (await (await f.rpc(execution())).json()).error.message,
-    /Human control/,
-  );
+  assert.match((await (await f.rpc(execution())).json()).error.message, /Human control/u);
   assert.equal(seen.length, 1);
   assert.equal(
     (
@@ -137,19 +141,21 @@ async function controlEvents(t, f) {
   });
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
-  t.after(() => abort.abort());
+  t.after(() => {
+    abort.abort();
+  });
   await reader.read();
   return { abort, reader };
 }
 
 async function pendingRequest(f) {
   const deadline = Date.now() + 3000;
-  while (!f.control.agentRequest && Date.now() < deadline)
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.ok(
-    f.control.agentRequest,
-    "A connected dashboard must receive a pending request.",
-  );
+  while (!f.control.agentRequest && Date.now() < deadline) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+  assert.ok(f.control.agentRequest, "A connected dashboard must receive a pending request.");
   return f.control.agentRequest.id;
 }
 
@@ -170,8 +176,8 @@ test("a connected dashboard receives a countdown and the same MCP execution cont
   assert.equal(f.control.canControl(f.session), true);
   assert.equal(executed, 0);
   const frame = new TextDecoder().decode((await events.reader.read()).value);
-  assert.match(frame, /"agentRequest":\{"id"/);
-  assert.match(frame, /"canCancel":true/);
+  assert.match(frame, /"agentRequest":\{"id"/u);
+  assert.match(frame, /"canCancel":true/u);
   const result = await (await pending).json();
   assert.equal(result.result.structuredContent.value, "Automatic handoff");
   assert.equal(executed, 1);
@@ -221,16 +227,10 @@ test("cancellation is owner-only, same-origin, and prevents execution and prompt
     ).status,
     403,
   );
-  assert.equal(
-    (await f.post("/api/control/agent/cancel", { id: "stale" })).status,
-    409,
-  );
+  assert.equal((await f.post("/api/control/agent/cancel", { id: "stale" })).status, 409);
   assert.equal((await f.post("/api/control/agent/cancel", { id })).status, 200);
-  assert.match((await (await pending).json()).error.message, /cancelled/);
-  assert.match(
-    (await (await f.rpc(execution())).json()).error.message,
-    /30 seconds/,
-  );
+  assert.match((await (await pending).json()).error.message, /cancelled/u);
+  assert.match((await (await f.rpc(execution())).json()).error.message, /30 seconds/u);
   assert.equal(executed, 0);
   assert.equal(f.control.canControl(f.session), true);
 });
@@ -246,10 +246,7 @@ test("revoking a waiting key and disconnecting the dashboard both cancel handoff
   const disconnected = f.rpc(execution());
   await pendingRequest(f);
   events.abort.abort();
-  assert.match(
-    (await (await disconnected).json()).error.message,
-    /dashboard connection was lost/,
-  );
+  assert.match((await (await disconnected).json()).error.message, /dashboard connection was lost/u);
   assert.equal(f.control.canControl(f.session), true);
   await controlEvents(t, f);
   const pending = f.rpc(execution()).catch(() => null);
@@ -263,14 +260,14 @@ test("revoking a waiting key and disconnecting the dashboard both cancel handoff
 });
 
 test("discovery and invalid code never create handoff prompts", async (t) => {
-  const f = await fixture(t, async (req, res) => json(res, completion()));
+  const f = await fixture(t, async (req, res) => {
+    json(res, completion());
+  });
   await f.post("/api/control/take");
   await controlEvents(t, f);
   await f.rpc(call("browser_docs"));
-  const invalid = await (
-    await f.rpc(call("browser_execute", { code: "return {" }))
-  ).json();
-  assert.match(invalid.error.message, /Human control/);
+  const invalid = await (await f.rpc(call("browser_execute", { code: "return {" }))).json();
+  assert.match(invalid.error.message, /Human control/u);
   assert.equal(f.control.agentRequest, null);
 });
 
@@ -278,9 +275,11 @@ test("session and protocol errors are passed through instead of fabricating tool
   const error = {
     jsonrpc: "2.0",
     id: 1,
-    error: { code: -32000, message: "Unknown MCP session" },
+    error: { code: -32_000, message: "Unknown MCP session" },
   };
-  const f = await fixture(t, async (req, res) => json(res, error, 404));
+  const f = await fixture(t, async (req, res) => {
+    json(res, error, 404);
+  });
   for (const message of [
     { jsonrpc: "2.0", id: 1, method: "tools/list" },
     call("browser_docs"),
@@ -303,17 +302,19 @@ test("chunked SSE returns images and metadata while preserving notification fram
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     for (let offset = 0; offset < source.length; offset += 7) {
       res.write(source.slice(offset, offset + 7));
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
     }
     res.end();
   });
   const output = await (await f.rpc(execution())).text();
   assert.ok(output.startsWith(`: keep-alive\n\n${notification}`));
-  const result = output
+  const { result } = output
     .split("\n")
     .filter((line) => line.startsWith("data: "))
     .map((line) => JSON.parse(line.slice(6)))
-    .find((item) => item.id === 1).result;
+    .find((item) => item.id === 1);
   assert.equal(result.structuredContent.value, "Screenshot");
   assert.equal(result.content[1].type, "image");
   assert.equal(result.content[1].data, png);
@@ -338,12 +339,10 @@ test("disconnect and key revocation do not release an executing browser operatio
   t.after(() => release?.());
   const keyResponse = await f.post("/api/keys", { name: "Disposable agent" });
   const { key, secret } = await keyResponse.json();
-  const request = f
-    .rpc(execution(), { headers: { Authorization: `Bearer ${secret}` } })
-    .then(
-      () => false,
-      () => true,
-    );
+  const request = f.rpc(execution(), { headers: { Authorization: `Bearer ${secret}` } }).then(
+    () => false,
+    () => true,
+  );
   await hasStarted;
   assert.equal((await f.post("/api/keys/revoke", { id: key.id })).status, 200);
   assert.equal(await request, true);
@@ -351,24 +350,27 @@ test("disconnect and key revocation do not release an executing browser operatio
   assert.equal((await f.post("/api/control/take")).status, 202);
   assert.equal(f.control.canControl(f.session), false);
   release();
-  for (let i = 0; i < 100 && f.control.active; i++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let i = 0; i < 100 && f.control.active; i++) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
   assert.equal(f.control.active, 0);
   assert.equal(f.control.fault, null);
   assert.equal(f.control.canControl(f.session), true);
 });
 
 test("normal script errors complete the operation without poisoning the handoff", async (t) => {
-  const f = await fixture(t, async (req, res) =>
+  const f = await fixture(t, async (req, res) => {
     json(
       res,
       completion(null, {
         ok: false,
         error: { name: "Error", message: "Element not found" },
       }),
-    ),
-  );
-  const result = (await (await f.rpc(execution())).json()).result;
+    );
+  });
+  const { result } = await (await f.rpc(execution())).json();
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent.error.message, "Element not found");
   assert.equal(f.control.fault, null);
@@ -376,8 +378,8 @@ test("normal script errors complete the operation without poisoning the handoff"
 });
 
 test("malformed execution responses and timeouts preserve an unknown-completion fault", async (t) => {
-  await t.test("malformed JSON", async (t) => {
-    const f = await fixture(t, async (req, res) => {
+  await t.test("malformed JSON", async (localT) => {
+    const f = await fixture(localT, async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end("{broken");
     });
@@ -385,15 +387,15 @@ test("malformed execution responses and timeouts preserve an unknown-completion 
     assert.equal(f.control.status().ready, false);
     assert.equal((await f.post("/api/control/take")).status, 503);
   });
-  await t.test("timeout", async (t) => {
-    const f = await fixture(t, async () => {}, { upstreamTimeoutMs: 25 });
+  await t.test("timeout", async (localT) => {
+    const f = await fixture(localT, async (): void => undefined, { upstreamTimeoutMs: 25 });
     assert.equal((await f.rpc(execution())).status, 502);
     assert.equal(f.control.status().ready, false);
   });
-  await t.test("upstream failure", async (t) => {
-    const f = await fixture(t, async (req, res) =>
-      json(res, { error: "Unavailable" }, 503),
-    );
+  await t.test("upstream failure", async (localT) => {
+    const f = await fixture(localT, async (req, res) => {
+      json(res, { error: "Unavailable" }, 503);
+    });
     assert.equal((await f.rpc(execution())).status, 503);
     assert.equal(f.control.status().ready, false);
   });

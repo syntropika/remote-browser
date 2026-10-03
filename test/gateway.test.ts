@@ -1,12 +1,15 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
-import net from "node:net";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import http from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import test from "node:test";
+
 import { WebSocket } from "ws";
+
+import { asyncHandler } from "../src/async-boundary.js";
 import { createGateway } from "../src/server.js";
 
 const token = "test-only-access-token-".repeat(3);
@@ -20,16 +23,11 @@ async function listen(server) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 async function fixture(t, options = {}) {
-  const {
-    configured = true,
-    accountFile: existingAccountFile,
-    ...gatewayOptions
-  } = options;
+  const { configured = true, accountFile: existingAccountFile, ...gatewayOptions } = options;
   const directory = existingAccountFile
     ? null
     : await mkdtemp(path.join(tmpdir(), "remote-browser-gateway-"));
-  const accountFile =
-    existingAccountFile || path.join(directory, "account.json");
+  const accountFile = existingAccountFile || path.join(directory, "account.json");
   const gateway = createGateway({
     token,
     accountFile,
@@ -39,12 +37,17 @@ async function fixture(t, options = {}) {
   const base = await listen(gateway.server);
   const close = async () => {
     gateway.server.closeAllConnections();
-    if (gateway.server.listening)
-      await new Promise((resolve) => gateway.server.close(resolve));
+    if (gateway.server.listening) {
+      await new Promise((resolve) => {
+        gateway.server.close(resolve);
+      });
+    }
   };
   t.after(async () => {
     await close();
-    if (directory) await rm(directory, { recursive: true, force: true });
+    if (directory) {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
   const post = async (url, body, cookie, extra = {}) =>
     fetch(base + url, {
@@ -102,29 +105,22 @@ test("first visit creates the only dashboard account and an authenticated sessio
   assert.equal(setup.status, 201);
   assert.deepEqual(await setup.json(), { authenticated: true });
   const cookieHeader = setup.headers.get("set-cookie");
-  assert.match(cookieHeader, /HttpOnly/);
-  assert.match(cookieHeader, /SameSite=Strict/);
+  assert.match(cookieHeader, /HttpOnly/u);
+  assert.match(cookieHeader, /SameSite=Strict/u);
   const cookie = cookieHeader.split(";")[0];
   assert.deepEqual(await status(cookie), {
     configured: true,
     authenticated: true,
   });
   assert.deepEqual(await status(), { configured: true, authenticated: false });
-  assert.equal(
-    (await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } }))
-      .status,
-    200,
-  );
+  assert.equal((await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } })).status, 200);
 
   const replacement = {
     username: "replacement-owner",
     password: "another-test-password-123!",
   };
   assert.equal((await f.post("/api/auth/setup", replacement)).status, 409);
-  assert.equal(
-    (await f.post("/api/auth/setup", replacement, cookie)).status,
-    409,
-  );
+  assert.equal((await f.post("/api/auth/setup", replacement, cookie)).status, 409);
   assert.equal((await f.post("/api/login", replacement)).status, 401);
   await f.login();
 });
@@ -186,17 +182,12 @@ test("authentication, CSRF and separate MCP credentials are enforced", async (t)
     401,
   );
   assert.equal(
-    (await f.post("/api/login", { ...credentials, username: "unknown-owner" }))
-      .status,
+    (await f.post("/api/login", { ...credentials, username: "unknown-owner" })).status,
     401,
   );
   assert.equal((await f.post("/api/login", { token })).status, 401);
   const cookie = await f.login();
-  assert.equal(
-    (await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } }))
-      .status,
-    200,
-  );
+  assert.equal((await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } })).status, 200);
   assert.deepEqual(
     await (
       await fetch(`${f.base}/api/auth/status`, {
@@ -206,13 +197,7 @@ test("authentication, CSRF and separate MCP credentials are enforced", async (t)
     { configured: true, authenticated: false },
   );
   assert.equal(
-    (
-      await f.post(
-        "/mcp",
-        { jsonrpc: "2.0", id: 1, method: "tools/list" },
-        cookie,
-      )
-    ).status,
+    (await f.post("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, cookie)).status,
     403,
   );
   assert.equal(
@@ -224,11 +209,7 @@ test("authentication, CSRF and separate MCP credentials are enforced", async (t)
     403,
   );
   assert.equal((await f.post("/api/logout", {}, cookie)).status, 200);
-  assert.equal(
-    (await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } }))
-      .status,
-    401,
-  );
+  assert.equal((await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } })).status, 401);
 });
 
 test("disconnecting a caller does not hand over a still-running operation", async (t) => {
@@ -237,17 +218,19 @@ test("disconnecting a caller does not hand over a still-running operation", asyn
   const hasStarted = new Promise((resolve) => {
     started = resolve;
   });
-  const upstreamServer = http.createServer(async (req, res) => {
-    for await (const chunk of req) {
-      /* Drain the request. */
-    }
-    started();
-    await new Promise((resolve) => {
-      release = resolve;
-    });
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
-  });
+  const upstreamServer = http.createServer(
+    asyncHandler(async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      for await (const _chunk of req) {
+        /* Drain the request. */
+      }
+      started();
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+    }),
+  );
   const upstream = await listen(upstreamServer);
   t.after(() => {
     upstreamServer.closeAllConnections();
@@ -276,33 +259,30 @@ test("disconnecting a caller does not hand over a still-running operation", asyn
   const taking = await f.post("/api/control/take", {}, cookie);
   assert.equal(taking.status, 202);
   assert.equal((await taking.json()).mode, "pending");
-  const rejected = await f.post(
-    "/mcp",
-    { jsonrpc: "2.0", id: 2, method: "tools/call" },
-    null,
-    { Authorization: `Bearer ${token}` },
-  );
-  assert.match((await rejected.json()).error.message, /Human control/);
+  const rejected = await f.post("/mcp", { jsonrpc: "2.0", id: 2, method: "tools/call" }, null, {
+    Authorization: `Bearer ${token}`,
+  });
+  assert.match((await rejected.json()).error.message, /Human control/u);
   assert.equal(f.control.active, 1);
   release();
-  for (let i = 0; i < 100 && f.control.active; i++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let i = 0; i < 100 && f.control.active; i++) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
   assert.equal(f.control.active, 0);
   assert.equal(f.control.status().mode, "human");
 });
 
 test("lost upstream completion blocks subsequent automation and takeover", async (t) => {
-  const upstreamServer = http.createServer((req, res) => req.socket.destroy());
+  const upstreamServer = http.createServer((req, _res) => req.socket.destroy());
   const upstream = await listen(upstreamServer);
   t.after(() => upstreamServer.close());
   const f = await fixture(t, { upstream });
   const cookie = await f.login();
-  const response = await f.post(
-    "/mcp",
-    { jsonrpc: "2.0", id: 1, method: "tools/call" },
-    null,
-    { Authorization: `Bearer ${token}` },
-  );
+  const response = await f.post("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/call" }, null, {
+    Authorization: `Bearer ${token}`,
+  });
   assert.equal(response.status, 502);
   assert.equal(f.control.status().ready, false);
   assert.equal((await f.post("/api/control/take", {}, cookie)).status, 503);
@@ -317,7 +297,7 @@ test("logout revokes a takeover request still waiting for readiness", async (t) 
   const f = await fixture(t, {
     probe: async () => {
       probeStarted();
-      return await new Promise((resolve) => {
+      return new Promise((resolve) => {
         releaseProbe = resolve;
       });
     },
@@ -334,7 +314,7 @@ test("logout revokes a takeover request still waiting for readiness", async (t) 
 test("interactive VNC requires the lease owner and is revoked on release", async (t) => {
   const tcp = net.createServer((socket) => {
     socket.write("RFB 003.008\n");
-    socket.on("error", () => {});
+    socket.on("error", (): void => undefined);
   });
   await listen(tcp);
   t.after(() => tcp.close());
@@ -365,7 +345,7 @@ test("interactive VNC requires the lease owner and is revoked on release", async
 test("signing in again replaces the session and revokes its active control socket", async (t) => {
   const tcp = net.createServer((socket) => {
     socket.write("RFB 003.008\n");
-    socket.on("error", () => {});
+    socket.on("error", (): void => undefined);
   });
   await listen(tcp);
   t.after(() => tcp.close());
@@ -375,10 +355,9 @@ test("signing in again replaces the session and revokes its active control socke
   });
   const cookie = await f.login();
   assert.equal((await f.post("/api/control/take", {}, cookie)).status, 200);
-  const viewer = new WebSocket(
-    `${f.base.replace("http:", "ws:")}/vnc?mode=control`,
-    { headers: { Cookie: cookie, Origin: f.base } },
-  );
+  const viewer = new WebSocket(`${f.base.replace("http:", "ws:")}/vnc?mode=control`, {
+    headers: { Cookie: cookie, Origin: f.base },
+  });
   await once(viewer, "open");
   const closed = once(viewer, "close");
   const response = await f.post("/api/login", credentials, cookie);
@@ -387,14 +366,9 @@ test("signing in again replaces the session and revokes its active control socke
   assert.notEqual(replacement, cookie);
   assert.equal((await closed)[0], 1008);
   assert.equal(f.control.owner, null);
+  assert.equal((await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } })).status, 401);
   assert.equal(
-    (await fetch(`${f.base}/api/status`, { headers: { Cookie: cookie } }))
-      .status,
-    401,
-  );
-  assert.equal(
-    (await fetch(`${f.base}/api/status`, { headers: { Cookie: replacement } }))
-      .status,
+    (await fetch(`${f.base}/api/status`, { headers: { Cookie: replacement } })).status,
     200,
   );
 });

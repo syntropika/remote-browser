@@ -1,16 +1,24 @@
-import { Effect, Schema } from "effect";
-import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { constants } from "node:fs";
-import { chmod, chown, lstat, mkdir, open, unlink } from "node:fs/promises";
+import type { ChildProcess } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { constants } from "node:fs";
+import { chmod, chown, lstat, mkdir, unlink } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
-import { attempt, run, withFile } from "../src/effects.js";
+
+import { Effect, Schema } from "effect";
+
+import { attempt, nativeError, run, withFile } from "../src/effects.js";
+import { jsonObject, required } from "../src/invariants.js";
+
+type ProcessWithGroups = NodeJS.Process & { initgroups: (user: string, group: number) => void };
 
 const command = promisify(execFile);
 const root = path.resolve(import.meta.dirname, "../..");
-const log = (message: string) => console.log(`[runtime] ${message}`);
+const log = (message: string) => {
+  console.log(`[runtime] ${message}`);
+};
 const dimensions = Schema.Struct({
   width: Schema.Number,
   height: Schema.Number,
@@ -26,31 +34,32 @@ async function prepareIdentity(): Promise<void> {
   process.umask(0o077);
   await mkdir(data, { recursive: true, mode: 0o700 });
   const info = await lstat(data);
-  if (!info.isDirectory() || info.isSymbolicLink())
+  if (!info.isDirectory() || info.isSymbolicLink()) {
     throw new Error("DATA_DIR must be a directory, not a symlink");
+  }
   if (process.geteuid?.() === 0) {
     const sockets = "/tmp/.X11-unix";
     await mkdir(sockets, { recursive: true, mode: 0o1777 });
-    if (!(await lstat(sockets)).isDirectory())
+    if (!(await lstat(sockets)).isDirectory()) {
       throw new Error("The X11 socket directory must not be a symlink");
+    }
     await chown(sockets, 0, 0);
     await chmod(sockets, 0o1777);
-    if (![0, 1000].includes(info.uid))
+    if (![0, 1000].includes(info.uid)) {
       throw new Error("DATA_DIR must be owned by root or uid 1000");
+    }
     if (info.uid === 0) {
       await chmod(data, 0o700);
       await chown(data, 1000, 1000);
     }
-    (
-      process as NodeJS.Process & {
-        initgroups(user: string, group: number): void;
-      }
-    ).initgroups("node", 1000);
-    process.setgid!(1000);
-    process.setuid!(1000);
+    // SAFETY: This Linux container entrypoint runs as root here; Node exposes initgroups on this platform.
+    (process as ProcessWithGroups).initgroups("node", 1000);
+    required(process.setgid)(1000);
+    required(process.setuid)(1000);
   }
-  if (process.geteuid?.() !== 1000)
+  if (process.geteuid?.() !== 1000) {
     throw new Error("The runtime must run as uid 1000");
+  }
   Object.assign(process.env, {
     HOME: "/home/node",
     USER: "node",
@@ -62,70 +71,56 @@ async function prepareIdentity(): Promise<void> {
 function prepareProfile(): Effect.Effect<void, Error> {
   return Effect.gen(function* () {
     const profile = path.join(data, "profile");
-    yield* attempt(() => mkdir(profile, { recursive: true, mode: 0o700 }));
-    if ((yield* attempt(() => lstat(profile))).isSymbolicLink())
-      return yield* Effect.fail(
-        new Error("The browser profile must not be a symlink"),
-      );
-    for (const name of [
-      "SingletonLock",
-      "SingletonSocket",
-      "SingletonCookie",
-    ]) {
+    yield* attempt(async () => mkdir(profile, { recursive: true, mode: 0o700 }));
+    if ((yield* attempt(async () => lstat(profile))).isSymbolicLink()) {
+      return yield* Effect.fail(new Error("The browser profile must not be a symlink"));
+    }
+    for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
       const filename = path.join(profile, name);
-      const stat = yield* attempt(() => lstat(filename)).pipe(
-        Effect.catch((error) =>
-          (error as NodeJS.ErrnoException).code === "ENOENT"
-            ? Effect.succeed(null)
-            : Effect.fail(error),
+      const stat = yield* attempt(async () => lstat(filename)).pipe(
+        Effect.catch((cause) =>
+          nativeError(cause).code === "ENOENT" ? Effect.succeed(null) : Effect.fail(cause),
         ),
       );
-      if (stat?.isSymbolicLink()) yield* attempt(() => unlink(filename));
+      if (stat?.isSymbolicLink()) {
+        yield* attempt(async () => unlink(filename));
+      }
     }
     const tokenPath = process.env.BROWSER_TOKEN_FILE ?? "/data/access-token";
     yield* withFile(
       tokenPath,
-      constants.O_WRONLY |
-        constants.O_CREAT |
-        constants.O_EXCL |
-        constants.O_NOFOLLOW,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600,
       (file) =>
         Effect.gen(function* () {
-          yield* attempt(() =>
-            file.writeFile(`${randomBytes(48).toString("base64url")}\n`),
-          );
-          yield* attempt(() => file.sync());
-          log(
-            "Created the access token file; its value is never written to logs",
-          );
+          yield* attempt(async () => file.writeFile(`${randomBytes(48).toString("base64url")}\n`));
+          yield* attempt(async () => file.sync());
+          log("Created the access token file; its value is never written to logs");
         }),
     ).pipe(
-      Effect.catch((error) => {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST")
-          return Effect.fail(error);
-        return withFile(
-          tokenPath,
-          constants.O_RDONLY | constants.O_NOFOLLOW,
-          undefined,
-          (file) =>
-            Effect.gen(function* () {
-              const info = yield* attempt(() => file.stat());
-              const text = yield* attempt(() => file.readFile("utf8"));
-              if (!info.isFile() || info.uid !== 1000 || !text.trim())
-                return yield* Effect.fail(
-                  new Error(
-                    "The access token file must be a nonempty regular file owned by uid 1000",
-                  ),
-                );
-              yield* attempt(() => file.chmod(0o600));
-            }),
+      Effect.catch((cause) => {
+        if (nativeError(cause).code !== "EEXIST") {
+          return Effect.fail(cause);
+        }
+        return withFile(tokenPath, constants.O_RDONLY | constants.O_NOFOLLOW, undefined, (file) =>
+          Effect.gen(function* () {
+            const info = yield* attempt(async () => file.stat());
+            const text = yield* attempt(async () => file.readFile("utf-8"));
+            if (!info.isFile() || info.uid !== 1000 || !text.trim()) {
+              return yield* Effect.fail(
+                new Error(
+                  "The access token file must be a nonempty regular file owned by uid 1000",
+                ),
+              );
+            }
+            yield* attempt(async () => file.chmod(0o600));
+          }),
         );
       }),
     );
     const runtime = "/tmp/remote-browser";
-    yield* attempt(() => mkdir(runtime, { recursive: true, mode: 0o700 }));
-    yield* attempt(() => chmod(runtime, 0o700));
+    yield* attempt(async () => mkdir(runtime, { recursive: true, mode: 0o700 }));
+    yield* attempt(async () => chmod(runtime, 0o700));
     const authority = path.join(runtime, "Xauthority");
     yield* withFile(
       authority,
@@ -139,34 +134,31 @@ function prepareProfile(): Effect.Effect<void, Error> {
       XDG_CACHE_HOME: path.join(runtime, "cache"),
       XAUTHORITY: authority,
     });
-    yield* attempt(() =>
-      command("xauth", [
-        "-f",
-        authority,
-        "add",
-        display,
-        ".",
-        randomBytes(16).toString("hex"),
-      ]),
+    yield* attempt(async () =>
+      command("xauth", ["-f", authority, "add", display, ".", randomBytes(16).toString("hex")]),
     );
   });
 }
 
-const exitOf = (child: ChildProcess): Promise<void> => {
-  if (child.exitCode !== null || child.signalCode !== null)
-    return Promise.resolve();
-  return new Promise((resolve) => child.once("exit", () => resolve()));
+const exitOf = async (child: ChildProcess): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  return new Promise((resolve) => {
+    child.once("exit", () => {
+      resolve();
+    });
+  });
 };
-async function waitForExit(
-  child: ChildProcess,
-  timeoutMs: number,
-): Promise<boolean> {
+async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       exitOf(child).then(() => true),
       new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer = setTimeout(() => {
+          resolve(false);
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -174,11 +166,15 @@ async function waitForExit(
   }
 }
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (!child.pid) return;
+  if (!child.pid) {
+    return;
+  }
   try {
     process.kill(-child.pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  } catch (cause) {
+    if (nativeError(cause).code !== "ESRCH") {
+      throw cause;
+    }
   }
 }
 async function httpReady(url: string, allowed = [200]): Promise<boolean> {
@@ -196,9 +192,15 @@ async function tcpReady(port: number): Promise<boolean> {
       socket.destroy();
       resolve(value);
     };
-    socket.once("connect", () => done(true));
-    socket.once("error", () => done(false));
-    socket.setTimeout(1000, () => done(false));
+    socket.once("connect", () => {
+      done(true);
+    });
+    socket.once("error", () => {
+      done(false);
+    });
+    socket.setTimeout(1000, () => {
+      done(false);
+    });
   });
 }
 
@@ -212,7 +214,7 @@ class Supervisor {
 
   start(name: string, args: string[]): void {
     log(`Starting ${name}`);
-    const child = spawn(args[0]!, args.slice(1), {
+    const child = spawn(args[0], args.slice(1), {
       detached: true,
       stdio: "inherit",
     });
@@ -225,12 +227,14 @@ class Supervisor {
   }
 
   check(): void {
-    if (this.failure) throw this.failure;
-    for (const [name, child] of this.children)
-      if (child.exitCode !== null || child.signalCode !== null)
-        throw new Error(
-          `${name} exited with status ${child.exitCode ?? child.signalCode}`,
-        );
+    if (this.failure) {
+      throw this.failure;
+    }
+    for (const [name, child] of this.children) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error(`${name} exited with status ${child.exitCode ?? child.signalCode}`);
+      }
+    }
   }
 
   ready(
@@ -242,24 +246,21 @@ class Supervisor {
     return Effect.gen(function* () {
       const deadline = performance.now() + timeoutMs;
       while (!self.stopping && performance.now() < deadline) {
-        yield* attempt(() => self.check());
-        if (
-          yield* attempt(probe).pipe(Effect.catch(() => Effect.succeed(false)))
-        ) {
+        yield* attempt(() => {
+          self.check();
+        });
+        if (yield* attempt(probe).pipe(Effect.catch(() => Effect.succeed(false)))) {
           log(`${name} is ready`);
           return;
         }
         yield* Effect.sleep("200 millis");
       }
-      if (!self.stopping)
+      if (!self.stopping) {
         return yield* Effect.fail(
-          new Error(
-            `${name} did not become ready within ${timeoutMs / 1000} seconds`,
-          ),
+          new Error(`${name} did not become ready within ${timeoutMs / 1000} seconds`),
         );
-      return yield* Effect.fail(
-        self.failure ?? new Error("Shutdown requested"),
-      );
+      }
+      return yield* Effect.fail(self.failure ?? new Error("Shutdown requested"));
     });
   }
 
@@ -277,11 +278,12 @@ class Supervisor {
         width > 3840 ||
         height < 480 ||
         height > 2160
-      )
+      ) {
         return yield* Effect.fail(
           new Error("Screen dimensions must be between 640x480 and 3840x2160"),
         );
-      const authority = process.env.XAUTHORITY!;
+      }
+      const authority = required(process.env.XAUTHORITY);
       self.start("Xvfb", [
         "Xvfb",
         display,
@@ -316,20 +318,14 @@ class Supervisor {
         "--restore-last-session",
         "about:blank",
       ]);
-      yield* self.ready("Chromium CDP", () =>
+      yield* self.ready("Chromium CDP", async () =>
         httpReady("http://127.0.0.1:9222/json/version"),
       );
       for (const [name, port, extra] of [
         [
           "view-only VNC",
           Number(process.env.VNC_VIEW_PORT ?? 5900),
-          [
-            "-viewonly",
-            "-noprimary",
-            "-nosetprimary",
-            "-noclipboard",
-            "-nosetclipboard",
-          ],
+          ["-viewonly", "-noprimary", "-nosetprimary", "-noclipboard", "-nosetclipboard"],
         ],
         ["interactive VNC", Number(process.env.VNC_CONTROL_PORT ?? 5901), []],
       ] as const) {
@@ -355,7 +351,7 @@ class Supervisor {
           "-quiet",
           ...extra,
         ]);
-        yield* self.ready(name, () => tcpReady(port));
+        yield* self.ready(name, async () => tcpReady(port));
       }
       self.start("Playwright MCP", [
         "node",
@@ -372,27 +368,25 @@ class Supervisor {
         "--init-page",
         "/app/dist/src/playwright-code-mode.js",
       ]);
-      yield* self.ready("Playwright MCP", () =>
+      yield* self.ready("Playwright MCP", async () =>
         httpReady("http://127.0.0.1:8931/mcp", [200, 400, 405, 406]),
       );
       self.start("gateway", ["node", "/app/dist/src/server.js"]);
-      yield* self.ready("gateway", () =>
-        httpReady("http://127.0.0.1:8080/healthz"),
-      );
-      log(
-        "Ready; browser, VNC, and MCP upstream ports remain inside the container",
-      );
+      yield* self.ready("gateway", async () => httpReady("http://127.0.0.1:8080/healthz"));
+      log("Ready; browser, VNC, and MCP upstream ports remain inside the container");
       while (!self.stopping) {
-        yield* attempt(() => self.check());
+        yield* attempt(() => {
+          self.check();
+        });
         yield* Effect.sleep("250 millis");
       }
     }).pipe(
-      Effect.catch((error) =>
-        self.stopping && !self.failure && error.message === "Shutdown requested"
+      Effect.catch((cause) =>
+        self.stopping && !self.failure && cause.message === "Shutdown requested"
           ? Effect.void
-          : Effect.fail(error),
+          : Effect.fail(cause),
       ),
-      Effect.ensuring(attempt(() => self.shutdown()).pipe(Effect.orDie)),
+      Effect.ensuring(attempt(async () => self.shutdown()).pipe(Effect.orDie)),
     );
   }
 
@@ -401,27 +395,31 @@ class Supervisor {
     if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
       log("Finalizing active recordings");
       gateway.kill("SIGTERM");
-      if (!(await waitForExit(gateway, 11_000)))
+      if (!(await waitForExit(gateway, 11_000))) {
         signalGroup(gateway, "SIGKILL");
+      }
     }
     const chrome = this.children.get("Chromium");
     if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
       log("Closing Chromium and flushing its persistent profile");
       try {
-        const info = (await (
-          await fetch("http://127.0.0.1:9222/json/version", {
-            signal: AbortSignal.timeout(1500),
-          })
-        ).json()) as { webSocketDebuggerUrl: string };
+        const response = await fetch("http://127.0.0.1:9222/json/version", {
+          signal: AbortSignal.timeout(1500),
+        });
+        const info = jsonObject(await response.text());
+        if (typeof info.webSocketDebuggerUrl !== "string") {
+          throw new TypeError("Missing Chromium WebSocket address.");
+        }
+        const browserAddress = info.webSocketDebuggerUrl;
         await new Promise<void>((resolve, reject) => {
-          const socket = new WebSocket(info.webSocketDebuggerUrl);
+          const socket = new WebSocket(browserAddress);
           const timer = setTimeout(() => {
             socket.close();
             resolve();
           }, 2000);
-          socket.addEventListener("open", () =>
-            socket.send(JSON.stringify({ id: 1, method: "Browser.close" })),
-          );
+          socket.addEventListener("open", () => {
+            socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+          });
           socket.addEventListener("close", () => {
             clearTimeout(timer);
             resolve();
@@ -431,22 +429,23 @@ class Supervisor {
             reject(new Error("Chromium close failed"));
           });
         });
-        if (!(await waitForExit(chrome, 8000))) signalGroup(chrome, "SIGTERM");
+        if (!(await waitForExit(chrome, 8000))) {
+          signalGroup(chrome, "SIGTERM");
+        }
       } catch {
         signalGroup(chrome, "SIGTERM");
       }
     }
-    for (const child of [...this.children.values()].reverse())
+    for (const child of [...this.children.values()].toReversed()) {
       signalGroup(child, "SIGTERM");
+    }
     const deadline = performance.now() + 5000;
-    for (const child of this.children.values())
-      if (
-        !(await waitForExit(child, Math.max(1, deadline - performance.now())))
-      )
+    for (const child of this.children.values()) {
+      if (!(await waitForExit(child, Math.max(1, deadline - performance.now())))) {
         signalGroup(child, "SIGKILL");
-    await Promise.all(
-      [...this.children.values()].map((child) => waitForExit(child, 1000)),
-    );
+      }
+    }
+    await Promise.all([...this.children.values()].map(async (child) => waitForExit(child, 1000)));
     process.off("SIGTERM", this.onStop);
     process.off("SIGINT", this.onStop);
   }
@@ -466,7 +465,7 @@ async function main(): Promise<void> {
       0o600,
       (file) =>
         attempt(
-          () =>
+          async () =>
             new Promise<void>((resolve, reject) => {
               const child = spawn(
                 "flock",
@@ -491,8 +490,9 @@ async function main(): Promise<void> {
               child.once("exit", (code) => {
                 process.off("SIGTERM", forward);
                 process.off("SIGINT", forward);
-                if (code === 0) resolve();
-                else
+                if (code === 0) {
+                  resolve();
+                } else {
                   reject(
                     new Error(
                       code === 73
@@ -500,15 +500,14 @@ async function main(): Promise<void> {
                         : `Supervisor exited with status ${code}`,
                     ),
                   );
+                }
               });
             }),
         ),
     ),
   );
 }
-main().catch((error) => {
-  log(
-    `Startup or service failure: ${error instanceof Error ? error.message : String(error)}`,
-  );
+main().catch((cause: unknown) => {
+  log(`Startup or service failure: ${cause instanceof Error ? cause.message : String(cause)}`);
   process.exitCode = 1;
 });

@@ -1,13 +1,9 @@
+import { asyncHandler, background } from "../src/async-boundary.js";
+import { jsonObject, required } from "../src/invariants.js";
 import { uiFailure } from "./api.js";
-import type {
-  UiOptions,
-  ApiKeyMetadata,
-  SavedFile,
-  RecordingStatus,
-  BrowserTabs,
-  RFB,
-} from "./contracts.js";
-import { element as domElement, type DomElements } from "./dom.js";
+import type { RecordingStatus, SavedFile, UiOptions } from "./contracts.js";
+import { element as domElement } from "./dom.js";
+
 export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
   const byId = domElement;
   const panel = byId("files-panel");
@@ -30,8 +26,9 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
   function inactive(value: boolean) {
     for (const element of workspace.querySelectorAll<HTMLElement>(
       ".toolbar, .browser-shell, .bottom-stack, .tabs-panel, .notice, .session-footer, .recording-indicator",
-    ))
+    )) {
       element.inert = value;
+    }
   }
   function errorMessage(message = "") {
     byId("files-error").textContent = message;
@@ -40,20 +37,18 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
   function setBusy(value: boolean) {
     busy = value;
     panel.setAttribute("aria-busy", String(value));
-    for (const button of panel.querySelectorAll<HTMLButtonElement>(
+    for (const localButton of panel.querySelectorAll<HTMLButtonElement>(
       "button:not(#files-close)",
-    ))
-      button.disabled = value;
+    )) {
+      localButton.disabled = value;
+    }
     byId("recording-stop").disabled = value || recording?.state === "stopping";
     byId("files-upload-input").disabled = value;
     byId("files-upload-button").textContent =
-      value && byId("files-upload-input").files?.length
-        ? "Uploading…"
-        : "Upload file";
+      value && byId("files-upload-input").files?.length ? "Uploading…" : "Upload file";
   }
   function sync(current: RecordingStatus | null) {
-    const changed =
-      recording?.id !== current?.id || recording?.state !== current?.state;
+    const changed = recording?.id !== current?.id || recording?.state !== current?.state;
     recording = current || null;
     indicator.hidden = !recording;
     byId("active-recording").hidden = !recording;
@@ -61,23 +56,25 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
     byId("recording-stop").textContent =
       recording?.state === "stopping" ? "Saving…" : "Stop recording";
     byId("recording-stop").disabled = busy || recording?.state === "stopping";
-    if (changed && !panel.hidden && !busy) void refresh();
+    if (changed && !panel.hidden && !busy) {
+      background(refresh());
+    }
   }
   function close(restoreFocus = true) {
     generation += 1;
     panel.hidden = true;
-    if (workspace.dataset.settings === "files")
+    if (workspace.dataset.settings === "files") {
       delete workspace.dataset.settings;
+    }
     inactive(false);
     clearFiles();
     byId("files-upload-input").value = "";
     byId("files-upload-status").hidden = true;
     errorMessage();
     setBusy(false);
-    if (restoreFocus)
-      byId("more-menu")
-        .querySelector("summary")!
-        .focus({ preventScroll: true });
+    if (restoreFocus) {
+      required(byId("more-menu").querySelector("summary")).focus({ preventScroll: true });
+    }
   }
   function button(label: string, className: string, action: () => void) {
     const element = document.createElement("button");
@@ -117,21 +114,14 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
       } else {
         preview = document.createElement("div");
         preview.className = "file-document";
-        const svg = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "svg",
-        );
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.classList.add("icon");
         svg.setAttribute("aria-hidden", "true");
-        const use = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "use",
-        );
+        const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
         use.setAttribute("href", "#icon-files");
         svg.append(use);
         const caption = document.createElement("span");
-        caption.textContent =
-          file.kind === "upload" ? "Uploaded file" : "Downloaded file";
+        caption.textContent = file.kind === "upload" ? "Uploaded file" : "Downloaded file";
         preview.append(svg, caption);
       }
       preview.classList.add("file-preview");
@@ -185,7 +175,7 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
       const confirm = button(
         "Delete file",
         "button-secondary button-destructive",
-        () => void mutate("/api/artifacts/delete", { id: file.id }),
+        asyncHandler(() => mutate("/api/artifacts/delete", { id: file.id })),
       );
       choices.append(cancel, confirm);
       confirmation.append(prompt, choices);
@@ -196,24 +186,32 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
   }
   function handleError(cause: unknown) {
     const error = uiFailure(cause);
-    if (error.statusCode === 401) onUnauthorized();
-    else
+    if (error.statusCode === 401) {
+      onUnauthorized();
+    } else {
       errorMessage(error.message || "Could not update files. Try refreshing.");
+    }
   }
   async function refresh() {
-    if (busy || panel.hidden) return;
+    if (busy || panel.hidden) {
+      return;
+    }
     const current = generation;
     setBusy(true);
     errorMessage();
     byId("files-loading").hidden = false;
     try {
       const result = await api("/api/artifacts");
-      if (current !== generation) return;
+      if (current !== generation) {
+        return;
+      }
       render(result.files);
       sync(result.recording);
     } catch (cause) {
       const error = uiFailure(cause);
-      if (current === generation) handleError(error);
+      if (current === generation) {
+        handleError(error);
+      }
     } finally {
       if (current === generation) {
         byId("files-loading").hidden = true;
@@ -222,22 +220,31 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
     }
   }
   async function mutate(url: string, body = {}) {
-    if (busy) return;
+    if (busy) {
+      return;
+    }
     const current = generation;
     setBusy(true);
     errorMessage();
     try {
       await api(url, body);
-      if (current !== generation) return;
+      if (current !== generation) {
+        return;
+      }
       setBusy(false);
       await refresh();
-      if (current === generation)
+      if (current === generation) {
         byId("files-refresh").focus({ preventScroll: true });
+      }
     } catch (cause) {
       const error = uiFailure(cause);
-      if (current === generation) handleError(error);
+      if (current === generation) {
+        handleError(error);
+      }
     } finally {
-      if (current === generation) setBusy(false);
+      if (current === generation) {
+        setBusy(false);
+      }
     }
   }
   function open() {
@@ -249,12 +256,14 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
     panel.scrollTop = 0;
     byId("files-empty").hidden = true;
     byId("files-title").focus({ preventScroll: true });
-    void refresh();
+    background(refresh());
   }
   async function upload() {
     const input = byId("files-upload-input");
     const file = input.files?.[0];
-    if (!file || busy) return;
+    if (!file || busy) {
+      return;
+    }
     errorMessage();
     byId("files-upload-status").hidden = true;
     if (!file.size || file.size > 20 * 1024 * 1024) {
@@ -274,24 +283,37 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
         },
         body: file,
       });
-      const result = await response.json();
-      if (!response.ok)
+      const result = jsonObject(await response.text());
+      if (!response.ok) {
         throw Object.assign(
-          new Error(result.error || "Could not upload the file. Try again."),
-          { statusCode: response.status },
+          new Error(
+            typeof result.error === "string"
+              ? result.error
+              : "Could not upload the file. Try again.",
+          ),
+          {
+            statusCode: response.status,
+          },
         );
-      if (current !== generation) return;
+      }
+      if (current !== generation) {
+        return;
+      }
       input.value = "";
       setBusy(false);
       await refresh();
-      if (current !== generation) return;
+      if (current !== generation) {
+        return;
+      }
       byId("files-upload-status").textContent =
-        `${result.name} is ready for your agent.`;
+        `${typeof result.name === "string" ? result.name : "Your file"} is ready for your agent.`;
       byId("files-upload-status").hidden = false;
       byId("files-upload-button").focus({ preventScroll: true });
     } catch (cause) {
       const error = uiFailure(cause);
-      if (current === generation) handleError(error);
+      if (current === generation) {
+        handleError(error);
+      }
     } finally {
       if (current === generation) {
         input.value = "";
@@ -299,17 +321,25 @@ export function createBrowserFiles({ api, onOpen, onUnauthorized }: UiOptions) {
       }
     }
   }
-  byId("files-upload-button").addEventListener("click", () =>
-    byId("files-upload-input").click(),
+  byId("files-upload-button").addEventListener("click", () => {
+    byId("files-upload-input").click();
+  });
+  byId("files-upload-input").addEventListener(
+    "change",
+    asyncHandler(() => upload()),
   );
-  byId("files-upload-input").addEventListener("change", () => void upload());
   byId("files-button").addEventListener("click", open);
   indicator.addEventListener("click", open);
-  byId("files-close").addEventListener("click", () => close());
-  byId("files-refresh").addEventListener("click", () => void refresh());
+  byId("files-close").addEventListener("click", () => {
+    close();
+  });
+  byId("files-refresh").addEventListener(
+    "click",
+    asyncHandler(() => refresh()),
+  );
   byId("recording-stop").addEventListener(
     "click",
-    () => void mutate("/api/recording/stop"),
+    asyncHandler(() => mutate("/api/recording/stop")),
   );
   panel.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

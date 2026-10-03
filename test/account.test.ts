@@ -1,22 +1,14 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import test from "node:test";
+
 import { AccountStore } from "../src/account.js";
 
 async function fixture(t) {
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "remote-browser-account-"),
-  );
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await mkdtemp(path.join(os.tmpdir(), "remote-browser-account-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
   const filename = path.join(directory, "account.json");
   return { directory, filename, store: new AccountStore(filename) };
 }
@@ -28,18 +20,9 @@ test("the owner persists privately and usernames are normalized without changing
   await store.create({ username: "  Cérberus  ", password });
   assert.equal(await store.configured(), true);
   const recreated = new AccountStore(filename);
-  assert.equal(
-    await recreated.verify({ username: "CÉRBERUS", password }),
-    true,
-  );
-  assert.equal(
-    await recreated.verify({ username: "Cérberus", password: password.trim() }),
-    false,
-  );
-  assert.equal(
-    await recreated.verify({ username: "another-user", password }),
-    false,
-  );
+  assert.equal(await recreated.verify({ username: "CÉRBERUS", password }), true);
+  assert.equal(await recreated.verify({ username: "Cérberus", password: password.trim() }), false);
+  assert.equal(await recreated.verify({ username: "another-user", password }), false);
   assert.equal(
     await recreated.verify({
       username: "Cérberus",
@@ -48,7 +31,7 @@ test("the owner persists privately and usernames are normalized without changing
     false,
   );
   assert.equal((await stat(filename)).mode & 0o777, 0o600);
-  assert.equal((await readFile(filename, "utf8")).includes(password), false);
+  assert.equal((await readFile(filename, "utf-8")).includes(password), false);
 });
 
 test("competing setup requests can publish only one owner, including across store instances", async (t) => {
@@ -62,14 +45,8 @@ test("competing setup requests can publish only one owner, including across stor
     store.create(candidates[0]),
     other.create(candidates[1]),
   ]);
-  assert.equal(
-    results.filter((result) => result.status === "fulfilled").length,
-    1,
-  );
-  assert.equal(
-    results.find((result) => result.status === "rejected").reason.status,
-    409,
-  );
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.find((result) => result.status === "rejected").reason.status, 409);
   const winner = results.findIndex((result) => result.status === "fulfilled");
   assert.equal(await store.verify(candidates[winner]), true);
   assert.equal(await other.verify(candidates[1 - winner]), false);
@@ -111,7 +88,7 @@ test("corrupted account storage fails closed for status, setup, and sign-in", as
       store.verify({ username: "new-owner", password: "replacement-password" }),
       { status: 503 },
     );
-    assert.equal(await readFile(filename, "utf8"), contents);
+    assert.equal(await readFile(filename, "utf-8"), contents);
   }
 });
 
@@ -121,26 +98,19 @@ test("account storage cannot redirect credentials through a symbolic link", asyn
   await writeFile(target, "preserve this file");
   await symlink(target, filename);
   await assert.rejects(store.configured(), { status: 503 });
-  await assert.rejects(
-    store.create({ username: "new-owner", password: "replacement-password" }),
-    { status: 503 },
-  );
-  assert.equal(await readFile(target, "utf8"), "preserve this file");
+  await assert.rejects(store.create({ username: "new-owner", password: "replacement-password" }), {
+    status: 503,
+  });
+  assert.equal(await readFile(target, "utf-8"), "preserve this file");
 });
 
 test("password derivations have a concurrency bound instead of an unbounded work queue", async (t) => {
   const { store } = await fixture(t);
   const attempts = await Promise.allSettled(
-    Array.from({ length: 3 }, () =>
+    Array.from({ length: 3 }, async () =>
       store.verify({ username: "unknown", password: "invalid-password" }),
     ),
   );
-  assert.equal(
-    attempts.filter((result) => result.status === "fulfilled").length,
-    2,
-  );
-  assert.equal(
-    attempts.find((result) => result.status === "rejected").reason.status,
-    429,
-  );
+  assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 2);
+  assert.equal(attempts.find((result) => result.status === "rejected").reason.status, 429);
 });

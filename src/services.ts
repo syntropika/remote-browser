@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect";
+
 import type { AccountStore } from "./account.js";
 import type { ApiKeyStore } from "./api-keys.js";
 import type { ArtifactService } from "./artifacts.js";
@@ -10,15 +11,11 @@ import { attempt, run } from "./effects.js";
 export class Accounts extends Context.Service<Accounts, AccountStore>()(
   "remote-browser/Accounts",
 ) {}
-export class Keys extends Context.Service<Keys, ApiKeyStore>()(
-  "remote-browser/Keys",
-) {}
+export class Keys extends Context.Service<Keys, ApiKeyStore>()("remote-browser/Keys") {}
 export class Artifacts extends Context.Service<Artifacts, ArtifactService>()(
   "remote-browser/Artifacts",
 ) {}
-export class Browser extends Context.Service<Browser, BrowserService>()(
-  "remote-browser/Browser",
-) {}
+export class Browser extends Context.Service<Browser, BrowserService>()("remote-browser/Browser") {}
 export class Clipboard extends Context.Service<Clipboard, ClipboardService>()(
   "remote-browser/Clipboard",
 ) {}
@@ -38,7 +35,7 @@ export function serviceRuntime(dependencies: {
     Layer.succeed(Browser, dependencies.browserService),
     Layer.succeed(Clipboard, dependencies.clipboardService),
   );
-  return <A, E>(program: Effect.Effect<A, E, Services>) =>
+  return async <A, E>(program: Effect.Effect<A, E, Services>) =>
     run(program.pipe(Effect.provide(layer)));
 }
 
@@ -47,7 +44,5 @@ export function useService<S, I, A>(
   service: Context.Service<S, I>,
   operation: (implementation: I) => PromiseLike<A> | A,
 ) {
-  return Effect.flatMap(service, (implementation) =>
-    attempt(() => operation(implementation)),
-  );
+  return Effect.flatMap(service, (implementation) => attempt(() => operation(implementation)));
 }

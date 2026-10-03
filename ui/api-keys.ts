@@ -1,13 +1,9 @@
+import { asyncHandler, background } from "../src/async-boundary.js";
+import { required } from "../src/invariants.js";
 import { uiFailure } from "./api.js";
-import type {
-  UiOptions,
-  ApiKeyMetadata,
-  SavedFile,
-  RecordingStatus,
-  BrowserTabs,
-  RFB,
-} from "./contracts.js";
-import { element as domElement, type DomElements } from "./dom.js";
+import type { ApiKeyMetadata, UiOptions } from "./contracts.js";
+import { element as domElement } from "./dom.js";
+
 export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
   const byId = domElement;
   const panel = byId("api-keys-panel");
@@ -45,14 +41,18 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     createButton.disabled = value;
     refreshButton.disabled = value;
     form.setAttribute("aria-busy", String(value));
-    for (const button of list.querySelectorAll("button"))
+    for (const button of list.querySelectorAll("button")) {
       button.disabled = value;
+    }
   }
 
   function handleError(cause: unknown, fallback: string) {
     const error = uiFailure(cause);
-    if (error.statusCode === 401) onUnauthorized();
-    else message(errorText, error.message || fallback);
+    if (error.statusCode === 401) {
+      onUnauthorized();
+    } else {
+      message(errorText, error.message || fallback);
+    }
   }
 
   // Keep the display's geometry intact while removing browser controls from focus.
@@ -77,10 +77,9 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     message(errorText);
     message(feedback);
     setBusy(false);
-    if (restoreFocus)
-      byId("more-menu")
-        .querySelector("summary")!
-        .focus({ preventScroll: true });
+    if (restoreFocus) {
+      required(byId("more-menu").querySelector("summary")).focus({ preventScroll: true });
+    }
   }
 
   function dateLabel(value: string) {
@@ -137,19 +136,15 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
       const confirm = makeButton(
         "Revoke key",
         "button-destructive button-secondary",
-        () => void revoke(key),
+        asyncHandler(() => revoke(key)),
       );
       confirmActions.append(cancel, confirm);
       confirmation.append(prompt, confirmActions);
-      const revokeButton = makeButton(
-        "Revoke",
-        "button-quiet button-destructive",
-        () => {
-          confirmation.hidden = false;
-          revokeButton.hidden = true;
-          cancel.focus();
-        },
-      );
+      const revokeButton = makeButton("Revoke", "button-quiet button-destructive", () => {
+        confirmation.hidden = false;
+        revokeButton.hidden = true;
+        cancel.focus();
+      });
       revokeButton.setAttribute("aria-label", `Revoke ${key.name}`);
       actions.append(revokeButton);
       row.append(info, actions, confirmation);
@@ -158,20 +153,25 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
   }
 
   async function refresh() {
-    if (busy || panel.hidden) return;
+    if (busy || panel.hidden) {
+      return;
+    }
     const current = generation;
     setBusy(true);
     message(errorText);
     byId("api-keys-loading").hidden = false;
     try {
       const response = await api("/api/keys");
-      if (current !== generation) return;
-      keys = response.keys;
+      if (current !== generation) {
+        return;
+      }
+      ({ keys } = response);
       renderKeys();
     } catch (cause) {
       const error = uiFailure(cause);
-      if (current === generation)
+      if (current === generation) {
         handleError(error, "Could not load keys. Try refreshing.");
+      }
     } finally {
       if (current === generation) {
         byId("api-keys-loading").hidden = true;
@@ -181,15 +181,21 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
   }
 
   async function revoke(key: ApiKeyMetadata) {
-    if (busy) return;
+    if (busy) {
+      return;
+    }
     const current = generation;
     setBusy(true);
     message(errorText);
     message(feedback);
     try {
       await api("/api/keys/revoke", { id: key.id });
-      if (current !== generation) return;
-      if (createdId === key.id) clearSecret();
+      if (current !== generation) {
+        return;
+      }
+      if (createdId === key.id) {
+        clearSecret();
+      }
       keys = keys.filter((item) => item.id !== key.id);
       renderKeys();
       message(feedback, `“${key.name}” revoked.`);
@@ -197,54 +203,68 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
       refreshButton.focus({ preventScroll: true });
     } catch (cause) {
       const error = uiFailure(cause);
-      if (current === generation)
+      if (current === generation) {
         handleError(error, "Could not revoke this key. Try again.");
+      }
     } finally {
-      if (current === generation) setBusy(false);
+      if (current === generation) {
+        setBusy(false);
+      }
     }
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (busy) return;
-    const name = nameInput.value.trim();
-    if (!name || /\p{Cc}/u.test(name)) {
-      nameInput.setCustomValidity("Enter a name without control characters.");
-      nameInput.reportValidity();
-      return;
-    }
-    const current = generation;
-    setBusy(true);
-    clearSecret();
-    message(errorText);
-    message(feedback);
-    try {
-      const result = await api("/api/keys", { name });
-      if (current !== generation) return;
-      keys.unshift(result.key);
-      createdId = result.key.id;
-      secretInput.value = result.secret;
-      created.hidden = false;
-      nameInput.value = "";
-      renderKeys();
-      secretInput.focus();
-      secretInput.select();
-      message(feedback, "Key created. Copy it before leaving this page.");
-    } catch (cause) {
-      const error = uiFailure(cause);
-      if (current === generation)
-        handleError(
-          error,
-          "Could not create a key. Refresh the list before trying again.",
-        );
-    } finally {
-      if (current === generation) setBusy(false);
-    }
+  form.addEventListener(
+    "submit",
+    asyncHandler(async (event: Event) => {
+      event.preventDefault();
+      if (busy) {
+        return;
+      }
+      const name = nameInput.value.trim();
+      if (!name || /\p{Cc}/u.test(name)) {
+        nameInput.setCustomValidity("Enter a name without control characters.");
+        nameInput.reportValidity();
+        return;
+      }
+      const current = generation;
+      setBusy(true);
+      clearSecret();
+      message(errorText);
+      message(feedback);
+      try {
+        const result = await api("/api/keys", { name });
+        if (current !== generation) {
+          return;
+        }
+        keys.unshift(result.key);
+        createdId = result.key.id;
+        secretInput.value = result.secret;
+        created.hidden = false;
+        nameInput.value = "";
+        renderKeys();
+        secretInput.focus();
+        secretInput.select();
+        message(feedback, "Key created. Copy it before leaving this page.");
+      } catch (cause) {
+        const error = uiFailure(cause);
+        if (current === generation) {
+          handleError(error, "Could not create a key. Refresh the list before trying again.");
+        }
+      } finally {
+        if (current === generation) {
+          setBusy(false);
+        }
+      }
+    }),
+  );
+  nameInput.addEventListener("input", () => {
+    nameInput.setCustomValidity("");
   });
-  nameInput.addEventListener("input", () => nameInput.setCustomValidity(""));
 
   async function copy(input: HTMLInputElement, label: string) {
-    if (!input.value) return;
+    if (!input.value) {
+      return;
+    }
     const current = generation;
     message(feedback);
     // execCommand runs directly inside the click for private-LAN HTTP and iOS.
@@ -253,21 +273,25 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     input.setSelectionRange(0, input.value.length);
     let copied = false;
     try {
+      // oxlint-disable-next-line typescript/no-deprecated -- HTTP dashboards need this synchronous clipboard fallback.
       copied = document.execCommand("copy");
-    } catch {}
+    } catch {
+      /* Leave the text selected for manual copying. */
+    }
     if (!copied && navigator.clipboard?.writeText) {
       try {
         await navigator.clipboard.writeText(input.value);
         copied = true;
-      } catch {}
+      } catch {
+        /* Leave the text selected for manual copying. */
+      }
     }
-    if (current === generation)
+    if (current === generation) {
       message(
         feedback,
-        copied
-          ? `${label} copied.`
-          : "Text selected. Use Copy from your device’s selection menu.",
+        copied ? `${label} copied.` : "Text selected. Use Copy from your device’s selection menu.",
       );
+    }
   }
 
   byId("api-keys-button").addEventListener("click", () => {
@@ -280,17 +304,21 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     byId("api-keys-count").textContent = "";
     byId("api-keys-empty").hidden = true;
     byId("api-keys-title").focus({ preventScroll: true });
-    void refresh();
+    background(refresh());
   });
-  byId("api-keys-close").addEventListener("click", () => close());
-  refreshButton.addEventListener("click", () => void refresh());
+  byId("api-keys-close").addEventListener("click", () => {
+    close();
+  });
+  refreshButton.addEventListener("click", () => {
+    background(refresh());
+  });
   byId("mcp-endpoint-copy").addEventListener(
     "click",
-    () => void copy(endpoint, "Server URL"),
+    asyncHandler(() => copy(endpoint, "Server URL")),
   );
   byId("api-key-copy").addEventListener(
     "click",
-    () => void copy(secretInput, "API key"),
+    asyncHandler(() => copy(secretInput, "API key")),
   );
   byId("api-key-dismiss").addEventListener("click", () => {
     clearSecret();
@@ -303,5 +331,9 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
       close();
     }
   });
-  return { reset: () => close(false) };
+  return {
+    reset: () => {
+      close(false);
+    },
+  };
 }

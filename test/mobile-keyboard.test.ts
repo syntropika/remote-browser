@@ -1,5 +1,6 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
+
 import { createMobileKeyboard } from "../ui/mobile-keyboard.js";
 
 class Element extends EventTarget {
@@ -22,12 +23,13 @@ class Element extends EventTarget {
   }
   contains(element) {
     return (
-      element === this ||
-      Boolean(element?.parentElement && this.contains(element.parentElement))
+      element === this || Boolean(element?.parentElement && this.contains(element.parentElement))
     );
   }
   focus() {
-    if (this.focused) return;
+    if (this.focused) {
+      return;
+    }
     this.ownerDocument.activeElement?.blur();
     this.ownerDocument.activeElement = this;
     this.focused = true;
@@ -35,8 +37,9 @@ class Element extends EventTarget {
   }
   blur() {
     this.focused = false;
-    if (this.ownerDocument.activeElement === this)
+    if (this.ownerDocument.activeElement === this) {
       this.ownerDocument.activeElement = null;
+    }
     this.dispatchEvent(new Event("blur"));
   }
 }
@@ -66,8 +69,9 @@ function fixture({ open = true, initiallyAllowed = true } = {}) {
     ]),
   );
   for (const [name, element] of Object.entries(elements)) {
-    if (!["panel", "button"].includes(name))
+    if (!["panel", "button"].includes(name)) {
       element.parentElement = elements.panel;
+    }
   }
   const keyboard = createMobileKeyboard({
     ...elements,
@@ -78,14 +82,18 @@ function fixture({ open = true, initiallyAllowed = true } = {}) {
       openCount += 1;
     },
   });
-  if (open) keyboard.open();
-  const sentinel = "\u200b";
+  if (open) {
+    keyboard.open();
+  }
+  const sentinel = "\u200B";
   function type(text, inputType = "insertText") {
     const before = emit(elements.input, "beforeinput", {
       data: text,
       inputType,
     });
-    if (before.defaultPrevented) return;
+    if (before.defaultPrevented) {
+      return;
+    }
     elements.input.value += text;
     emit(elements.input, "input", { data: text, inputType });
   }
@@ -125,7 +133,7 @@ test("native text, autofill, and Unicode use keysyms without retaining typed tex
   f.type("é你😀", "insertReplacementText");
   assert.deepEqual(
     f.sent.map(([keysym]) => keysym),
-    [0x41, 0xe9, 0x01004f60, 0x0101f600],
+    [0x41, 0xe9, 0x01_00_4f_60, 0x01_01_f6_00],
   );
   assert.equal(f.input.value, f.sentinel);
   assert.equal(f.input.selectionStart, f.sentinel.length);
@@ -138,15 +146,12 @@ test("backspace works with an empty bridge and forward delete stays distinct", (
     "deleteContentBackward",
     "deleteContentForward",
   ]) {
-    assert.equal(
-      emit(f.input, "beforeinput", { inputType }).defaultPrevented,
-      true,
-    );
+    assert.equal(emit(f.input, "beforeinput", { inputType }).defaultPrevented, true);
   }
   assert.deepEqual(f.sent, [
-    [0xff08, "Backspace"],
-    [0xff08, "Backspace"],
-    [0xffff, "Delete"],
+    [0xff_08, "Backspace"],
+    [0xff_08, "Backspace"],
+    [0xff_ff, "Delete"],
   ]);
   assert.equal(f.input.value, f.sentinel);
 });
@@ -163,11 +168,12 @@ test("IME commits once whether final input comes before or after compositionend"
     });
     assert.deepEqual(f.sent, []);
     f.input.value = `${f.sentinel}你`;
-    if (finalBeforeEnd)
+    if (finalBeforeEnd) {
       emit(f.input, "input", {
         data: "你",
         inputType: "insertFromComposition",
       });
+    }
     emit(f.input, "compositionend", { data: "你" });
     if (!finalBeforeEnd) {
       f.input.value = `${f.sentinel}你`;
@@ -176,13 +182,9 @@ test("IME commits once whether final input comes before or after compositionend"
         inputType: "insertFromComposition",
       });
     }
-    assert.deepEqual(f.sent, [[0x01004f60, undefined]]);
+    assert.deepEqual(f.sent, [[0x01_00_4f_60, undefined]]);
     f.type("你");
-    assert.equal(
-      f.sent.length,
-      2,
-      "the next independent character must not be swallowed",
-    );
+    assert.equal(f.sent.length, 2, "the next independent character must not be swallowed");
     assert.equal(f.input.value, f.sentinel);
   }
 });
@@ -199,14 +201,13 @@ test("changing remote field cancels unfinished composition", () => {
 
 test("paste sends Unicode, line breaks and tabs once and bounds the operation", () => {
   const f = fixture();
-  const paste = (value) =>
-    emit(f.input, "paste", { clipboardData: { getData: () => value } });
+  const paste = (value) => emit(f.input, "paste", { clipboardData: { getData: () => value } });
   assert.equal(paste("a\r\nb\tc").defaultPrevented, true);
   assert.deepEqual(f.sent, [
     [0x61, undefined],
-    [0xff0d, "Enter"],
+    [0xff_0d, "Enter"],
     [0x62, undefined],
-    [0xff09, "Tab"],
+    [0xff_09, "Tab"],
     [0x63, undefined],
   ]);
   paste("x".repeat(4097));
@@ -218,13 +219,10 @@ test("paste sends Unicode, line breaks and tabs once and bounds the operation", 
 test("the Enter button and native Enter keep focus and send synchronously", () => {
   const f = fixture();
   emit(f.enterButton, "click");
-  assert.equal(
-    emit(f.input, "keydown", { key: "Enter" }).defaultPrevented,
-    true,
-  );
+  assert.equal(emit(f.input, "keydown", { key: "Enter" }).defaultPrevented, true);
   assert.deepEqual(
     f.sent.map(([keysym]) => keysym),
-    [0xff0d, 0xff0d],
+    [0xff_0d, 0xff_0d],
   );
   assert.equal(f.input.focused, true);
 });
@@ -310,11 +308,7 @@ test("inline input stays visible and only a direct focus activates the bridge", 
   f.keyboard.sync();
   assert.equal(f.input.disabled, false);
   assert.equal(f.input.placeholder, "Tap a field, then type");
-  assert.equal(
-    f.input.focused,
-    false,
-    "granting control must not open the native keyboard",
-  );
+  assert.equal(f.input.focused, false, "granting control must not open the native keyboard");
   assert.equal(f.rfb().focusOnClick, true);
   f.input.focus();
   assert.equal(f.input.value, f.sentinel);
@@ -379,16 +373,15 @@ test("inline Escape and close dismiss the keyboard while leaving an empty input 
     f.keyboard.setInline(true);
     f.input.focus();
     f.input.value += "private";
-    if (dismiss === "escape") emit(f.input, "keydown", { key: "Escape" });
-    else emit(f.closeButton, "click");
+    if (dismiss === "escape") {
+      emit(f.input, "keydown", { key: "Escape" });
+    } else {
+      emit(f.closeButton, "click");
+    }
     assert.equal(f.panel.hidden, false);
     assert.equal(f.input.value, "");
     assert.equal(f.input.focused, false);
-    assert.equal(
-      f.button.focused,
-      false,
-      "the hidden desktop trigger must not receive focus",
-    );
+    assert.equal(f.button.focused, false, "the hidden desktop trigger must not receive focus");
     assert.equal(f.rfb().focusOnClick, true);
     assert.deepEqual(f.sent, []);
     f.input.focus();
@@ -405,11 +398,7 @@ test("layout changes reset keyboard focus and preserve desktop toggle behavior",
   assert.equal(f.rfb().focusOnClick, true);
   f.input.focus();
   f.keyboard.setInline(true);
-  assert.equal(
-    f.input.focused,
-    true,
-    "reapplying the same layout must preserve typing",
-  );
+  assert.equal(f.input.focused, true, "reapplying the same layout must preserve typing");
   f.keyboard.setInline(false);
   assert.equal(f.panel.hidden, true);
   assert.equal(f.input.focused, false);
@@ -427,7 +416,7 @@ test("inline Enter activates synchronously before the input has been focused", (
   const f = fixture({ open: false });
   f.keyboard.setInline(true);
   emit(f.enterButton, "click");
-  assert.deepEqual(f.sent, [[0xff0d, "Enter"]]);
+  assert.deepEqual(f.sent, [[0xff_0d, "Enter"]]);
   assert.equal(f.input.focused, true);
   assert.equal(f.rfb().focusOnClick, false);
   assert.equal(f.openCount(), 1);
@@ -438,20 +427,19 @@ test("inline close clears focus within the panel while preserving external focus
     const f = fixture({ open: false });
     f.keyboard.setInline(true);
     f.input.focus();
-    const focused =
-      target === "external" ? new Element(f.input.ownerDocument) : f[target];
+    const focused = target === "external" ? new Element(f.input.ownerDocument) : f[target];
     focused.focus();
-    if (target === "closeButton") emit(f.closeButton, "click");
-    else if (target === "enterButton")
+    if (target === "closeButton") {
+      emit(f.closeButton, "click");
+    } else if (target === "enterButton") {
       emit(f.panel, "keydown", { key: "Escape" });
-    else f.keyboard.close();
+    } else {
+      f.keyboard.close();
+    }
     assert.equal(f.panel.hidden, false);
     assert.equal(f.input.focused, false);
     assert.equal(focused.focused, target === "external");
-    assert.equal(
-      f.input.ownerDocument.activeElement,
-      target === "external" ? focused : null,
-    );
+    assert.equal(f.input.ownerDocument.activeElement, target === "external" ? focused : null);
     assert.equal(f.rfb().focusOnClick, true);
     assert.deepEqual(f.sent, []);
   }
