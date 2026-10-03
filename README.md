@@ -29,7 +29,7 @@ The browser profile, account, API keys and saved files live in the `browser-data
 
 ## Published Docker image
 
-The versioned image is available on [Docker Hub](https://hub.docker.com/r/syntropika/remote-browser) as `syntropika/remote-browser:v0.1.0`. Published images support `linux/amd64`; there is no `latest` tag.
+The versioned image is available on [Docker Hub](https://hub.docker.com/r/syntropika/remote-browser) as `syntropika/remote-browser:v0.1.0` for `linux/amd64`. The publishing workflow builds new tags for both `linux/amd64` and `linux/arm64`; Docker selects the matching architecture when pulling a multi-platform tag. There is no `latest` tag. The existing `v0.1.0` image remains amd64-only; ARM64 deployments need a tag published with the updated workflow.
 
 ```sh
 docker pull syntropika/remote-browser:v0.1.0
