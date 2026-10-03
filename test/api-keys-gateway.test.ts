@@ -1,10 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import test from "node:test";
+
+import { asyncHandler } from "../src/async-boundary.js";
 import { createGateway } from "../src/server.js";
 
 const token = "synthetic-api-key-gateway-token-".repeat(2);
@@ -21,8 +23,7 @@ async function listen(server) {
 }
 async function fixture(t, options = {}) {
   const directory =
-    options.directory ||
-    (await mkdtemp(path.join(tmpdir(), "remote-browser-keys-gateway-")));
+    options.directory || (await mkdtemp(path.join(tmpdir(), "remote-browser-keys-gateway-")));
   const gateway = createGateway({
     token,
     accountFile: path.join(directory, "account.json"),
@@ -32,7 +33,7 @@ async function fixture(t, options = {}) {
   const base = await listen(gateway.server);
   const session = gateway.auth.createSession();
   const cookie = gateway.auth.cookie(session).split(";")[0];
-  const post = (route, body, headers = {}) =>
+  const post = async (route, body, headers = {}) =>
     fetch(base + route, {
       method: "POST",
       headers: {
@@ -43,7 +44,7 @@ async function fixture(t, options = {}) {
       },
       body: JSON.stringify(body),
     });
-  const list = () => fetch(base + "/api/keys", { headers: { Cookie: cookie } });
+  const list = async () => fetch(`${base}/api/keys`, { headers: { Cookie: cookie } });
   const create = async (name = "Fixture agent") => {
     const response = await post("/api/keys", { name });
     assert.equal(response.status, 201);
@@ -51,13 +52,17 @@ async function fixture(t, options = {}) {
   };
   const close = async () => {
     gateway.server.closeAllConnections();
-    if (gateway.server.listening)
-      await new Promise((resolve) => gateway.server.close(resolve));
+    if (gateway.server.listening) {
+      await new Promise((resolve) => {
+        gateway.server.close(resolve);
+      });
+    }
   };
   t.after(async () => {
     await close();
-    if (!options.directory)
+    if (!options.directory) {
       await rm(directory, { recursive: true, force: true });
+    }
   });
   return {
     ...gateway,
@@ -72,11 +77,11 @@ async function fixture(t, options = {}) {
   };
 }
 function delayedRequest(base, route, headers) {
-  let resolve;
-  let reject;
-  const response = new Promise((yes, no) => {
-    resolve = yes;
-    reject = no;
+  let resolveResponse;
+  let rejectResponse;
+  const response = new Promise((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
   });
   const request = http.request(
     base + route,
@@ -86,17 +91,18 @@ function delayedRequest(base, route, headers) {
     },
     (res) => {
       res.resume();
-      resolve(res.statusCode);
+      resolveResponse(res.statusCode);
     },
   );
-  request.on("error", reject);
+  // oxlint-disable-next-line typescript/no-deprecated -- ClientRequest errors use Node’s native EventEmitter interface.
+  request.on("error", rejectResponse);
   request.write("{");
   return { request, response };
 }
 
 test("only a dashboard session can manage keys and mutation requests require same-origin JSON", async (t) => {
   const f = await fixture(t);
-  assert.equal((await fetch(f.base + "/api/keys")).status, 401);
+  assert.equal((await fetch(`${f.base}/api/keys`)).status, 401);
   for (const route of ["/api/keys", "/api/keys/revoke"]) {
     assert.equal(
       (
@@ -112,10 +118,7 @@ test("only a dashboard session can manage keys and mutation requests require sam
       ).status,
       403,
     );
-    assert.equal(
-      (await f.post(route, {}, { Origin: "http://evil.invalid" })).status,
-      403,
-    );
+    assert.equal((await f.post(route, {}, { Origin: "http://evil.invalid" })).status, 403);
     assert.equal(
       (
         await fetch(f.base + route, {
@@ -129,48 +132,26 @@ test("only a dashboard session can manage keys and mutation requests require sam
   }
   assert.equal(
     (
-      await fetch(f.base + "/api/keys", {
+      await fetch(`${f.base}/api/keys`, {
         headers: { Authorization: `Bearer ${token}` },
       })
     ).status,
     403,
   );
   assert.equal((await f.post("/api/keys", { name: "" })).status, 400);
-  assert.equal(
-    (await f.post("/api/keys", { name: "x".repeat(65) })).status,
-    400,
-  );
-  assert.equal(
-    (await f.post("/api/keys", { name: "Line\nbreak" })).status,
-    400,
-  );
-  assert.equal(
-    (await f.post("/api/keys", { name: "x".repeat(5000) })).status,
-    400,
-  );
-  assert.equal(
-    (await f.post("/api/keys/revoke", { id: "missing" })).status,
-    404,
-  );
+  assert.equal((await f.post("/api/keys", { name: "x".repeat(65) })).status, 400);
+  assert.equal((await f.post("/api/keys", { name: "Line\nbreak" })).status, 400);
+  assert.equal((await f.post("/api/keys", { name: "x".repeat(5000) })).status, 400);
+  assert.equal((await f.post("/api/keys/revoke", { id: "missing" })).status, 404);
   const { key, secret } = await f.create();
+  assert.equal((await f.post("/api/keys", {}, { Authorization: `Bearer ${secret}` })).status, 403);
   assert.equal(
-    (await f.post("/api/keys", {}, { Authorization: `Bearer ${secret}` }))
-      .status,
+    (await f.post("/api/control/take", {}, { Authorization: `Bearer ${secret}` })).status,
     403,
   );
   assert.equal(
     (
-      await f.post(
-        "/api/control/take",
-        {},
-        { Authorization: `Bearer ${secret}` },
-      )
-    ).status,
-    403,
-  );
-  assert.equal(
-    (
-      await fetch(f.base + "/api/status", {
+      await fetch(`${f.base}/api/status`, {
         headers: { Authorization: `Bearer ${secret}` },
       })
     ).status,
@@ -181,27 +162,23 @@ test("only a dashboard session can manage keys and mutation requests require sam
   assert.equal(response.status, 200);
   assert.ok(!body.includes(secret));
   assert.ok(!body.includes("hash"));
-  assert.equal(
-    JSON.parse(body).keys.find((entry) => entry.id === key.id).name,
-    key.name,
-  );
-  const persisted = await readFile(
-    path.join(f.directory, "api-keys.json"),
-    "utf8",
-  );
+  assert.equal(JSON.parse(body).keys.find((entry) => entry.id === key.id).name, key.name);
+  const persisted = await readFile(path.join(f.directory, "api-keys.json"), "utf-8");
   assert.ok(!persisted.includes(secret));
 });
 
 test("all MCP verbs use managed credentials and revocation survives gateway recreation", async (t) => {
   const methods = [];
-  const upstreamServer = http.createServer(async (req, res) => {
-    for await (const chunk of req) {
-      /* Drain the request. */
-    }
-    methods.push(req.method);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end("{}");
-  });
+  const upstreamServer = http.createServer(
+    asyncHandler(async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      for await (const _chunk of req) {
+        /* Drain the request. */
+      }
+      methods.push(req.method);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+    }),
+  );
   const upstream = await listen(upstreamServer);
   t.after(() => {
     upstreamServer.closeAllConnections();
@@ -210,8 +187,8 @@ test("all MCP verbs use managed credentials and revocation survives gateway recr
   const first = await fixture(t, { upstream });
   const { key, secret } = await first.create();
   const other = await first.create("Another agent");
-  const call = (f, method, credential) =>
-    fetch(f.base + "/mcp", {
+  const call = async (f, method, credential) =>
+    fetch(`${f.base}/mcp`, {
       method,
       headers: {
         Authorization: `Bearer ${credential}`,
@@ -225,17 +202,9 @@ test("all MCP verbs use managed credentials and revocation survives gateway recr
     await response.text();
   }
   assert.deepEqual(methods, ["GET", "POST", "DELETE"]);
-  assert.equal(
-    (await first.post("/api/keys/revoke", { id: key.id })).status,
-    200,
-  );
-  const legacy = (await (await first.list()).json()).keys.find(
-    (entry) => entry.legacy,
-  );
-  assert.equal(
-    (await first.post("/api/keys/revoke", { id: legacy.id })).status,
-    200,
-  );
+  assert.equal((await first.post("/api/keys/revoke", { id: key.id })).status, 200);
+  const legacy = (await (await first.list()).json()).keys.find((entry) => entry.legacy);
+  assert.equal((await first.post("/api/keys/revoke", { id: legacy.id })).status, 200);
   for (const method of ["GET", "POST", "DELETE"]) {
     assert.equal((await call(first, method, secret)).status, 401);
     assert.equal((await call(first, method, token)).status, 401);
@@ -316,7 +285,7 @@ test("revoking a key terminates its active MCP GET notification stream", async (
   });
   const f = await fixture(t, { upstream });
   const { key, secret } = await f.create();
-  const response = await fetch(f.base + "/mcp", {
+  const response = await fetch(`${f.base}/mcp`, {
     headers: { Authorization: `Bearer ${secret}` },
   });
   assert.equal(response.status, 200);
@@ -339,17 +308,19 @@ test("revocation disconnects an active mutation but preserves its control guard 
   const hasStarted = new Promise((resolve) => {
     started = resolve;
   });
-  const upstreamServer = http.createServer(async (req, res) => {
-    for await (const chunk of req) {
-      /* Drain the request. */
-    }
-    started();
-    await new Promise((resolve) => {
-      release = resolve;
-    });
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end('{"jsonrpc":"2.0","id":1,"result":{}}');
-  });
+  const upstreamServer = http.createServer(
+    asyncHandler(async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      for await (const _chunk of req) {
+        /* Drain the request. */
+      }
+      started();
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    }),
+  );
   const upstream = await listen(upstreamServer);
   t.after(() => {
     release?.();
@@ -358,7 +329,7 @@ test("revocation disconnects an active mutation but preserves its control guard 
   });
   const f = await fixture(t, { upstream });
   const { key, secret } = await f.create();
-  const pending = fetch(f.base + "/mcp", {
+  const pending = fetch(`${f.base}/mcp`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${secret}`,
@@ -376,8 +347,11 @@ test("revocation disconnects an active mutation but preserves its control guard 
   assert.equal((await f.post("/api/control/take", {})).status, 202);
   assert.equal(f.control.canControl(f.session), false);
   release();
-  for (let attempt = 0; attempt < 100 && f.control.active; attempt++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let attempt = 0; attempt < 100 && f.control.active; attempt++) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
   assert.equal(f.control.active, 0);
   assert.equal(f.control.fault, null);
   assert.equal(f.control.canControl(f.session), true);

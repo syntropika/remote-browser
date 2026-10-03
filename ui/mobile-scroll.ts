@@ -1,16 +1,16 @@
-interface GestureDetail {
+type GestureDetail = {
   type: string;
   clientX: number;
   clientY: number;
-}
-interface Gesture {
+};
+type Gesture = {
   target: HTMLCanvasElement;
   x: number;
   y: number;
   scaleX: number;
   scaleY: number;
   cancelled: boolean;
-}
+};
 // Adapt the gesture events from the pinned noVNC client. Its default one-finger
 // drag holds the mouse button; page scrolling normally requires two fingers.
 export function createMobileScroll({
@@ -23,16 +23,22 @@ export function createMobileScroll({
   let gesture: Gesture | null = null;
 
   function handle(rawEvent: Event) {
+    // SAFETY: The pinned noVNC client emits CustomEvent gesture details from its canvas; the drag type and canvas tag are checked before use.
     const event = rawEvent as CustomEvent<GestureDetail> & {
       target: HTMLCanvasElement;
     };
-    if (event.detail?.type !== "drag" || event.target.tagName !== "CANVAS")
+    if (event.detail?.type !== "drag" || event.target.tagName !== "CANVAS") {
       return;
+    }
     if (event.type === "gesturestart") {
       gesture = null;
-      if (!canScroll()) return;
+      if (!canScroll()) {
+        return;
+      }
       const bounds = event.target.getBoundingClientRect();
-      if (!bounds.width || !bounds.height) return;
+      if (!bounds.width || !bounds.height) {
+        return;
+      }
       gesture = {
         target: event.target,
         x: event.detail.clientX,
@@ -42,10 +48,14 @@ export function createMobileScroll({
         cancelled: false,
       };
     }
-    if (!gesture || gesture.target !== event.target) return;
+    if (!gesture || gesture.target !== event.target) {
+      return;
+    }
     event.stopImmediatePropagation();
     // Once claimed, never hand the tail of this drag back to mouse input.
-    if (!canScroll()) gesture.cancelled = true;
+    if (!canScroll()) {
+      gesture.cancelled = true;
+    }
     if (!gesture.cancelled) {
       event.target.dispatchEvent(
         new CustomEvent(event.type, {
@@ -59,7 +69,9 @@ export function createMobileScroll({
         }),
       );
     }
-    if (event.type === "gestureend") gesture = null;
+    if (event.type === "gestureend") {
+      gesture = null;
+    }
   }
 
   for (const type of ["gesturestart", "gesturemove", "gestureend"]) {
@@ -67,7 +79,9 @@ export function createMobileScroll({
   }
   return {
     cancel() {
-      if (gesture) gesture.cancelled = true;
+      if (gesture) {
+        gesture.cancelled = true;
+      }
     },
   };
 }

@@ -1,24 +1,16 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import test from "node:test";
+
 import { ApiKeyStore } from "../src/api-keys.js";
 
 const legacyToken = "synthetic-legacy-key-".repeat(3);
 async function fixture(t, options = {}) {
-  const directory = await mkdtemp(
-    path.join(tmpdir(), "remote-browser-api-keys-"),
-  );
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await mkdtemp(path.join(tmpdir(), "remote-browser-api-keys-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
   const filename = path.join(directory, "api-keys.json");
   return {
     directory,
@@ -42,7 +34,7 @@ test("migration preserves the legacy key once and never restores an empty revoke
   const recreated = new ApiKeyStore(filename, { legacyToken });
   assert.deepEqual(await recreated.list(), []);
   assert.equal(await recreated.authenticate(legacyToken), null);
-  assert.deepEqual(JSON.parse(await readFile(filename, "utf8")).keys, []);
+  assert.deepEqual(JSON.parse(await readFile(filename, "utf-8")).keys, []);
 });
 
 test("creation exposes a secret once, persists only its digest, and records usage privately", async (t) => {
@@ -51,10 +43,10 @@ test("creation exposes a secret once, persists only its digest, and records usag
   const { key, secret } = await store.create("  Laptop agent  ");
   assert.equal(key.name, "Laptop agent");
   assert.equal(key.lastUsedAt, null);
-  assert.match(secret, /^rb_[A-Za-z0-9_-]{43}$/);
+  assert.match(secret, /^rb_[A-Za-z0-9_-]{43}$/u);
   assert.equal(key.prefix, secret.slice(0, 11));
   assert.equal(Buffer.from(secret.slice(3), "base64url").length, 32);
-  let file = await readFile(filename, "utf8");
+  const file = await readFile(filename, "utf-8");
   const hash = createHash("sha256").update(secret).digest("hex");
   assert.ok(file.includes(hash));
   assert.ok(!file.includes(secret));
@@ -83,10 +75,10 @@ test("creation exposes a secret once, persists only its digest, and records usag
 test("independent keys and concurrent mutations preserve each other", async (t) => {
   const { store } = await fixture(t);
   const created = await Promise.all(
-    Array.from({ length: 8 }, (_, index) => store.create(`Agent ${index}`)),
+    Array.from({ length: 8 }, async (_, index) => store.create(`Agent ${index}`)),
   );
   assert.equal((await store.list()).length, 9);
-  await Promise.all(created.slice(0, 4).map(({ key }) => store.revoke(key.id)));
+  await Promise.all(created.slice(0, 4).map(async ({ key }) => store.revoke(key.id)));
   assert.equal((await store.list()).length, 5);
   for (let index = 0; index < created.length; index++) {
     const result = await store.authenticate(created[index].secret);
@@ -96,15 +88,7 @@ test("independent keys and concurrent mutations preserve each other", async (t) 
 
 test("invalid names and unknown keys do not change the registry", async (t) => {
   const { store } = await fixture(t);
-  for (const name of [
-    null,
-    "",
-    "   ",
-    "x".repeat(65),
-    "tab\tkey",
-    "\nkey",
-    "key\u200b",
-  ]) {
+  for (const name of [null, "", "   ", "x".repeat(65), "tab\tkey", "\nkey", "key\u200B"]) {
     await assert.rejects(store.create(name), { status: 400 });
   }
   await assert.rejects(store.revoke("unknown"), { status: 404 });
@@ -119,14 +103,15 @@ test("corrupt, public, and symlinked registries fail closed without replacing th
     if (kind === "symlink") {
       await writeFile(target, text, { mode: 0o600 });
       await symlink(target, filename);
-    } else
+    } else {
       await writeFile(filename, text, {
         mode: kind === "public" ? 0o644 : 0o600,
       });
+    }
     const store = new ApiKeyStore(filename, { legacyToken });
     await assert.rejects(store.authenticate(legacyToken), { status: 503 });
     await assert.rejects(store.list(), { status: 503 });
-    assert.equal(await readFile(filename, "utf8"), text);
+    assert.equal(await readFile(filename, "utf-8"), text);
   }
 });
 
@@ -138,7 +123,9 @@ test("authorization is checked again before publishing a queued mutation", async
   await assert.rejects(
     store.create("Expired session", {
       beforeMutation: () => {
-        if (++checks > 1) throw new ApiKeyError(401, "Session expired.");
+        if (++checks > 1) {
+          throw new ApiKeyError(401, "Session expired.");
+        }
       },
     }),
     { status: 401 },

@@ -8,12 +8,13 @@ Use Node.js 24 and install the locked dependencies:
 
 ```sh
 npm ci --ignore-scripts
-npm run typecheck
-npm test
+npm run check
 npm run build
 ```
 
 Application modules live in `src/`, dashboard modules in `ui/`, and the container supervisor in `scripts/runtime.ts`. Use TypeScript and Effect for application workflows. Keep native transport, DOM and subprocess adapters at explicit boundaries. Do not edit generated `dist/` files.
+
+Run `npm run format` to format files and `npm run lint:fix` to apply safe lint fixes. `npm run check` checks formatting, TypeScript, lint rules, and tests. Oxlint and Oxfmt follow [Swarmie's configuration](https://github.com/syntropika/swarmie), using Ultracite's core rules and assertion safety checks. Framework-specific rules are omitted; native callback adapters, sequential browser operations, and synthetic test fixtures have documented exceptions in `oxlint.config.ts`. Formatting uses double quotes, a 100-character line width, sorted imports, and trailing commas. Markdown and TOML remain manually formatted.
 
 Changes to browser control, persistence, the runtime or file transfers also need the dedicated container integration checks below. Never run those checks against a real user's profile.
 

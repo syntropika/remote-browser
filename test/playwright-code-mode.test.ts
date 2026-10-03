@@ -1,6 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import vm from "node:vm";
+
 import initializeCodeMode from "../src/playwright-code-mode.js";
 
 const PNG = Buffer.from("89504e470d0a1a0a00000000", "hex");
@@ -36,7 +37,7 @@ test("the page hook is immutable, idempotent, and supplies the visible page and 
     assert.equal(bindings.page, page);
     assert.equal(bindings.context, page.context());
     assert.equal(page.broughtToFront, true);
-    assert.deepEqual(Object.keys(bindings).sort(), [
+    assert.deepEqual(Object.keys(bindings).toSorted(), [
       "browser",
       "context",
       "files",
@@ -70,14 +71,13 @@ test("execution follows the visible focused tab after it changes outside MCP", a
       },
     }),
   };
-  original.context = other.context = () => context;
-  const result = await original.__remoteBrowserCodeMode.run(
-    original,
-    async ({ page }) => {
-      assert.equal(page, other);
-      return "Visible tab";
-    },
-  );
+  const contextForPage = () => context;
+  original.context = contextForPage;
+  other.context = contextForPage;
+  const result = await original.__remoteBrowserCodeMode.run(original, async ({ page }) => {
+    assert.equal(page, other);
+    return "Visible tab";
+  });
   assert.equal(result.ok, true);
   assert.equal(other.broughtToFront, true);
   assert.equal(detached, 2);
@@ -95,10 +95,8 @@ test("a VM callback can return JSON values, undefined, and cross-realm typed ima
     date: "2026-01-01T00:00:00.000Z",
     numbers: [1, 2],
   });
-  assert.deepEqual(result.images, [
-    { mimeType: "image/jpeg", data: JPEG.toString("base64") },
-  ]);
-  const empty = await page.__remoteBrowserCodeMode.run(page, async () => {});
+  assert.deepEqual(result.images, [{ mimeType: "image/jpeg", data: JPEG.toString("base64") }]);
+  const empty = await page.__remoteBrowserCodeMode.run(page, async (): void => undefined);
   assert.equal(empty.ok, true);
   assert.equal(empty.value, null);
   assert.deepEqual(empty.images, []);
@@ -115,10 +113,7 @@ test("errors have bounded details and a failed call does not poison the next cal
   assert.equal(Buffer.byteLength(failure.error.message), 4096);
   assert.equal("stack" in failure.error, false);
   assert.equal(failure.value, null);
-  const success = await page.__remoteBrowserCodeMode.run(
-    page,
-    async () => "Recovered",
-  );
+  const success = await page.__remoteBrowserCodeMode.run(page, async () => "Recovered");
   assert.equal(success.ok, true);
   assert.equal(success.value, "Recovered");
 });
@@ -127,7 +122,7 @@ test("errors from page activation and non-function input return normal envelopes
   const page = await createPage();
   const badCallback = await page.__remoteBrowserCodeMode.run(page, "code");
   assert.equal(badCallback.ok, false);
-  assert.match(badCallback.error.message, /must be a function/);
+  assert.match(badCallback.error.message, /must be a function/u);
   page.bringToFront = async () => {
     throw new Error("Page has been closed.");
   };
@@ -143,17 +138,11 @@ test("errors from page activation and non-function input return normal envelopes
 test("PNG and JPEG images are copied with detected MIME types and typed array boundaries", async () => {
   const page = await createPage();
   const bytes = Buffer.concat([Buffer.from([1, 2]), PNG, Buffer.from([3])]);
-  const result = await page.__remoteBrowserCodeMode.run(
-    page,
-    async ({ image }) => {
-      image(
-        new Uint8Array(bytes.buffer, bytes.byteOffset + 2, PNG.length),
-        "image/png",
-      );
-      image(JPEG);
-      bytes.fill(0);
-    },
-  );
+  const result = await page.__remoteBrowserCodeMode.run(page, async ({ image }) => {
+    image(new Uint8Array(bytes.buffer, bytes.byteOffset + 2, PNG.length), "image/png");
+    image(JPEG);
+    bytes.fill(0);
+  });
   assert.equal(result.ok, true);
   assert.deepEqual(result.images, [
     { mimeType: "image/png", data: PNG.toString("base64") },
@@ -164,15 +153,14 @@ test("PNG and JPEG images are copied with detected MIME types and typed array bo
 test("invalid image inputs and mismatched MIME types are rejected", async () => {
   const page = await createPage();
   for (const [bytes, type, message] of [
-    ["data:image/png;base64,abc", undefined, /Buffer or Uint8Array/],
-    [new Uint16Array([1, 2]), undefined, /Buffer or Uint8Array/],
-    [Buffer.from("not an image"), undefined, /PNG or JPEG/],
-    [PNG, "image/jpeg", /MIME type must match/],
-    [JPEG, "image/webp", /MIME type must match/],
+    ["data:image/png;base64,abc", undefined, /Buffer or Uint8Array/u],
+    [new Uint16Array([1, 2]), undefined, /Buffer or Uint8Array/u],
+    [Buffer.from("not an image"), undefined, /PNG or JPEG/u],
+    [PNG, "image/jpeg", /MIME type must match/u],
+    [JPEG, "image/webp", /MIME type must match/u],
   ]) {
-    const result = await page.__remoteBrowserCodeMode.run(
-      page,
-      async ({ image }) => image(bytes, type),
+    const result = await page.__remoteBrowserCodeMode.run(page, async ({ image }) =>
+      image(bytes, type),
     );
     assert.equal(result.ok, false);
     assert.match(result.error.message, message);
@@ -182,34 +170,26 @@ test("invalid image inputs and mismatched MIME types are rejected", async () => 
 
 test("image limits apply to each call and include the cumulative raw byte size", async () => {
   const page = await createPage();
-  const tooMany = await page.__remoteBrowserCodeMode.run(
-    page,
-    async ({ image }) => {
-      image(PNG);
-      image(JPEG);
-      image(PNG);
-    },
-  );
+  const tooMany = await page.__remoteBrowserCodeMode.run(page, async ({ image }) => {
+    image(PNG);
+    image(JPEG);
+    image(PNG);
+  });
   assert.equal(tooMany.ok, false);
   assert.equal(tooMany.images.length, 2);
-  assert.match(tooMany.error.message, /at most 2 images/);
+  assert.match(tooMany.error.message, /at most 2 images/u);
 
   const largeImage = Buffer.alloc(3 * 1024 * 1024 + 1);
   PNG.copy(largeImage);
-  const tooLarge = await page.__remoteBrowserCodeMode.run(
-    page,
-    async ({ image }) => {
-      image(largeImage);
-      image(largeImage);
-    },
-  );
+  const tooLarge = await page.__remoteBrowserCodeMode.run(page, async ({ image }) => {
+    image(largeImage);
+    image(largeImage);
+  });
   assert.equal(tooLarge.ok, false);
   assert.equal(tooLarge.images.length, 1);
-  assert.match(tooLarge.error.message, /6 MiB/);
+  assert.match(tooLarge.error.message, /6 MiB/u);
 
-  const next = await page.__remoteBrowserCodeMode.run(page, async ({ image }) =>
-    image(PNG),
-  );
+  const next = await page.__remoteBrowserCodeMode.run(page, async ({ image }) => image(PNG));
   assert.equal(next.ok, true);
   assert.equal(next.images.length, 1);
 });
@@ -218,26 +198,14 @@ test("returned values must serialize within 32 KiB and preserve no live referenc
   const page = await createPage();
   const circular = {};
   circular.self = circular;
-  for (const value of [
-    circular,
-    1n,
-    () => {},
-    Symbol("result"),
-    "x".repeat(32768),
-  ]) {
-    const result = await page.__remoteBrowserCodeMode.run(
-      page,
-      async () => value,
-    );
+  for (const value of [circular, 1n, (): void => undefined, Symbol("result"), "x".repeat(32_768)]) {
+    const result = await page.__remoteBrowserCodeMode.run(page, async () => value);
     assert.equal(result.ok, false);
     assert.equal(result.value, null);
   }
-  const original = { text: "x".repeat(32757) };
-  assert.equal(Buffer.byteLength(JSON.stringify(original)), 32768);
-  const result = await page.__remoteBrowserCodeMode.run(
-    page,
-    async () => original,
-  );
+  const original = { text: "x".repeat(32_757) };
+  assert.equal(Buffer.byteLength(JSON.stringify(original)), 32_768);
+  const result = await page.__remoteBrowserCodeMode.run(page, async () => original);
   assert.equal(result.ok, true);
   original.text = "Changed";
   assert.notEqual(result.value.text, original.text);
@@ -246,14 +214,11 @@ test("returned values must serialize within 32 KiB and preserve no live referenc
 test("an escaped image helper cannot mutate an already completed result", async () => {
   const page = await createPage();
   let escapedImage;
-  const result = await page.__remoteBrowserCodeMode.run(
-    page,
-    async ({ image }) => {
-      escapedImage = image;
-    },
-  );
+  const result = await page.__remoteBrowserCodeMode.run(page, async ({ image }) => {
+    escapedImage = image;
+  });
   assert.equal(result.ok, true);
-  assert.throws(() => escapedImage(PNG), /already completed/);
+  assert.throws(() => escapedImage(PNG), /already completed/u);
   assert.deepEqual(result.images, []);
 });
 

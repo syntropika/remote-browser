@@ -1,11 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createGateway } from "../src/server.js";
+import test from "node:test";
+
 import { BrowserError } from "../src/browser.js";
+import { createGateway } from "../src/server.js";
 
 const token = "browser-gateway-test-token-".repeat(3);
 const state = {
@@ -14,9 +15,7 @@ const state = {
 };
 
 async function fixture(t, options = {}) {
-  const directory = await mkdtemp(
-    path.join(tmpdir(), "remote-browser-native-gateway-"),
-  );
+  const directory = await mkdtemp(path.join(tmpdir(), "remote-browser-native-gateway-"));
   const actions = [];
   const browserService = {
     listTabs: async () => state,
@@ -38,9 +37,9 @@ async function fixture(t, options = {}) {
   const base = `http://127.0.0.1:${gateway.server.address().port}`;
   const session = gateway.auth.createSession();
   const cookie = gateway.auth.cookie(session).split(";")[0];
-  const get = (route, headers = { Cookie: cookie }) =>
-    fetch(base + route, { headers });
-  const post = (route, body = {}, headers = {}) =>
+  const cookieHeaders = { Cookie: cookie };
+  const get = async (route, headers = cookieHeaders) => fetch(base + route, { headers });
+  const post = async (route, body = {}, headers = {}) =>
     fetch(base + route, {
       method: "POST",
       headers: {
@@ -53,7 +52,9 @@ async function fixture(t, options = {}) {
     });
   t.after(async () => {
     gateway.server.closeAllConnections();
-    await new Promise((resolve) => gateway.server.close(resolve));
+    await new Promise((resolve) => {
+      gateway.server.close(resolve);
+    });
     await rm(directory, { recursive: true, force: true });
   });
   return { ...gateway, actions, base, session, cookie, get, post };
@@ -63,8 +64,7 @@ test("native browser APIs use dashboard sessions and mutations require same-orig
   const f = await fixture(t);
   assert.equal((await f.get("/api/browser/tabs", {})).status, 401);
   assert.equal(
-    (await f.get("/api/browser/tabs", { Authorization: `Bearer ${token}` }))
-      .status,
+    (await f.get("/api/browser/tabs", { Authorization: `Bearer ${token}` })).status,
     403,
   );
   assert.deepEqual(await (await f.get("/api/browser/tabs")).json(), state);
@@ -114,10 +114,7 @@ test("native input is denied while the browser service is unavailable", async (t
   const f = await fixture(t, { probe: async () => false });
   f.control.take(f.session);
   assert.equal((await f.get("/api/browser/tabs")).status, 503);
-  assert.equal(
-    (await f.post("/api/browser/action", { action: "reload" })).status,
-    503,
-  );
+  assert.equal((await f.post("/api/browser/action", { action: "reload" })).status, 503);
   assert.equal(f.actions.length, 0);
 });
 
@@ -144,10 +141,7 @@ test("native mutations and MCP cannot overlap, even when control is released dur
   const action = f.post("/api/browser/action", { action: "reload" });
   await startedPromise;
   assert.equal(f.control.canControl(f.session), true);
-  assert.equal(
-    (await f.post("/api/browser/action", { action: "reload" })).status,
-    409,
-  );
+  assert.equal((await f.post("/api/browser/action", { action: "reload" })).status, 409);
   assert.equal((await f.post("/api/control/release")).status, 200);
   const agent = await f.post(
     "/mcp",
@@ -159,7 +153,7 @@ test("native mutations and MCP cannot overlap, even when control is released dur
     },
     { Authorization: `Bearer ${token}` },
   );
-  assert.match((await agent.json()).error.message, /Another browser operation/);
+  assert.match((await agent.json()).error.message, /Another browser operation/u);
   assert.equal(f.control.active, 1);
   release();
   assert.equal((await action).status, 200);
@@ -202,21 +196,14 @@ test("uncertain native completion fails closed for both agent and human access",
   const f = await fixture(t, {
     browserService: {
       action: async () => {
-        throw new BrowserError(
-          "The browser took too long to respond.",
-          504,
-          true,
-        );
+        throw new BrowserError("The browser took too long to respond.", 504, true);
       },
     },
   });
   f.control.take(f.session);
-  assert.equal(
-    (await f.post("/api/browser/action", { action: "reload" })).status,
-    504,
-  );
+  assert.equal((await f.post("/api/browser/action", { action: "reload" })).status, 504);
   assert.equal(f.control.status(f.session).ready, false);
   assert.equal(f.control.canControl(f.session), false);
   f.control.release(f.session);
-  assert.throws(() => f.control.begin(), /Restart/);
+  assert.throws(() => f.control.begin(), /Restart/u);
 });

@@ -1,5 +1,6 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
+
 import { createMobileScroll } from "../ui/mobile-scroll.js";
 
 function fixture() {
@@ -44,7 +45,7 @@ test("fitted swipes scroll at the original remote position with display-scaled d
   const f = fixture();
   assert.equal(f.send("gesturestart"), true);
   f.send("gesturemove", "drag", 105, 150);
-  const detail = f.received.at(-1).detail;
+  const { detail } = f.received.at(-1);
   assert.deepEqual(detail, {
     type: "twodrag",
     clientX: 100,

@@ -1,8 +1,9 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { writeFile, stat } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import test from "node:test";
+
 import { captureDownload } from "../src/browser-download.js";
 
 function fixture() {
@@ -11,7 +12,9 @@ function fixture() {
   let directory;
   session.send = async (method, args) => {
     commands.push({ method, args });
-    if (args?.downloadPath) directory = args.downloadPath;
+    if (args?.downloadPath) {
+      directory = args.downloadPath;
+    }
     return {};
   };
   session.detach = async () => {
@@ -20,7 +23,7 @@ function fixture() {
   const context = {
     newCDPSession: async () => ({
       send: async () => ({ frameTree: { frame: { id: "main" } } }),
-      detach: async () => {},
+      detach: async (): void => undefined,
     }),
     browser: () => ({ newBrowserCDPSession: async () => session }),
   };
@@ -79,7 +82,9 @@ test("oversized or failed download triggers never save data and always restore b
             frameId: "main",
             suggestedFilename: "report.pdf",
           });
-          if (fail === "trigger") throw new Error("Trigger failed");
+          if (fail === "trigger") {
+            throw new Error("Trigger failed");
+          }
           f.session.emit("Browser.downloadProgress", {
             guid,
             state: "inProgress",
@@ -92,11 +97,9 @@ test("oversized or failed download triggers never save data and always restore b
           throw new Error("must not save");
         },
       ),
-      fail === "trigger" ? /Trigger failed/ : /20 MiB/,
+      fail === "trigger" ? /Trigger failed/u : /20 MiB/u,
     );
-    assert.ok(
-      f.commands.some((command) => command.method === "Browser.cancelDownload"),
-    );
+    assert.ok(f.commands.some((command) => command.method === "Browser.cancelDownload"));
     assert.equal(f.commands.at(-1).args.behavior, "default");
     assert.equal(f.session.detached, true);
     await assert.rejects(stat(f.directory()), { code: "ENOENT" });

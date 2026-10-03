@@ -1,14 +1,18 @@
 import type RFB from "/vendor/novnc/core/rfb.js";
-import type { BrowserTabs } from "../src/browser.js";
-import type { RecordingStatus, ArtifactMetadata } from "../src/artifacts.js";
 
-export type Api = typeof import("./api.js").api;
-export interface UiOptions {
+import type { ArtifactMetadata, RecordingStatus } from "../src/artifacts.js";
+import type { BrowserTabs } from "../src/browser.js";
+import type { api } from "./api.js";
+
+export { type default as RFB } from "/vendor/novnc/core/rfb.js";
+
+export type Api = typeof api;
+export type UiOptions = {
   api: Api;
   onOpen: () => void;
   onUnauthorized: () => void;
-}
-export interface ControlState {
+};
+export type ControlState = {
   mode: string;
   ownsControl: boolean;
   leaseExpiresAt: number | null;
@@ -19,36 +23,36 @@ export interface ControlState {
   error?: string;
   agentRequest: { id: string; deadline: number; canCancel: boolean } | null;
   recording?: RecordingStatus | null;
-}
-export interface ClipboardOptions extends UiOptions {
+};
+export type ClipboardOptions = {
   getRfb: () => RFB | null;
   canControl: () => boolean;
-}
-export interface BrowserControlOptions extends UiOptions {
+} & UiOptions;
+export type BrowserControlOptions = {
   canControl: () => boolean;
   isAuthenticated: () => boolean;
   beforeAction: () => void;
   onError: (message: string) => void;
-}
-export interface ApiKeyMetadata {
+} & UiOptions;
+export type ApiKeyMetadata = {
   id: string;
   name: string;
   prefix: string;
   createdAt: string;
   lastUsedAt: string | null;
   legacy?: boolean;
-}
+};
 export type SavedFile = ArtifactMetadata & { url: string };
-export type { RFB, BrowserTabs, RecordingStatus };
-export interface GetRoutes {
+
+export type GetRoutes = {
   "/api/auth/status": { configured: boolean; authenticated: boolean };
   "/api/status": ControlState;
   "/api/artifacts": { files: SavedFile[]; recording: RecordingStatus | null };
   "/api/clipboard": { text: string };
   "/api/keys": { keys: ApiKeyMetadata[] };
   "/api/browser/tabs": BrowserTabs;
-}
-export interface PostRoutes {
+};
+export type PostRoutes = {
   "/api/auth/setup": { authenticated: boolean };
   "/api/login": { authenticated: boolean };
   "/api/logout": { authenticated: boolean };
@@ -60,4 +64,7 @@ export interface PostRoutes {
   "/api/clipboard": { written: boolean };
   "/api/keys": { key: ApiKeyMetadata; secret: string };
   "/api/keys/revoke": { revoked: boolean };
-}
+};
+
+export type { RecordingStatus } from "../src/artifacts.js";
+export type { BrowserTabs } from "../src/browser.js";

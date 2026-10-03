@@ -1,9 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  prepareCodeMode,
-  transformCodeModeResponse,
-} from "../src/code-mode.js";
+import test from "node:test";
+
+import { prepareCodeMode, transformCodeModeResponse } from "../src/code-mode.js";
 import { requiresControl } from "../src/mcp-proxy.js";
 
 const request = (name, args = {}, id = 1) => ({
@@ -12,8 +10,7 @@ const request = (name, args = {}, id = 1) => ({
   method: "tools/call",
   params: { name, arguments: args },
 });
-const prepare = (message) =>
-  prepareCodeMode(Buffer.from(JSON.stringify(message)));
+const prepare = (message) => prepareCodeMode(Buffer.from(JSON.stringify(message)));
 const envelope = (fields = {}) => ({
   __remoteBrowserCodeMode: 1,
   ok: true,
@@ -36,11 +33,7 @@ const response = (value, id = 1) => ({
 });
 const transformed = (message, prepared) =>
   JSON.parse(
-    transformCodeModeResponse(
-      Buffer.from(JSON.stringify(message)),
-      "application/json",
-      prepared,
-    ),
+    transformCodeModeResponse(Buffer.from(JSON.stringify(message)), "application/json", prepared),
   );
 
 test("the catalog exposes only two code-mode tools after a successful upstream list", () => {
@@ -65,7 +58,7 @@ test("the catalog exposes only two code-mode tools after a successful upstream l
   const error = {
     jsonrpc: "2.0",
     id: "catalog",
-    error: { code: -32602, message: "Unsupported protocol" },
+    error: { code: -32_602, message: "Unsupported protocol" },
   };
   assert.deepEqual(transformed(error, prepared), error);
 });
@@ -79,12 +72,9 @@ test("docs validate through upstream ping and remain available during human cont
     method: "ping",
   });
   const output = transformed({ jsonrpc: "2.0", id: 1, result: {} }, prepared);
-  assert.match(output.result.content[0].text, /image\(await page.screenshot/);
+  assert.match(output.result.content[0].text, /image\(await page.screenshot/u);
   assert.equal(requiresControl("POST", message), false);
-  assert.equal(
-    requiresControl("POST", request("browser_execute", { code: "return 1;" })),
-    true,
-  );
+  assert.equal(requiresControl("POST", request("browser_execute", { code: "return 1;" })), true);
   assert.equal(requiresControl("POST", request("browser_docs_extra")), true);
   assert.equal(
     requiresControl("POST", {
@@ -93,10 +83,7 @@ test("docs validate through upstream ping and remain available during human cont
     }),
     true,
   );
-  assert.equal(
-    requiresControl("POST", [message, request("browser_click")]),
-    true,
-  );
+  assert.equal(requiresControl("POST", [message, request("browser_click")]), true);
   assert.equal(requiresControl("DELETE", message), true);
 });
 
@@ -109,7 +96,7 @@ test("execute wraps native Playwright code without running it in the gateway", (
   assert.equal(upstream.params.name, "browser_run_code_unsafe");
   assert.match(
     upstream.params.arguments.code,
-    /page\.__remoteBrowserCodeMode.run\(page, async \(\{ page, context, browser, image, files, recording \}\)/,
+    /page\.__remoteBrowserCodeMode.run\(page, async \(\{ page, context, browser, image, files, recording \}\)/u,
   );
   assert.ok(upstream.params.arguments.code.includes(code));
   assert.equal(globalThis.codeModeShouldNeverRun, undefined);
@@ -120,7 +107,7 @@ test("invalid code and arguments return compact tool errors after upstream sessi
     {},
     { code: " " },
     { code: 12 },
-    { code: "a".repeat(32769) },
+    { code: "a".repeat(32_769) },
     { code: "if (" },
     { code: "return 1;", extra: true },
   ]) {
@@ -132,26 +119,18 @@ test("invalid code and arguments return compact tool errors after upstream sessi
     const expired = {
       jsonrpc: "2.0",
       id: 1,
-      error: { code: -32000, message: "Session expired" },
+      error: { code: -32_000, message: "Session expired" },
     };
     assert.deepEqual(transformed(expired, prepared), expired);
   }
   const prepared = prepare(request("browser_docs", { topic: "secrets" }));
-  assert.equal(
-    transformed({ jsonrpc: "2.0", id: 1, result: {} }, prepared).result.isError,
-    true,
-  );
+  assert.equal(transformed({ jsonrpc: "2.0", id: 1, result: {} }, prepared).result.isError, true);
   const nullArgs = prepare(request("browser_docs", null));
-  assert.equal(
-    transformed({ jsonrpc: "2.0", id: 1, result: {} }, nullArgs).result.isError,
-    true,
-  );
+  assert.equal(transformed({ jsonrpc: "2.0", id: 1, result: {} }, nullArgs).result.isError, true);
 });
 
 test("execution output separates screenshots from compact JSON and removes echoed code", () => {
-  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]).toString(
-    "base64",
-  );
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]).toString("base64");
   const prepared = prepare(request("browser_execute", { code: "return 1;" }));
   const output = transformed(
     response(envelope({ images: [{ mimeType: "image/png", data: png }] })),
@@ -162,20 +141,14 @@ test("execution output separates screenshots from compact JSON and removes echoe
     value: { title: "Example" },
     durationMs: 12,
   });
-  assert.deepEqual(
-    JSON.parse(output.content[0].text),
-    output.structuredContent,
-  );
+  assert.deepEqual(JSON.parse(output.content[0].text), output.structuredContent);
   assert.deepEqual(output.content[1], {
     type: "image",
     mimeType: "image/png",
     data: png,
   });
   assert.equal(output.content[0].text.includes(png), false);
-  assert.equal(
-    JSON.stringify(output).includes("SECRET_SHOULD_NOT_BE_RETURNED"),
-    false,
-  );
+  assert.equal(JSON.stringify(output).includes("SECRET_SHOULD_NOT_BE_RETURNED"), false);
 });
 
 test("ordinary script errors are compact tool errors, while missing completions fail closed", () => {
@@ -212,15 +185,11 @@ test("ordinary script errors are compact tool errors, while missing completions 
   assert.ok(Buffer.byteLength(JSON.stringify(unicodeError)) <= 4096);
   assert.throws(
     () => transformed({ jsonrpc: "2.0", id: 1, result: {} }, prepared),
-    /completion envelope/,
+    /completion envelope/u,
   );
   assert.throws(
-    () =>
-      transformed(
-        { jsonrpc: "2.0", method: "notifications/message" },
-        prepared,
-      ),
-    /incomplete/,
+    () => transformed({ jsonrpc: "2.0", method: "notifications/message" }, prepared),
+    /incomplete/u,
   );
   assert.throws(
     () =>
@@ -236,30 +205,24 @@ test("ordinary script errors are compact tool errors, while missing completions 
         prepared,
       ),
     (error) =>
-      /completion envelope/.test(error.message) &&
-      !error.message.includes("ECHOED_CREDENTIAL"),
+      /completion envelope/u.test(error.message) && !error.message.includes("ECHOED_CREDENTIAL"),
   );
 });
 
 test("output bounds prevent oversized data and unsupported screenshots", () => {
   const prepared = prepare(request("browser_execute", { code: "return 1;" }));
   assert.equal(
-    transformed(response(envelope({ value: "a".repeat(32769) })), prepared)
-      .result.isError,
+    transformed(response(envelope({ value: "a".repeat(32_769) })), prepared).result.isError,
     true,
   );
   assert.equal(
-    transformed(response(envelope({ images: [{}, {}, {}] })), prepared).result
-      .isError,
+    transformed(response(envelope({ images: [{}, {}, {}] })), prepared).result.isError,
     true,
   );
   assert.throws(
     () =>
-      transformed(
-        response(envelope({ images: [{ mimeType: "text/html", data: "" }] })),
-        prepared,
-      ),
-    /Invalid screenshot/,
+      transformed(response(envelope({ images: [{ mimeType: "text/html", data: "" }] })), prepared),
+    /Invalid screenshot/u,
   );
   assert.throws(
     () =>
@@ -276,7 +239,7 @@ test("output bounds prevent oversized data and unsupported screenshots", () => {
         ),
         prepared,
       ),
-    /does not match/,
+    /does not match/u,
   );
   const largeScreenshot = Buffer.alloc(1024 * 1024);
   Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(largeScreenshot);
@@ -285,8 +248,7 @@ test("output bounds prevent oversized data and unsupported screenshots", () => {
     data: largeScreenshot.toString("base64"),
   };
   assert.equal(
-    transformed(response(envelope({ images: [image] })), prepared).result
-      .content[1].data,
+    transformed(response(envelope({ images: [image] })), prepared).result.content[1].data,
     image.data,
   );
 });
@@ -304,7 +266,7 @@ test("SSE comments, event IDs and notifications survive response replacement", (
   assert.ok(output.startsWith(`: keep-alive\r\n\r\n${notification}\r\n\r\n`));
   assert.ok(output.includes("id: event-2\r\nevent: message\r\ndata: "));
   assert.equal(output.includes("SECRET_SHOULD_NOT_BE_RETURNED"), false);
-  assert.match(output, /structuredContent/);
+  assert.match(output, /structuredContent/u);
 });
 
 test("legacy names, initialize and notifications are passed through unchanged", () => {
@@ -337,14 +299,9 @@ test("initialization advertises documentation resources and resources use the sa
   assert.ok(handshake.capabilities.resources);
   assert.equal(handshake.instructions, undefined);
   const message = { jsonrpc: "2.0", id: 2, method: "resources/list" };
-  const catalog = transformed(
-    { jsonrpc: "2.0", id: 2, result: {} },
-    prepare(message),
-  ).result;
+  const catalog = transformed({ jsonrpc: "2.0", id: 2, result: {} }, prepare(message)).result;
   assert.ok(
-    catalog.resources.some(
-      (resource) => resource.uri === "remote-browser://docs/inspection",
-    ),
+    catalog.resources.some((resource) => resource.uri === "remote-browser://docs/inspection"),
   );
   assert.equal(requiresControl("POST", message), false);
   const read = {
@@ -353,10 +310,8 @@ test("initialization advertises documentation resources and resources use the sa
     method: "resources/read",
     params: { uri: "remote-browser://docs/inspection" },
   };
-  const resource = transformed(
-    { jsonrpc: "2.0", id: 3, result: {} },
-    prepare(read),
-  ).result.contents[0];
+  const resource = transformed({ jsonrpc: "2.0", id: 3, result: {} }, prepare(read)).result
+    .contents[0];
   const docs = transformed(
     { jsonrpc: "2.0", id: 4, result: {} },
     prepare(request("browser_docs", { topic: "inspection" }, 4)),
@@ -364,10 +319,7 @@ test("initialization advertises documentation resources and resources use the sa
   assert.equal(resource.text, docs.text);
   assert.equal(requiresControl("POST", read), false);
   const unknown = { ...read, params: { uri: "file:///etc/passwd" } };
-  const failed = transformed(
-    { jsonrpc: "2.0", id: 3, result: {} },
-    prepare(unknown),
-  );
-  assert.equal(failed.error.code, -32002);
+  const failed = transformed({ jsonrpc: "2.0", id: 3, result: {} }, prepare(unknown));
+  assert.equal(failed.error.code, -32_002);
   assert.equal(failed.result, undefined);
 });

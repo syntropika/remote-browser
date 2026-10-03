@@ -1,27 +1,30 @@
-import { Cause, Effect, Exit, Semaphore } from "effect";
-import { open, type FileHandle } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { open } from "node:fs/promises";
 
-export interface NativeError extends Error {
+import { Cause, Effect, Exit, Semaphore } from "effect";
+
+export type NativeError = {
   code?: string | number;
   stderr?: string;
+  stdout?: string;
   status?: number;
   unknownCompletion?: boolean;
-}
+} & Error;
 export const nativeError = (cause: unknown): NativeError => asError(cause);
 
 export const asError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error(String(cause));
 
 /** Adapt native I/O without hiding domain errors from the Effect error channel. */
-export const attempt = <A>(
-  operation: () => PromiseLike<A> | A,
-): Effect.Effect<A, Error> =>
+export const attempt = <A>(operation: () => PromiseLike<A> | A): Effect.Effect<A, Error> =>
   Effect.tryPromise({ try: async () => operation(), catch: asError });
 
 /** Only transport and process entry points convert Effects back into Promises. */
 export async function run<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
   const exit = await Effect.runPromiseExit(effect);
-  if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
+  if (Exit.isFailure(exit)) {
+    throw Cause.squash(exit.cause);
+  }
   return exit.value;
 }
 
@@ -32,9 +35,9 @@ export function withFile<A>(
   use: (file: FileHandle) => Effect.Effect<A, Error>,
 ): Effect.Effect<A, Error> {
   return Effect.acquireUseRelease(
-    attempt(() => open(filename, flags, mode)),
+    attempt(async () => open(filename, flags, mode)),
     use,
-    (file) => attempt(() => file.close()).pipe(Effect.orDie),
+    (file) => attempt(async () => file.close()).pipe(Effect.orDie),
   );
 }
 
@@ -43,15 +46,13 @@ export class SerialOperations {
   private readonly semaphore = Semaphore.makeUnsafe(1);
   private tail: Promise<unknown> = Promise.resolve();
 
-  execute<A>(operation: Effect.Effect<A, Error>): Promise<A> {
-    const result = run(
-      this.semaphore.withPermits(1)(Effect.uninterruptible(operation)),
-    );
-    this.tail = result.catch(() => undefined);
+  async execute<A>(operation: Effect.Effect<A, Error>): Promise<A> {
+    const result = run(this.semaphore.withPermits(1)(Effect.uninterruptible(operation)));
+    this.tail = result.catch((): void => undefined);
     return result;
   }
 
-  drain(): Promise<unknown> {
+  async drain(): Promise<unknown> {
     return this.tail;
   }
 }

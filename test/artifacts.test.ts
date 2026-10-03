@@ -1,8 +1,5 @@
-import test from "node:test";
-import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
 import { writeSync } from "node:fs";
 import {
   lstat,
@@ -15,20 +12,19 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
-import { ArtifactService } from "../src/artifacts.js";
+import path from "node:path";
+import { PassThrough, Readable } from "node:stream";
+import test from "node:test";
+
 import { createArtifactClient } from "../src/artifacts-client.js";
+import { ArtifactService } from "../src/artifacts.js";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6KfQAAAAASUVORK5CYII=",
   "base64",
 );
-const mp4 = Buffer.concat([
-  Buffer.from([0, 0, 0, 24]),
-  Buffer.from("ftypisom"),
-  Buffer.alloc(256),
-]);
+const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypisom"), Buffer.alloc(256)]);
 const screenshot = (name) => ({
   name,
   base64: png.toString("base64"),
@@ -36,9 +32,7 @@ const screenshot = (name) => ({
 });
 
 async function fixture(t, options = {}) {
-  const root = await mkdtemp(
-    path.join(os.tmpdir(), "remote-browser-artifacts-"),
-  );
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-browser-artifacts-"));
   const directory = path.join(root, "files");
   const socketPath = path.join(root, "ipc", "artifacts.sock");
   const service = new ArtifactService({
@@ -72,10 +66,14 @@ function recorder({ startup = "ready", automatic = false } = {}) {
         child.emit("close", 1);
         return;
       }
-      if (startup === "missing") return;
+      if (startup === "missing") {
+        return;
+      }
       writeSync(options.stdio[4], mp4);
       child.stdio[3].write("frame=1\nfps=15.0\nprogress=continue\n");
-      if (automatic) setImmediate(() => child.emit("close", 0));
+      if (automatic) {
+        setImmediate(() => child.emit("close", 0));
+      }
     });
     return child;
   };
@@ -86,29 +84,29 @@ test("constructor is lazy; screenshots survive service replacement with private 
   const { service, directory, socketPath } = await fixture(t);
   await assert.rejects(stat(directory), { code: "ENOENT" });
   const saved = await service.save(screenshot("Account page"));
-  assert.match(saved.id, /^[a-f0-9]{32}$/);
+  assert.match(saved.id, /^[a-f0-9]{32}$/u);
   assert.equal(saved.name, "Account page.png");
-  assert.equal(
-    saved.url,
-    `http://browser.local/api/artifacts/${saved.id}/download`,
-  );
+  assert.equal(saved.url, `http://browser.local/api/artifacts/${saved.id}/download`);
   assert.equal(saved.size, png.length);
   assert.equal((await stat(directory)).mode & 0o777, 0o700);
-  for (const name of await readdir(directory))
+  for (const name of await readdir(directory)) {
     assert.equal((await stat(path.join(directory, name))).mode & 0o777, 0o600);
+  }
   const replacement = new ArtifactService({
     directory,
     socketPath,
     publicOrigin: "http://browser.local",
   });
-  t.after(() => replacement.close());
+  t.after(async () => replacement.close());
   assert.deepEqual(await replacement.list(), {
     files: [saved],
     recording: null,
   });
   const opened = await replacement.openFile(saved.id);
   const chunks = [];
-  for await (const chunk of opened.stream) chunks.push(chunk);
+  for await (const chunk of opened.stream) {
+    chunks.push(chunk);
+  }
   assert.deepEqual(Buffer.concat(chunks), png);
 });
 
@@ -128,8 +126,9 @@ test("only bounded screenshot bytes and safe display names can be registered", a
     screenshot("../../account.json"),
     screenshot("secret\r\nContent-Type: text/html"),
     screenshot("a".repeat(121)),
-  ])
+  ]) {
     await assert.rejects(service.save(value), (error) => error.status === 400);
+  }
   assert.deepEqual((await service.list()).files, []);
 });
 
@@ -142,19 +141,11 @@ test("concurrent writes cannot exceed quota and failed registrations leave no do
     service.save(screenshot("First")),
     service.save(screenshot("Second")),
   ]);
-  assert.equal(
-    results.filter((result) => result.status === "fulfilled").length,
-    1,
-  );
-  assert.equal(
-    results.find((result) => result.status === "rejected").reason.status,
-    507,
-  );
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.find((result) => result.status === "rejected").reason.status, 507);
   assert.equal((await service.list()).files.length, 1);
   assert.equal((await readdir(directory)).length, 2);
-  await service.remove(
-    results.find((result) => result.status === "fulfilled").value.id,
-  );
+  await service.remove(results.find((result) => result.status === "fulfilled").value.id);
   assert.equal((await service.list()).files.length, 0);
   await service.save(screenshot("Replacement"));
 });
@@ -164,22 +155,14 @@ test("download IDs never resolve arbitrary paths and file symlinks cannot expose
   const saved = await service.save(screenshot("Page"));
   const secretPath = path.join(root, "account.json");
   await writeFile(secretPath, "synthetic account data", { mode: 0o600 });
-  for (const id of [
-    "../account.json",
-    saved.name,
-    `${saved.id}/../../account.json`,
-    null,
-  ]) {
+  for (const id of ["../account.json", saved.name, `${saved.id}/../../account.json`, null]) {
     await assert.rejects(service.openFile(id), (error) => error.status === 404);
   }
   await unlink(path.join(directory, `${saved.id}.bin`));
   await symlink(secretPath, path.join(directory, `${saved.id}.bin`));
-  await assert.rejects(
-    service.openFile(saved.id),
-    (error) => error.status === 404,
-  );
+  await assert.rejects(service.openFile(saved.id), (error) => error.status === 404);
   await assert.rejects(service.list(), (error) => error.status === 503);
-  assert.equal(await readFile(secretPath, "utf8"), "synthetic account data");
+  assert.equal(await readFile(secretPath, "utf-8"), "synthetic account data");
 });
 
 test("directory and metadata symlinks fail closed; unregistered files are excluded", async (t) => {
@@ -192,15 +175,12 @@ test("directory and metadata symlinks fail closed; unregistered files are exclud
   const link = path.join(root, "link");
   await symlink(directory, link);
   const unsafe = new ArtifactService({ directory: link });
-  t.after(() => unsafe.close());
+  t.after(async () => unsafe.close());
   await assert.rejects(unsafe.list(), (error) => error.status === 503);
   const metadataPath = path.join(directory, `${saved.id}.json`);
   await unlink(metadataPath);
   await symlink(path.join(root, "outside"), metadataPath);
-  await assert.rejects(
-    service.openFile(saved.id),
-    (error) => error.status === 503,
-  );
+  await assert.rejects(service.openFile(saved.id), (error) => error.status === 503);
 });
 
 test("one visible-display recording is reserved until graceful completion and saved as MP4", async (t) => {
@@ -216,17 +196,11 @@ test("one visible-display recording is reserved until graceful completion and sa
   assert.equal(service.status().id, started.id);
   assert.equal(service.status().state, "recording");
   assert.deepEqual((await service.list()).files, []);
-  await assert.rejects(
-    service.startRecording(),
-    (error) => error.status === 409,
-  );
+  await assert.rejects(service.startRecording(), (error) => error.status === 409);
   assert.equal(fake.processes[0].command, "ffmpeg");
   assert.ok(fake.processes[0].args.includes("x11grab"));
   assert.ok(fake.processes[0].args.includes("/proc/self/fd/4"));
-  assert.equal(
-    (await stat(path.join(directory, `${started.id}.bin`))).mode & 0o777,
-    0o600,
-  );
+  assert.equal((await stat(path.join(directory, `${started.id}.bin`))).mode & 0o777, 0o600);
   const saved = await service.stopRecording();
   assert.equal(saved.id, started.id);
   assert.equal(saved.mimeType, "video/mp4");
@@ -244,10 +218,7 @@ test("recording quota is reserved against concurrent screenshots and released on
     maxTotalBytes: 1024,
   });
   await service.startRecording();
-  await assert.rejects(
-    service.save(screenshot()),
-    (error) => error.status === 507,
-  );
+  await assert.rejects(service.save(screenshot()), (error) => error.status === 507);
   fake.processes[0].child.emit("close", 1);
   await service.queue;
   assert.equal(service.status(), null);
@@ -271,10 +242,7 @@ test("automatic duration completion persists output and close finalizes an activ
   await service.close();
   assert.equal(service.status(), null);
   assert.equal((await service.list()).files.length, 2);
-  await assert.rejects(
-    service.startRecording(),
-    (error) => error.status === 503,
-  );
+  await assert.rejects(service.startRecording(), (error) => error.status === 503);
 });
 
 test("failed startup and missing progress are bounded and remove partial files", async (t) => {
@@ -284,14 +252,13 @@ test("failed startup and missing progress are bounded and remove partial files",
       spawnProcess: fake.spawnProcess,
       startupTimeoutMs: 20,
     });
-    await assert.rejects(service.startRecording(), (error) =>
-      [502, 504].includes(error.status),
-    );
+    await assert.rejects(service.startRecording(), (error) => [502, 504].includes(error.status));
     await service.queue;
     assert.equal(service.status(), null);
     assert.deepEqual(await readdir(directory), []);
-    if (startup === "missing")
+    if (startup === "missing") {
       assert.deepEqual(fake.processes[0].child.signals, ["SIGKILL"]);
+    }
   }
 });
 
@@ -307,7 +274,7 @@ test("private socket client saves native screenshot buffers and controls the sam
     name: "Visible page",
   });
   assert.equal((await client.files.list()).files[0].id, saved.id);
-  await assert.rejects(client.files.saveScreenshot("filename.png"), /buffer/);
+  await assert.rejects(client.files.saveScreenshot("filename.png"), /buffer/u);
   await client.recording.start({ maxSeconds: 2 });
   assert.equal((await client.recording.status()).state, "recording");
   assert.equal((await client.recording.stop()).mimeType, "video/mp4");
@@ -357,21 +324,19 @@ test("binary downloads and human uploads persist with exact filenames, safe limi
       },
       { id: download.id },
     ),
-    /uploaded by the human/,
+    /uploaded by the human/u,
   );
   for (const input of [
     { name: "../x", buffer: bytes },
     { name: "empty", buffer: Buffer.alloc(0) },
     { name: "huge", buffer: Buffer.alloc(20 * 1024 * 1024 + 1) },
-  ])
-    await assert.rejects(
-      service.saveFile(input),
-      (error) => error.status === 400,
-    );
+  ]) {
+    await assert.rejects(service.saveFile(input), (error) => error.status === 400);
+  }
   const replacement = new ArtifactService({ directory, socketPath });
   assert.deepEqual(
-    (await replacement.list()).files.map((file) => file.id).sort(),
-    [upload.id, download.id].sort(),
+    (await replacement.list()).files.map((file) => file.id).toSorted(),
+    [upload.id, download.id].toSorted(),
   );
   await replacement.close();
 });
@@ -388,11 +353,13 @@ test("upload authorization is rechecked before committing and canceled uploads l
       },
       {
         beforeMutation: () => {
-          if (++checks === 2) throw new Error("Session expired");
+          if (++checks === 2) {
+            throw new Error("Session expired");
+          }
         },
       },
     ),
-    /Session expired/,
+    /Session expired/u,
   );
   assert.equal(checks, 2);
   assert.deepEqual(await readdir(directory), []);

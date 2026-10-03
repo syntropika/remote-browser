@@ -1,5 +1,6 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
+
 import { createClipboard } from "../ui/clipboard.js";
 
 class Element extends EventTarget {
@@ -64,7 +65,7 @@ test("closing a pending paste clears local text and does not send a later remote
   let complete;
   const f = fixture(
     t,
-    () =>
+    async () =>
       new Promise((resolve) => {
         complete = resolve;
       }),
@@ -84,13 +85,15 @@ test("losing control during a read prevents its result from repopulating the pan
   let complete;
   const f = fixture(
     t,
-    () =>
+    async () =>
       new Promise((resolve) => {
         complete = resolve;
       }),
   );
   f.click("clipboard-read");
-  await new Promise((resolve) => setTimeout(resolve, 280));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 280);
+  });
   assert.equal(typeof complete, "function");
   f.revoke();
   complete({ text: "private synthetic clipboard" });
@@ -106,17 +109,19 @@ test("remote shortcuts release Control even if sending the copy key fails", asyn
   const original = f.keys.push.bind(f.keys);
   f.keys.push = (args) => {
     original(args);
-    if (args[1] === "KeyC") throw new Error("Connection interrupted.");
+    if (args[1] === "KeyC") {
+      throw new Error("Connection interrupted.");
+    }
   };
   f.click("clipboard-read");
   await new Promise(setImmediate);
-  assert.deepEqual(Array.from(f.keys), [
-    [0xffe3, "ControlLeft", true],
-    [0x63, "KeyC"],
-    [0xffe3, "ControlLeft", false],
-  ]);
-  assert.equal(
-    f.elements["clipboard-status"].textContent,
-    "Connection interrupted.",
+  assert.deepEqual(
+    [...f.keys],
+    [
+      [0xff_e3, "ControlLeft", true],
+      [0x63, "KeyC"],
+      [0xff_e3, "ControlLeft", false],
+    ],
   );
+  assert.equal(f.elements["clipboard-status"].textContent, "Connection interrupted.");
 });
