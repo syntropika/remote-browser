@@ -60,15 +60,19 @@ export async function forwardMcp(
     body,
     finish,
     timeoutMs = 120_000,
+    owner,
   }: {
     upstream: string;
     body?: Buffer;
     finish?: FinishOperation;
     timeoutMs?: number;
+    owner?: string;
   },
 ) {
   const prepared =
-    req.method === "POST" ? prepareCodeMode(body) : { body, plans: new Map(), executes: false };
+    req.method === "POST"
+      ? prepareCodeMode(body, owner)
+      : { body, plans: new Map(), executes: false };
   const headers: Record<string, string> = {};
   for (const name of [
     "accept",

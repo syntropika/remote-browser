@@ -15,7 +15,7 @@ It is also useful for taking screenshots and filling or submitting forms in the 
 
 ## Start here
 
-Use the connected Remote Browser MCP. Tool names may have a client-added prefix; discover `browser_docs` and `browser_execute`. Read `browser_docs` with topic `overview` first and relevant topics as needed. The same reference is available through MCP resources at `remote-browser://docs/<topic>`. The server's live documentation is authoritative for API details.
+Use the connected Remote Browser MCP. Tool names may have a client-added prefix; discover `browser_docs`, `browser_tabs`, and `browser_execute`. Read `browser_docs` with topic `overview` first and relevant topics as needed. The same reference is available through MCP resources at `remote-browser://docs/<topic>`. The server's live documentation is authoritative for API details.
 
 This browser is the user's visible, persistent, signed-in Chromium session. All actions in this shared session must go through its MCP control lease. Do not launch another browser to replace this session, connect directly to an exposed debugging port, or close the shared browser/context as part of an ordinary browsing task.
 
@@ -31,9 +31,11 @@ Verify the result after an interaction. Wait for expected content, URL, or a rel
 
 ## Shared tabs and human handoff
 
-Use `browser.tabs.list()` for stable tab IDs. Remember the original tab with `active:true`. When useful, open a task-labelled tab with `browser.tabs.open({url,task})`; switch with `browser.tabs.use(id)`, which returns a native Playwright Page. The default `page` binding follows the visible tab on the next execution. Within one call, use the returned Page or pass `tabId` to observation helpers.
+Use `browser_tabs({action:"list"})` for stable tab IDs and reservation status. Reserve the task tab with `browser_tabs({action:"reserve",tabId,task})`, retain its returned `leaseId`, and pass both `tabId` and `leaseId` to every `browser_execute` call. The bound `page` and default helpers target that tab without changing which tab is visible. Omitted `tabId` follows the visible tab and is unsuitable for coordinating a task across calls.
 
-Close only tabs created for the task, using `browser.tabs.close(id)`, and restore the original tab when finished. The `owned` label aids cleanup; it does not isolate agents from each other. IDs and refs must be rediscovered after browser/service restart.
+Reservations expire after five minutes by default; `ttlMs` allows 1000–300000 ms. Renew before expiry with `browser_tabs({action:"renew",tabId,leaseId})`. Release in cleanup with `browser_tabs({action:"release",tabId,leaseId})`, including after code errors. A busy tab or operation requires waiting and retrying, or selecting another tab. Expired/released tokens require reacquisition. Never use another task's token. Tokens are tied to the acquiring API key and are not exposed by tab listings.
+
+When useful, open a task-labelled tab with `browser.tabs.open({url,task})` and reserve its returned ID. `browser.tabs.get(id)` returns a native Page without changing visibility; `browser.tabs.use(id)` intentionally shows the tab. Close only tabs created for the task with `browser.tabs.close(id)`. Reservation checks apply to the bound page and helpers; raw Playwright/CDP can bypass them, and cookies, storage, accounts, and browser settings remain shared. The `owned` label aids cleanup. Rediscover IDs and reservations after a service/browser restart.
 
 During human control an execution requests a cancellable five-second handoff. If the human cancels, stop and leave control with them. Do not repeatedly request control or bypass the guard. When sign-in is needed, ask the human to use the visible browser and resume after they return control. Do not retry login errors repeatedly.
 

@@ -151,6 +151,7 @@ async function initializeKey(client) {
   assert.deepEqual(result.tools.map((item) => item.name).toSorted(), [
     "browser_docs",
     "browser_execute",
+    "browser_tabs",
   ]);
 }
 
@@ -316,6 +317,7 @@ try {
   assert.deepEqual(tools.result.tools.map((item) => item.name).toSorted(), [
     "browser_docs",
     "browser_execute",
+    "browser_tabs",
   ]);
   await tool("browser_docs", { topic: "overview" });
   await tool("browser_execute", {
@@ -401,6 +403,73 @@ try {
     .structuredContent.value;
   assert.equal(listed.find((tab) => tab.id === originalTab.id).url, fixturePageUrl);
   assert.equal(listed.find((tab) => tab.id === owned.id).owned, true);
+  const otherAgent = keyClient(token);
+  await initializeKey(otherAgent);
+  const reservation = (
+    await tool("browser_tabs", {
+      action: "reserve",
+      tabId: originalTab.id,
+      task: "Synthetic reserved task",
+    })
+  ).structuredContent.value;
+  const reservationTarget = { tabId: originalTab.id, leaseId: reservation.leaseId };
+  const background = await tool("browser_execute", {
+    ...reservationTarget,
+    code: "return page.url();",
+  });
+  assert.equal(background.structuredContent.value, fixturePageUrl);
+  const activeAfter = (await tool("browser_tabs", { action: "list" })).structuredContent.value;
+  assert.equal(activeAfter.find((tab) => tab.active).id, owned.id);
+  for (const args of [
+    { tabId: originalTab.id, code: "return page.url();" },
+    { ...reservationTarget, leaseId: "another-task", code: "return page.url();" },
+  ]) {
+    const blocked = await otherAgent("tools/call", { name: "browser_execute", arguments: args });
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.structuredContent.error.message, /reserved/u);
+  }
+  await tool("browser_execute", { ...reservationTarget, code: "await page.bringToFront();" });
+  const discovery = await otherAgent("tools/call", {
+    name: "browser_tabs",
+    arguments: { action: "list" },
+  });
+  assert.equal(discovery.structuredContent.ok, true);
+  assert.equal(
+    discovery.structuredContent.value.find((tab) => tab.id === originalTab.id).reservation.task,
+    "Synthetic reserved task",
+  );
+  assert.ok(!JSON.stringify(discovery).includes(reservation.leaseId));
+  const renewed = await tool("browser_tabs", { action: "renew", ...reservationTarget });
+  assert.equal(renewed.structuredContent.value.leaseId, reservation.leaseId);
+  await tool("browser_tabs", { action: "release", ...reservationTarget });
+  const stale = await rpc("tools/call", {
+    name: "browser_execute",
+    arguments: { ...reservationTarget, code: "return page.url();" },
+  });
+  assert.equal(stale.result.isError, true);
+  const released = await otherAgent("tools/call", {
+    name: "browser_execute",
+    arguments: { tabId: originalTab.id, code: "return page.url();" },
+  });
+  assert.equal(released.structuredContent.ok, true);
+  const shortLease = (
+    await tool("browser_tabs", {
+      action: "reserve",
+      tabId: originalTab.id,
+      ttlMs: 1000,
+    })
+  ).structuredContent.value;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 1100);
+  });
+  const expired = await rpc("tools/call", {
+    name: "browser_execute",
+    arguments: { tabId: originalTab.id, leaseId: shortLease.leaseId, code: "return 1;" },
+  });
+  assert.equal(expired.result.isError, true);
+  console.log(
+    "PASS: background tab targeting, reservations across MCP clients, owner checks, discovery, renewal, release and expiry.",
+  );
   const protectedTab = await tool("browser_execute", {
     code: `try {await browser.tabs.close(${JSON.stringify(originalTab.id)});return false;}catch{return true;}`,
   });
@@ -488,7 +557,7 @@ try {
     code: "await page.getByLabel('Human input').fill(''); return page.url();",
   });
   console.log(
-    "PASS: two-tool code mode interacts through Playwright and CDP, emits images, downloads authenticated screenshots and recovers after code errors.",
+    "PASS: code mode interacts through Playwright and CDP, emits images, downloads authenticated screenshots and recovers after code errors.",
   );
 
   if (phase === "seed") {
@@ -678,6 +747,29 @@ try {
     const issued = await createKey(ui, "Work laptop");
     const managedClient = keyClient(issued.secret);
     await initializeKey(managedClient);
+    const keyBoundLease = (
+      await tool("browser_tabs", {
+        action: "reserve",
+        tabId: originalTab.id,
+        task: "Cross-key reservation",
+      })
+    ).structuredContent.value;
+    const wrongKey = await managedClient("tools/call", {
+      name: "browser_execute",
+      arguments: {
+        tabId: originalTab.id,
+        leaseId: keyBoundLease.leaseId,
+        code: "return page.url();",
+      },
+    });
+    assert.equal(wrongKey.isError, true);
+    assert.match(wrongKey.structuredContent.error.message, /reserved/u);
+    await tool("browser_tabs", {
+      action: "release",
+      tabId: originalTab.id,
+      leaseId: keyBoundLease.leaseId,
+    });
+    console.log("PASS: reservation tokens cannot authorize another API key.");
     const deniedRequests: [string, unknown?][] = [
       ["/api/keys"],
       ["/api/keys", { name: "Not allowed" }],
@@ -923,6 +1015,40 @@ try {
     assert.equal(await page.locator("#human").inputValue(), "rfb-human-entry");
     maliciousObserver.ws.close();
     console.log("PASS: human keyboard input reaches the same browser while MCP is blocked.");
+
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(uiBase).origin,
+    });
+    await ui.evaluate(() => navigator.clipboard.writeText("Keyboard clipboard paste"));
+    await ui.locator("#browser-display canvas").focus();
+    await ui.keyboard.press("Control+a");
+    await ui.keyboard.press("Control+v");
+    await page.waitForFunction(
+      () => document.querySelector<HTMLInputElement>("#human").value === "Keyboard clipboard paste",
+    );
+    await ui.evaluate(() => navigator.clipboard.writeText("Previous local clipboard"));
+    await ui.keyboard.press("Control+a");
+    await ui.keyboard.press("Control+c");
+    await ui.waitForFunction(
+      async () => (await navigator.clipboard.readText()) === "Keyboard clipboard paste",
+    );
+    assert.equal(await ui.locator("#clipboard-panel").isVisible(), false);
+    await ui.locator("#address-input").fill("Local dashboard text");
+    await ui.locator("#address-input").press("Control+a");
+    await ui.locator("#address-input").press("Control+c");
+    await ui.waitForFunction(
+      async () => (await navigator.clipboard.readText()) === "Local dashboard text",
+    );
+    assert.equal(await page.locator("#human").inputValue(), "Keyboard clipboard paste");
+    await ui.locator("#browser-display canvas").focus();
+    await ui.keyboard.press("Meta+a");
+    await ui.keyboard.press("Meta+c");
+    await ui.waitForFunction(
+      async () => (await navigator.clipboard.readText()) === "Keyboard clipboard paste",
+    );
+    console.log(
+      "PASS: Ctrl+C/Ctrl+V transfer the device clipboard, Command maps to remote Control, and local fields keep native shortcuts.",
+    );
 
     const clipboardText = "café 😀 日本語 العربية";
     const openClipboard = async (dashboard) => {

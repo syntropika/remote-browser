@@ -19,7 +19,7 @@ The Playwright server connects through CDP to Chromium's existing browser contex
 
 ## Code mode
 
-The public MCP catalog contains only `browser_docs` and `browser_execute`.
+The public MCP catalog contains `browser_docs`, `browser_tabs`, and `browser_execute`.
 `browser_docs({topic: "overview"})` explains the API; topics include `navigation`, `interaction`,
 `cdp`, `screenshots`, `files`, and `recording`. `browser_execute({code})` runs a
 JavaScript async body with `page`, `context`, `browser`, `image`, `files`, and `recording`.
@@ -34,18 +34,64 @@ return await browser.snapshot();
 
 Use native Playwright locators such as `page.getByRole('button', {name: 'Sign in'})`
 and `page.getByLabel('Email').fill(...)`. `page` follows the visible focused tab
-at the start of each call. `context.pages()` lists tabs; `context.newPage()` opens
+at the start of each call unless an explicit `tabId` binds it to a specific tab without bringing that tab to the front. `context.pages()` lists tabs; `context.newPage()` opens
 one, and `page.bringToFront()` selects one. Always await browser operations before
 returning. Results contain compact JSON and any images explicitly emitted through
 `image()`, without an automatic page snapshot or a copy of the submitted code.
 
 The `browser` helpers provide compact accessibility observations (`snapshot`),
 bounded rendered text (`read`), native element references (`ref`), stable tab IDs
-(`tabs.list/use/open/close`), and annotated viewport screenshots (`screenshot`).
+(`tabs.list/get/use/open/close/reserve/renew/release`), and annotated viewport screenshots (`screenshot`).
 Refresh observations after navigation; references to replaced elements fail
 instead of selecting a new element. Helpers close only tabs they created.
 Task labels support cleanup and do not isolate clients. Native Playwright and
 CDP remain available for iframes and other advanced interactions.
+
+## Coordinating agents across calls
+
+Use `browser_tabs({action: "list"})` to discover stable IDs and reservation status,
+including when the visible tab belongs to another task. Reserve a task tab:
+
+```js
+browser_tabs({action: "reserve", tabId: "TARGET_ID", task: "Research"})
+// Returns {tabId, leaseId, task, ttlMs, expiresAt}.
+```
+
+Send both coordinates with every subsequent execution:
+
+```js
+browser_execute({
+  tabId: "TARGET_ID",
+  leaseId: "RESERVATION_TOKEN",
+  code: "return await browser.snapshot();",
+})
+```
+
+The native `page` binding and helpers without a `tabId` now target that tab, even
+in the background. A missing or closed ID fails without switching to another tab.
+A reserved tab rejects execution or helper access from another task, including a
+task using the same API key without the reservation token. Tokens also require the
+API key that acquired the reservation; listing tabs never discloses tokens.
+
+Reservations last five minutes by default. Set `ttlMs` between 1000 and 300000
+when reserving or renewing. Renew before expiry with
+`browser_tabs({action: "renew", tabId, leaseId})`; release in task cleanup with
+`browser_tabs({action: "release", tabId, leaseId})`. Code errors retain the lease.
+Expired or released tokens fail and require a new reservation. Reservations span
+MCP sessions but are cleared when the automation service restarts. Human control
+still takes precedence and can change or close reserved tabs.
+
+The same operations are available in code through `browser.tabs.reserve(id,
+{task, ttlMs})`, `browser.tabs.renew(id, {ttlMs})`, and `browser.tabs.release(id)`.
+Omit `id` for the bound page. `browser.tabs.get(id)` retrieves a native Page
+without changing visibility; `browser.tabs.use(id)` intentionally brings it to the front.
+
+The global operation guard remains in place: concurrent calls receive a busy
+error and must retry. Reservations prevent interleaving on the same tab between
+calls; they do not introduce parallel execution or an automatic waiting queue.
+They coordinate trusted agents through the bound page and helpers. Native
+Playwright/CDP can bypass them, and tabs still share cookies, storage, accounts,
+and browser settings. A reservation is not a security boundary.
 
 The server does not add connection-time instructions. It exposes
 its live reference through `resources/list` and `resources/read` at

@@ -462,6 +462,7 @@ export function createGateway({
               }
               await forwardMcp(req, res, {
                 upstream,
+                owner: identity.id,
                 body,
                 finish,
                 timeoutMs: upstreamTimeoutMs,

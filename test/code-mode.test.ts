@@ -36,7 +36,7 @@ const transformed = (message, prepared) =>
     transformCodeModeResponse(Buffer.from(JSON.stringify(message)), "application/json", prepared),
   );
 
-test("the catalog exposes only two code-mode tools after a successful upstream list", () => {
+test("the catalog exposes code-mode and tab coordination tools after a successful upstream list", () => {
   const prepared = prepare({
     jsonrpc: "2.0",
     id: "catalog",
@@ -52,7 +52,7 @@ test("the catalog exposes only two code-mode tools after a successful upstream l
   );
   assert.deepEqual(
     output.result.tools.map((tool) => tool.name),
-    ["browser_docs", "browser_execute"],
+    ["browser_docs", "browser_execute", "browser_tabs"],
   );
   assert.equal(output.result.nextCursor, undefined);
   const error = {
@@ -100,6 +100,61 @@ test("execute wraps native Playwright code without running it in the gateway", (
   );
   assert.ok(upstream.params.arguments.code.includes(code));
   assert.equal(globalThis.codeModeShouldNeverRun, undefined);
+});
+
+test("tab targeting forwards validated coordinates and only the gateway supplies owner", () => {
+  const prepared = prepareCodeMode(
+    Buffer.from(
+      JSON.stringify(
+        request("browser_execute", {
+          code: "return page.url();",
+          tabId: "target",
+          leaseId: "task-token",
+        }),
+      ),
+    ),
+    "authenticated-key",
+  );
+  const script = JSON.parse(prepared.body).params.arguments.code;
+  assert.ok(script.includes('"tabId":"target"'));
+  assert.ok(script.includes('"leaseId":"task-token"'));
+  assert.ok(script.includes('"owner":"authenticated-key"'));
+  for (const args of [
+    { code: "return 1;", tabId: "" },
+    { code: "return 1;", tabId: 1 },
+    { code: "return 1;", leaseId: "token" },
+    { code: "return 1;", tabId: "target", owner: "forged" },
+  ]) {
+    assert.equal(prepare(request("browser_execute", args)).executes, false);
+  }
+});
+
+test("tab management is generated without client code and validates action-specific arguments", () => {
+  for (const args of [
+    { action: "list" },
+    { action: "reserve", tabId: "tab", task: "Research", ttlMs: 1000 },
+    { action: "renew", tabId: "tab", leaseId: "token" },
+    { action: "release", tabId: "tab", leaseId: "token" },
+  ]) {
+    const prepared = prepare(request("browser_tabs", args));
+    assert.equal(prepared.executes, true);
+    const script = JSON.parse(prepared.body).params.arguments.code;
+    assert.ok(script.includes(`browser.tabs.${args.action}(`));
+    assert.ok(script.includes('"manageTabs":true'));
+    assert.equal(requiresControl("POST", request("browser_tabs", args)), true);
+  }
+  for (const args of [
+    {},
+    { action: "close" },
+    { action: "list", tabId: "tab" },
+    { action: "reserve" },
+    { action: "renew", tabId: "tab" },
+    { action: "release", tabId: "tab", leaseId: "token", ttlMs: 1000 },
+    { action: "reserve", tabId: "tab", ttlMs: 0 },
+    { action: "reserve", tabId: "tab", owner: "forged" },
+  ]) {
+    assert.equal(prepare(request("browser_tabs", args)).executes, false);
+  }
 });
 
 test("invalid code and arguments return compact tool errors after upstream session validation", () => {

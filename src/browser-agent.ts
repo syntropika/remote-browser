@@ -5,6 +5,8 @@ import type { BrowserContext, CDPSession, ElementHandle, Page } from "playwright
 
 import { attempt, run } from "./effects.js";
 import { required } from "./invariants.js";
+import type { TabCredentials } from "./tab-reservations.js";
+import { TabReservations } from "./tab-reservations.js";
 
 type PageState = {
   refs: Map<string, { handle: ElementHandle }>;
@@ -32,6 +34,8 @@ type SnapshotOptions = {
 
 // Agent conveniences share native Playwright objects and the existing control lease.
 const contexts = new WeakMap<BrowserContext, ContextState>();
+// MCP clients have distinct Playwright context wrappers for the same Chromium tabs.
+const reservations = new TabReservations();
 const interactiveRoles = new Set([
   "button",
   "link",
@@ -156,14 +160,28 @@ async function handleFor(cdp: CDPSession, page: Page, backendNodeId: number) {
   }
 }
 
-export function createBrowserAgent(page: Page, context: BrowserContext) {
+export function createBrowserAgent(
+  page: Page,
+  context: BrowserContext,
+  credentials: TabCredentials = {},
+) {
   const state = stateFor(context);
+  const acquired = new Map<string, string>();
+  const credentialsFor = (id: string) => ({
+    owner: credentials.owner,
+    leaseId: acquired.get(id) || credentials.leaseId,
+  });
   async function select(id?: string) {
     if (id === undefined) {
+      if (typeof context.newCDPSession === "function") {
+        const currentId = await tabId(context, page);
+        reservations.check(currentId, credentialsFor(currentId));
+      }
       return page;
     }
     for (const candidate of context.pages()) {
       if ((await tabId(context, candidate)) === id) {
+        reservations.check(id, credentialsFor(id));
         return candidate;
       }
     }
@@ -398,6 +416,14 @@ export function createBrowserAgent(page: Page, context: BrowserContext) {
       };
     },
     tabs: {
+      async get(id?: string, { requireLease = false } = {}) {
+        const target = await select(id);
+        if (requireLease) {
+          const currentId = await tabId(context, target);
+          reservations.check(currentId, credentialsFor(currentId), true);
+        }
+        return target;
+      },
       async list() {
         const result = [];
         for (const target of context.pages()) {
@@ -417,14 +443,35 @@ export function createBrowserAgent(page: Page, context: BrowserContext) {
             title: (await target.title()).slice(0, 300),
             owned: state.owned.has(info.id),
             task: state.owned.get(info.id) || null,
+            reservation: reservations.status(info.id),
           });
         }
+        reservations.retain(new Set(result.map((entry) => entry.id)));
         return result;
       },
       async use(id: string) {
         const target = await select(id);
         await target.bringToFront();
         return target;
+      },
+      async reserve(id?: string, options: { task?: string; ttlMs?: number } = {}) {
+        const target = await select(id);
+        const currentId = await tabId(context, target);
+        const lease = reservations.reserve(currentId, credentialsFor(currentId), options);
+        acquired.set(currentId, lease.leaseId);
+        return lease;
+      },
+      async renew(id?: string, { ttlMs }: { ttlMs?: number } = {}) {
+        const target = await select(id);
+        const currentId = await tabId(context, target);
+        return reservations.renew(currentId, credentialsFor(currentId), ttlMs);
+      },
+      async release(id?: string) {
+        const target = await select(id);
+        const currentId = await tabId(context, target);
+        const result = reservations.release(currentId, credentialsFor(currentId));
+        acquired.delete(currentId);
+        return result;
       },
       async open({ url = "about:blank", task = "Agent task" } = {}) {
         if (typeof task !== "string" || !task.trim() || task.length > 120) {
@@ -447,6 +494,7 @@ export function createBrowserAgent(page: Page, context: BrowserContext) {
         await clearRefs(stateForPage(state, target));
         await target.close();
         state.owned.delete(id);
+        reservations.forget(id);
       },
     },
     async screenshot({
