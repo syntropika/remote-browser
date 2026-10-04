@@ -63,9 +63,10 @@ test("execution follows the visible focused tab after it changes outside MCP", a
   const context = {
     pages: () => [original, other],
     newCDPSession: async (page) => ({
-      send: async () => ({
-        result: { value: { visible: page === other, focused: page === other } },
-      }),
+      send: async (method) =>
+        method === "Target.getTargetInfo"
+          ? { targetInfo: { targetId: page === other ? "other" : "original" } }
+          : { result: { value: { visible: page === other, focused: page === other } } },
       detach: async () => {
         detached++;
       },
@@ -80,7 +81,125 @@ test("execution follows the visible focused tab after it changes outside MCP", a
   });
   assert.equal(result.ok, true);
   assert.equal(other.broughtToFront, true);
-  assert.equal(detached, 2);
+  assert.equal(detached, 3);
+});
+
+async function tabFixture() {
+  const first = await createPage();
+  const second = await createPage();
+  let pages = [first, second];
+  const context = {
+    pages: () => pages,
+    newCDPSession: async (target) => ({
+      send: async (method) =>
+        method === "Target.getTargetInfo"
+          ? { targetInfo: { targetId: target === first ? "first" : "second" } }
+          : { result: { value: method === "Runtime.evaluate" ? true : null } },
+      detach: async () => {},
+    }),
+  };
+  const closePage = (page) => async () => {
+    pages = pages.filter((candidate) => candidate !== page);
+  };
+  for (const page of pages) {
+    page.context = () => context;
+    page.url = () => "https://example.com";
+    page.title = async () => "Fixture";
+    page.close = closePage(page);
+  }
+  const run = (callback, options = {}) =>
+    first.__remoteBrowserCodeMode.run(first, callback, options);
+  return { first, second, run };
+}
+
+test("explicit tabId selects a background tab without activation and never falls back", async () => {
+  const { first, second, run } = await tabFixture();
+  const result = await run(
+    async ({ page, browser }) => {
+      assert.equal(page, second);
+      assert.equal(await browser.tabs.get(), second);
+      return "Background tab";
+    },
+    { tabId: "second" },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(first.broughtToFront, false);
+  assert.equal(second.broughtToFront, false);
+  let invoked = false;
+  const missing = await run(
+    async () => {
+      invoked = true;
+    },
+    { tabId: "missing" },
+  );
+  assert.equal(missing.ok, false);
+  assert.equal(invoked, false);
+  assert.match(missing.error.message, /Tab not found/u);
+});
+
+test("reservations survive calls, block other tasks and keys, and permit discovery and release", async () => {
+  const { run, second } = await tabFixture();
+  const reservation = await run(
+    async ({ browser }) => browser.tabs.reserve("second", { task: "Research" }),
+    { owner: "key-a", manageTabs: true },
+  );
+  assert.equal(reservation.ok, true);
+  const { leaseId } = reservation.value;
+  const options = { owner: "key-a", tabId: "second", leaseId };
+  const separateClient = await tabFixture();
+  const crossSession = await separateClient.run(async () => true, {
+    owner: "key-b",
+    tabId: "second",
+  });
+  assert.equal(crossSession.ok, false);
+  assert.match(crossSession.error.message, /reserved/u);
+  let invoked = false;
+  const unexpectedExecution = async () => {
+    invoked = true;
+  };
+  for (const credentials of [
+    { owner: "key-b", leaseId },
+    { owner: "key-a" },
+    { owner: "key-a", leaseId: "wrong" },
+  ]) {
+    const denied = await run(unexpectedExecution, { ...credentials, tabId: "second" });
+    assert.equal(denied.ok, false);
+    assert.match(denied.error.message, /reserved/u);
+  }
+  assert.equal(invoked, false);
+  const otherTab = await run(
+    async ({ browser }) => {
+      await assert.rejects(browser.tabs.get("second"), /reserved/u);
+      await assert.rejects(browser.tabs.use("second"), /reserved/u);
+      await assert.rejects(browser.read({ tabId: "second" }), /reserved/u);
+      await assert.rejects(browser.snapshot({ tabId: "second" }), /reserved/u);
+      await assert.rejects(browser.screenshot({ tabId: "second" }), /reserved/u);
+      await assert.rejects(browser.tabs.reserve("second"), /reserved/u);
+      return true;
+    },
+    { owner: "key-b", tabId: "first" },
+  );
+  assert.equal(otherTab.ok, true);
+  const discovery = await run(async ({ browser }) => browser.tabs.list(), {
+    owner: "key-b",
+    manageTabs: true,
+  });
+  assert.equal(discovery.ok, true);
+  assert.equal(discovery.value[1].reservation.task, "Research");
+  assert.equal(JSON.stringify(discovery.value).includes(leaseId), false);
+  const renewed = await run(async ({ page, browser }) => {
+    assert.equal(page, second);
+    return browser.tabs.renew();
+  }, options);
+  assert.equal(renewed.ok, true);
+  assert.equal(renewed.value.leaseId, leaseId);
+  const released = await run(async ({ browser }) => browser.tabs.release(), options);
+  assert.equal(released.ok, true);
+  const stale = await run(async () => true, options);
+  assert.equal(stale.ok, false);
+  assert.match(stale.error.message, /expired or was released/u);
+  const available = await run(async () => true, { owner: "key-b", tabId: "second" });
+  assert.equal(available.ok, true);
 });
 
 test("a VM callback can return JSON values, undefined, and cross-realm typed image bytes", async () => {

@@ -18,7 +18,7 @@ The supervisor briefly initializes volume ownership as root, drops to uid 1000, 
 
 The root init process retains `CHOWN`, `SETGID`, and `SETUID` for startup and `KILL` so it can forward shutdown signals to the supervisor after that supervisor changes user. The supervisor and browser services have no effective capabilities after switching to uid 1000. `/tmp` is a 512 MiB `tmpfs` with `nosuid` and `nodev`; temporary X11 locks and sockets disappear on container restart, while the profile remains in `/data`.
 
-Each API key grants powerful access to the browser and its authenticated accounts. Use trusted agents. This application is not a sandbox for hostile MCP clients. The control lease coordinates tool calls, but it cannot stop JavaScript that a page or a previous tool deliberately scheduled to run later. Clipboard input passes through the remote desktop; hardware security keys and local passkeys are not forwarded automatically.
+Each API key grants powerful access to the browser and its authenticated accounts. Use trusted agents. This application is not a sandbox for hostile MCP clients. The control lease coordinates tool calls. `src/tab-reservations.ts` coordinates tasks between calls using stable target IDs, authenticated key IDs, expiring tokens, and a registry shared across client context wrappers in the automation process. Explicit `tabId` binds execution without changing visibility. Reservations are cooperative and native Playwright/CDP can bypass them. The control lease cannot stop JavaScript that a page or a previous tool deliberately scheduled to run later. Clipboard input passes through the remote desktop; hardware security keys and local passkeys are not forwarded automatically.
 
 ## TypeScript and Effect
 

@@ -1,6 +1,7 @@
 import { asyncHandler } from "../src/async-boundary.js";
 import { required } from "../src/invariants.js";
 import { uiFailure } from "./api.js";
+import { createClipboardShortcuts, sendClipboardShortcut } from "./clipboard-shortcuts.js";
 import type { ClipboardOptions, RFB } from "./contracts.js";
 import { element as domElement } from "./dom.js";
 
@@ -28,6 +29,7 @@ export function createClipboard({
   }
 
   function close() {
+    shortcuts.reset();
     generation++;
     busy = false;
     panel.hidden = true;
@@ -39,6 +41,7 @@ export function createClipboard({
   }
 
   function sync() {
+    shortcuts.sync();
     if (!canControl()) {
       close();
     }
@@ -54,12 +57,7 @@ export function createClipboard({
   }
 
   function shortcut(client: RFB | null, key: number, code: string) {
-    required(client).sendKey(0xff_e3, "ControlLeft", true);
-    try {
-      required(client).sendKey(key, code);
-    } finally {
-      required(client).sendKey(0xff_e3, "ControlLeft", false);
-    }
+    sendClipboardShortcut(required(client), key, code);
   }
 
   function fail(cause: unknown) {
@@ -71,6 +69,26 @@ export function createClipboard({
     }
   }
 
+  function open(text = "", feedbackText = "") {
+    onOpen();
+    close();
+    panel.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    input.value = text;
+    message(feedbackText);
+    sync();
+    input.focus({ preventScroll: true });
+  }
+
+  const shortcuts = createClipboardShortcuts({
+    display: byId("browser-display"),
+    api,
+    getRfb,
+    canControl,
+    onFallback: open,
+    onUnauthorized,
+  });
+
   button.addEventListener("click", () => {
     if (!canControl()) {
       return;
@@ -79,12 +97,7 @@ export function createClipboard({
       close();
       return;
     }
-    onOpen();
-    close();
-    panel.hidden = false;
-    button.setAttribute("aria-expanded", "true");
-    sync();
-    input.focus({ preventScroll: true });
+    open();
   });
   byId("clipboard-close").addEventListener("click", () => {
     close();

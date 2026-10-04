@@ -7,6 +7,7 @@ import { createArtifactClient } from "./artifacts-client.js";
 import { createBrowserAgent } from "./browser-agent.js";
 import { attempt, run as runEffect } from "./effects.js";
 import { isRecord, parseJson } from "./invariants.js";
+import type { TabCredentials } from "./tab-reservations.js";
 
 const artifacts = createArtifactClient();
 type BrowserBindings = {
@@ -107,7 +108,11 @@ async function visiblePage(fallback: Page) {
   return visible || fallback;
 }
 
-async function run(page: Page, callback: (bindings: BrowserBindings) => unknown) {
+async function run(
+  page: Page,
+  callback: (bindings: BrowserBindings) => unknown,
+  options: TabCredentials & { tabId?: string; manageTabs?: boolean } = {},
+) {
   const startedAt = performance.now();
   const images: { mimeType: string; data: string }[] = [];
   let imageBytes = 0;
@@ -142,8 +147,18 @@ async function run(page: Page, callback: (bindings: BrowserBindings) => unknown)
       if (typeof callback !== "function") {
         return yield* Effect.fail(new TypeError("Browser code must be a function."));
       }
-      const target = yield* attempt(async () => visiblePage(page));
-      yield* attempt(async () => target.bringToFront());
+      const fallback =
+        options.tabId || options.manageTabs ? page : yield* attempt(async () => visiblePage(page));
+      const target = options.manageTabs
+        ? fallback
+        : yield* attempt(async () =>
+            createBrowserAgent(fallback, fallback.context(), options).tabs.get(options.tabId, {
+              requireLease: Boolean(options.leaseId),
+            }),
+          );
+      if (!options.tabId && !options.manageTabs) {
+        yield* attempt(async () => target.bringToFront());
+      }
       const context = target.context();
       const result = yield* Effect.tryPromise({
         catch: (error: unknown) => error,
@@ -152,7 +167,7 @@ async function run(page: Page, callback: (bindings: BrowserBindings) => unknown)
             page: target,
             context,
             image,
-            browser: createBrowserAgent(target, context),
+            browser: createBrowserAgent(target, context, options),
             files: artifacts.files,
             recording: artifacts.recording,
           }),

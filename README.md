@@ -63,7 +63,7 @@ In the dashboard, open **More options → API keys**, create a named key and cop
 
 For a remote deployment, use its dashboard address instead of `localhost`. See [hosting](docs/hosting.md) for network access and configuration.
 
-The MCP exposes two tools: `browser_docs` to discover the API and `browser_execute` to run browser actions. An agent can start with:
+The MCP exposes `browser_docs` to discover the API, `browser_tabs` to list and reserve task tabs, and `browser_execute` to run browser actions. Pass `tabId` to execute in a specific tab without changing the visible tab; pass its reservation `leaseId` to continue safely across calls. An agent can start with:
 
 ```js
 return await browser.snapshot();

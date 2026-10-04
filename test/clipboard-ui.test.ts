@@ -29,6 +29,7 @@ function fixture(t, api) {
       "clipboard-status",
       "clipboard-close",
       "more-menu",
+      "browser-display",
     ].map((id) => [id, new Element()]),
   );
   elements["clipboard-panel"].hidden = true;

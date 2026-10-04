@@ -107,6 +107,25 @@ function json(res, value, status = 200) {
   res.end(JSON.stringify(value));
 }
 
+test("the gateway binds tab reservations to the authenticated key and rejects forged owners", async (t) => {
+  let script;
+  const f = await fixture(t, async (_req, res, message) => {
+    if (message.method === "ping") {
+      json(res, { jsonrpc: "2.0", id: message.id, result: {} });
+      return;
+    }
+    script = message.params.arguments.code;
+    json(res, completion());
+  });
+  const identity = await f.apiKeys.authenticate(token);
+  assert.ok(identity);
+  const response = await f.rpc(call("browser_tabs", { action: "reserve", tabId: "fixture-tab" }));
+  assert.equal((await response.json()).result.structuredContent.ok, true);
+  assert.ok(script.includes(JSON.stringify({ owner: identity.id, manageTabs: true })));
+  const forged = await f.rpc(call("browser_execute", { code: "return 1;", owner: "another-key" }));
+  assert.equal((await forged.json()).result.isError, true);
+});
+
 test("docs work during human control and execution requires a connected handoff dashboard", async (t) => {
   const seen = [];
   const f = await fixture(t, async (req, res, message) => {
