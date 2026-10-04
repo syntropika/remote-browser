@@ -29,10 +29,10 @@ The browser profile, account, API keys and saved files live in the `browser-data
 
 ## Published Docker image
 
-The versioned image is available on [Docker Hub](https://hub.docker.com/r/syntropika/remote-browser) as `syntropika/remote-browser:v0.1.0` for `linux/amd64`. The publishing workflow builds new tags for both `linux/amd64` and `linux/arm64`; Docker selects the matching architecture when pulling a multi-platform tag. There is no `latest` tag. The existing `v0.1.0` image remains amd64-only; ARM64 deployments need a tag published with the updated workflow.
+The publishing workflow publishes images to [Docker Hub](https://hub.docker.com/r/syntropika/remote-browser) under both the Git version tag and `syntropika/remote-browser:latest`. Each successful tag build updates `latest` to the same image as that version. Images support both `linux/amd64` and `linux/arm64`; Docker selects the matching architecture when pulling. The first tag published with this workflow creates `latest`.
 
 ```sh
-docker pull syntropika/remote-browser:v0.1.0
+docker pull syntropika/remote-browser:latest
 ```
 
 To use the published image with the repository's port, persistence and sandbox settings, clone the repository as shown above and create `compose.image.yaml` in its root:
@@ -40,7 +40,7 @@ To use the published image with the repository's port, persistence and sandbox s
 ```yaml
 services:
   browser:
-    image: syntropika/remote-browser:v0.1.0
+    image: syntropika/remote-browser:latest
 ```
 
 Start the container without building locally:
@@ -50,7 +50,7 @@ docker compose -f compose.yaml -f compose.image.yaml pull
 docker compose -f compose.yaml -f compose.image.yaml up --no-build -d --wait
 ```
 
-Open <http://localhost:8080> and follow the same account setup and MCP connection steps. Keep using both Compose files when managing this deployment. To update, change the image tag in `compose.image.yaml` and run the two commands again, preserving the `browser-data` volume. See [Docker Hub releases](docs/releases.md) for the publishing workflow.
+Open <http://localhost:8080> and follow the same account setup and MCP connection steps. Keep using both Compose files when managing this deployment. To update, run the two commands again to pull `latest` and recreate the container, preserving the `browser-data` volume. You can also use a specific version tag to pin a deployment. See [Docker Hub releases](docs/releases.md) for the publishing workflow.
 
 ## Connect your agent
 

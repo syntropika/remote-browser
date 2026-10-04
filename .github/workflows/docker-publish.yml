@@ -43,7 +43,7 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: syntropika/remote-browser
-          flavor: latest=false
+          flavor: latest=true
           tags: type=ref,event=tag
 
       - name: Set up QEMU for ARM64 builds
