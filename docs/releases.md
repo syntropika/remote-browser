@@ -8,7 +8,7 @@ The workflow installs the locked dependencies, checks TypeScript and runs the un
 
 The existing `v0.1.0` image supports only `linux/amd64`. Multi-platform images require a new tag pointing to a commit with the updated workflow; do not move or overwrite an existing release tag. Building an ARM64 image does not verify Chromium's sandbox or browser behavior on a native ARM64 host. Only x86-64 runtime behavior is currently tested.
 
-Each image uses the Git tag, including a leading `v`. For example, pushing `v1.0.0` publishes `syntropika/remote-browser:v1.0.0`. Docker Metadata sanitizes characters that Docker tags do not allow. No `latest` or version aliases are published, so prereleases and older releases do not change a shared release tag.
+Each image uses the Git tag, including a leading `v`, and also receives the `latest` tag. For example, pushing `v1.0.0` publishes the same multi-platform image as both `syntropika/remote-browser:v1.0.0` and `syntropika/remote-browser:latest`. Docker Metadata sanitizes characters that Docker tags do not allow. Every successful tag build updates `latest`, including prereleases and older versions published afterward. The first tag published with this workflow creates `latest`; pushes to `main` alone do not publish images.
 
 Once the workflow is committed and pushed to the repository, publish a release with:
 
@@ -23,4 +23,10 @@ Pull the published image with:
 docker pull syntropika/remote-browser:v1.0.0
 ```
 
-Publishing an image does not automatically update a running container.
+To follow subsequent releases without changing the configured version, use:
+
+```sh
+docker pull syntropika/remote-browser:latest
+```
+
+Publishing an image does not automatically update a running container. Pull the image and recreate the container to apply an update, preserving its data volume.
