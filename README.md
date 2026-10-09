@@ -77,6 +77,7 @@ If you are using the browser, an agent control request shows a five-second promp
 - [MCP and agent automation](docs/mcp.md) — tools, Playwright/CDP, captures and file transfers.
 - [Hosting and persistence](docs/hosting.md) — configuration, remote access, updates and backups.
 - [Architecture](docs/architecture.md) — runtime components, TypeScript and Effect.
+- [Experimental native Servo browser](native/servo/README.md) — embedded Rust engine, persistent profiles, MCP and a local dashboard.
 - [Docker Hub releases](docs/releases.md) — publishing images from Git tags.
 - [Contributing](CONTRIBUTING.md) — development checks, integration tests and commit conventions.
 - [Security](SECURITY.md) — trust boundaries and vulnerability reporting.
