@@ -1,0 +1,3 @@
+[env]
+# Servo 0.7 uses compiler features in its script and SpiderMonkey bindings.
+RUSTC_BOOTSTRAP = "script,script_webgpu,script_bindings,mozjs,mozjs_sys"

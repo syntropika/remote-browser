@@ -1,0 +1,22 @@
+[package]
+name = "remote-browser-servo-engine"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.88"
+[dependencies]
+remote-browser-servo = { path = ".." }
+servo = { version = "=0.7.0", default-features = false, features = ["bundled", "js_jit", "webcrypto"] }
+servo-base = "=0.7.0"
+dpi = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.23.1"
+fs2 = "0.4"
+webdriver = "=0.54.0"
+[profile.dev]
+debug = 0
+[lints.rust]
+unsafe_code = "forbid"

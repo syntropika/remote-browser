@@ -15,3 +15,5 @@ coverage/
 __pycache__/
 *.pyc
 dist/
+native/servo/target/
+native/servo/engine/target/
