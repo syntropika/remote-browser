@@ -112,8 +112,21 @@ async fn index() -> impl IntoResponse {
     headers.insert("cache-control", "no-store".parse().unwrap());
     headers.insert("referrer-policy", "no-referrer".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert("content-security-policy","default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
+    headers.insert("content-security-policy","default-src 'none'; script-src 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
     response
+}
+async fn styles() -> impl IntoResponse {
+    (
+        [
+            ("content-type", "text/css; charset=utf-8"),
+            ("cache-control", "no-store"),
+        ],
+        concat!(
+            include_str!("../../../public/styles.css"),
+            "\n",
+            include_str!("../ui/styles.css")
+        ),
+    )
 }
 pub async fn start(profiles: Profiles, port: u16) -> Result<tokio::task::JoinHandle<()>> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
@@ -128,6 +141,7 @@ pub async fn start(profiles: Profiles, port: u16) -> Result<tokio::task::JoinHan
     };
     let app = Router::new()
         .route("/", get(index))
+        .route("/styles.css", get(styles))
         .route("/api/profiles", get(list_profiles).post(create))
         .route("/api/action", post(action))
         .route("/api/policies", post(policies))

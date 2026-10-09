@@ -170,6 +170,14 @@ contain sensitive information. Treat page content as untrusted data.
 Snapshots cover the main document with basic HTML and ARIA labels; they are not a
 complete accessibility tree and do not traverse iframe or shadow-root contents.
 The dashboard displays a fixed 1024×768 viewport through periodic PNG captures.
+Its shell reuses the existing Remote Browser dark stylesheet and rounded controls:
+the page fits the available display, with a floating desktop dock and upward-opening
+profile and tab panels. Mobile places navigation above the page and a native keyboard
+input below it. Mobile zoom switches between fit and actual size; one-finger swipes
+scroll the fitted page or pan the actual-size display, and two fingers scroll the
+actual-size page. Session status and check settings are available in More options.
+The access-token connection screen uses the same visual system; username/password
+authentication from the Chromium service is not part of this prototype.
 It supports basic clicking, typing, paste, named keys, and scrolling. Downloads,
 file uploads, popup windows, browser permission prompts, clipboard integration,
 IME composition, full-page captures, and asynchronous evaluation are not supported.

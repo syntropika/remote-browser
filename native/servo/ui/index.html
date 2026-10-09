@@ -1,651 +1,1073 @@
 <!doctype html>
 <html lang="en">
-  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Servo profiles</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui, sans-serif;
-      background: #101316;
-      color: #e5e9ed;
-    }
-    * {
-      box-sizing: border-box;
-    }
-    body {
-      margin: 0;
-    }
-    button,
-    input,
-    select {
-      font: inherit;
-      border: 1px solid #3d4852;
-      border-radius: 7px;
-      padding: 9px 12px;
-      background: #20282f;
-      color: inherit;
-    }
-    button {
-      cursor: pointer;
-    }
-    button:disabled {
-      opacity: 0.45;
-      cursor: default;
-    }
-    button:hover:not(:disabled) {
-      background: #303d49;
-    }
-    header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 20px;
-      border-bottom: 1px solid #303942;
-    }
-    h1 {
-      font-size: 18px;
-      margin: 0 12px 0 0;
-    }
-    .grow {
-      flex: 1;
-    }
-    .toolbar {
-      display: flex;
-      gap: 8px;
-      padding: 10px 20px;
-    }
-    .toolbar input {
-      flex: 1;
-      min-width: 100px;
-    }
-    .tabs {
-      display: flex;
-      gap: 8px;
-      overflow: auto;
-      padding: 0 20px 12px;
-    }
-    .tabs button {
-      white-space: nowrap;
-      max-width: 260px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .tabs [aria-current="true"] {
-      border-color: #76b8ec;
-      background: #203b50;
-    }
-    .status {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 20px;
-      background: #181e23;
-      font-size: 14px;
-    }
-    .status span {
-      flex: 1;
-    }
-    #health {
-      color: #a4bbc9;
-    }
-    #notice {
-      color: #ffbf88;
-      margin: 0;
-      padding: 8px 20px;
-      min-height: 34px;
-      font-size: 14px;
-    }
-    .viewport {
-      display: flex;
-      justify-content: center;
-      padding: 0 20px 20px;
-    }
-    canvas {
-      width: min(100%, 1024px);
-      height: auto;
-      background: #fff;
-      border: 1px solid #364350;
-      border-radius: 8px;
-      outline: none;
-    }
-    canvas:focus {
-      border-color: #76b8ec;
-    }
-    .locked {
-      cursor: default;
-    }
-    dialog {
-      background: #181e23;
-      color: inherit;
-      border: 1px solid #4d5a66;
-      border-radius: 14px;
-      width: min(500px, 95vw);
-    }
-    dialog::backdrop {
-      background: #0009;
-    }
-    dialog h2 {
-      font-size: 18px;
-    }
-    label {
-      display: grid;
-      gap: 6px;
-      margin: 14px 0;
-      font-size: 14px;
-    }
-    small {
-      color: #a3afb8;
-    }
-    dialog .actions {
-      display: flex;
-      gap: 10px;
-      justify-content: flex-end;
-      margin-top: 20px;
-    }
-    #connect {
-      padding: 30px;
-      max-width: 600px;
-      margin: auto;
-    }
-    #connect input {
-      width: 100%;
-    }
-    @media (max-width: 650px) {
-      header {
-        flex-wrap: wrap;
-        padding: 12px;
-      }
-      .toolbar,
-      .tabs,
-      .status {
-        padding-left: 12px;
-        padding-right: 12px;
-      }
-      h1 {
-        width: 100%;
-      }
-      .viewport {
-        padding: 0 6px;
-      }
-      #health {
-        max-width: 45%;
-      }
-    }
-  </style>
-  <div id="connect" hidden>
-    <h1>Connect to Servo</h1>
-    <p>Open the dashboard URL printed by the MCP process, including its authorization fragment.</p>
-    <label>Dashboard token<input id="token" autocomplete="off" type="password" /></label
-    ><button id="unlock">Connect</button>
-    <p id="connection-error" role="status"></p>
-  </div>
-  <main id="app">
-    <header>
-      <h1>Servo profiles</h1>
-      <select id="profiles" aria-label="Browser profile"></select
-      ><button id="create">New profile</button>
-      <div class="grow"></div>
-      <button id="policy">Session check</button>
-    </header>
-    <form class="toolbar" id="navigation">
-      <input
-        id="address"
-        aria-label="Page address"
-        placeholder="https://example.com"
-        autocomplete="off"
-      /><button id="go">Go</button><button type="button" id="open">New tab</button
-      ><button type="button" id="close">Close tab</button>
-    </form>
-    <nav class="tabs" id="tabs" aria-label="Profile tabs"></nav>
-    <div class="status">
-      <span id="ownership">Connecting...</span><span id="health">Session health not configured</span
-      ><button id="take">Take control</button><button id="return" hidden>Return to agents</button>
-    </div>
-    <p id="notice" role="status" aria-live="polite"></p>
-    <div class="viewport">
-      <canvas id="view" width="1024" height="768" tabindex="0" aria-label="Browser page"></canvas>
-    </div>
-  </main>
-  <dialog id="new-profile">
-    <form id="profile-form">
-      <h2>Create profile</h2>
-      <small>Each profile keeps its own website sessions and storage.</small
-      ><label>Profile name<input id="name" required maxlength="120" autocomplete="off" /></label>
-      <div class="actions">
-        <button type="button" data-dismiss>Cancel</button><button>Create profile</button>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#09090b" />
+    <title>Remote Browser</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M6 18 18 6M6 6h12v12" /></symbol>
+        <symbol id="icon-back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></symbol>
+        <symbol id="icon-forward" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6" /></symbol>
+        <symbol id="icon-reload" viewBox="0 0 24 24">
+          <path d="M20 7v5h-5M19.3 12A7.5 7.5 0 1 1 17 6.3L20 9" />
+        </symbol>
+        <symbol id="icon-tabs" viewBox="0 0 24 24">
+          <rect x="7" y="7" width="13" height="13" rx="3" />
+          <path d="M15 4H7a3 3 0 0 0-3 3v8" />
+        </symbol>
+        <symbol id="icon-more" viewBox="0 0 24 24">
+          <circle cx="5" cy="12" r="1" />
+          <circle cx="12" cy="12" r="1" />
+          <circle cx="19" cy="12" r="1" />
+        </symbol>
+        <symbol id="icon-keyboard" viewBox="0 0 24 24">
+          <rect x="2" y="5" width="20" height="14" rx="3" />
+          <path
+            d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"
+          />
+        </symbol>
+        <symbol id="icon-zoom" viewBox="0 0 24 24">
+          <path d="M9 3H3v6M15 3h6v6M21 15v6h-6M9 21H3v-6" />
+        </symbol>
+        <symbol id="icon-fit" viewBox="0 0 24 24">
+          <path d="M3 9h6V3M21 9h-6V3M15 21v-6h6M9 21v-6H3" />
+        </symbol>
+        <symbol id="icon-hand" viewBox="0 0 24 24">
+          <path
+            d="M8 13V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v9a7 7 0 0 1-7 7h-1a7 7 0 0 1-5-2l-5-5a2 2 0 0 1 3-3l3 3"
+          />
+        </symbol>
+        <symbol id="icon-enter" viewBox="0 0 24 24">
+          <path d="M20 5v7a3 3 0 0 1-3 3H4m5-5-5 5 5 5" />
+        </symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+        <symbol id="icon-screen" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+        </symbol>
+        <symbol id="icon-window" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M3 9h18M7 6.5h.01M10 6.5h.01" />
+        </symbol>
+        <symbol id="icon-globe" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18" />
+        </symbol>
+        <symbol id="icon-lock" viewBox="0 0 24 24">
+          <rect x="4" y="10" width="16" height="11" rx="2" />
+          <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
+        </symbol>
+        <symbol id="icon-key" viewBox="0 0 24 24">
+          <circle cx="8" cy="15" r="5" />
+          <path d="m11.5 11.5 9-9M16 7l3 3M19 4l3 3" />
+        </symbol>
+        <symbol id="icon-files" viewBox="0 0 24 24">
+          <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 13h8M8 17h5" />
+        </symbol>
+        <symbol id="icon-clipboard" viewBox="0 0 24 24">
+          <rect x="8" y="3" width="8" height="4" rx="1" />
+          <path d="M8 5H5v16h14V5h-3" />
+        </symbol>
+        <symbol id="icon-logout" viewBox="0 0 24 24">
+          <path d="M9 21H4V3h5M9 12h12m-4-4 4 4-4 4" />
+        </symbol>
+        <symbol id="icon-profile" viewBox="0 0 24 24">
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21v-2a8 8 0 0 1 16 0v2" />
+        </symbol>
+      </defs>
+    </svg>
+    <main class="login-screen" id="connect">
+      <section class="login-card" aria-labelledby="login-title">
+        <div class="login-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg class="icon"><use href="#icon-window" /></svg>
+          </div>
+          <span>Remote Browser</span>
+        </div>
+        <h1 id="login-title">Remote Browser</h1>
+        <p class="login-description">One browser for you and your agents.</p>
+        <form id="connect-form">
+          <label for="token">Access token</label>
+          <input
+            id="token"
+            name="token"
+            autocomplete="off"
+            type="password"
+            required
+            aria-describedby="token-note"
+          />
+          <p class="field-note" id="token-note">
+            Use the access token provided with your dashboard link.
+          </p>
+          <button class="button button-primary login-submit" id="unlock">
+            Connect<svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg>
+          </button>
+          <p class="form-error" id="connection-error" role="alert"></p>
+        </form>
+        <p class="login-footer">
+          <svg class="icon" aria-hidden="true"><use href="#icon-lock" /></svg>Your website sessions
+          stay separate in each browser profile.
+        </p>
+      </section>
+    </main>
+    <main class="workspace servo-workspace" id="app" hidden>
+      <section class="browser-shell" aria-label="Remote browser display">
+        <div class="browser-display viewport" id="viewport">
+          <canvas
+            id="view"
+            width="1024"
+            height="768"
+            tabindex="0"
+            aria-label="Browser page"
+          ></canvas>
+        </div>
+        <div class="display-placeholder" id="display-placeholder">
+          <svg class="icon display-symbol" aria-hidden="true"><use href="#icon-screen" /></svg>
+          <h2>Connecting to your browser</h2>
+          <p>The selected page will appear here.</p>
+        </div>
+      </section>
+      <p class="notice" id="notice" role="status" aria-live="polite" hidden></p>
+      <div class="servo-dock" id="dock">
+        <header class="control-bar">
+          <nav class="toolbar" aria-label="Browser controls">
+            <button
+              class="button button-quiet icon-button"
+              id="reload"
+              type="button"
+              aria-label="Reload page"
+              title="Reload page"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-reload" /></svg>
+            </button>
+            <form class="address-form" id="navigation" aria-label="Open a website">
+              <svg class="icon address-icon" aria-hidden="true"><use href="#icon-globe" /></svg>
+              <input
+                id="address"
+                aria-label="Page address"
+                inputmode="url"
+                enterkeyhint="go"
+                placeholder="Website address"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+              />
+              <button
+                class="button button-quiet icon-button"
+                id="go"
+                aria-label="Open website"
+                title="Go"
+              >
+                <svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg>
+              </button>
+            </form>
+            <button
+              class="button button-quiet profile-button"
+              id="profiles-toggle"
+              type="button"
+              aria-label="Manage browser profiles"
+              aria-expanded="false"
+              aria-controls="profiles-panel"
+              title="Profiles"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-profile" /></svg
+              ><span id="profile-label">Profiles</span>
+            </button>
+            <button
+              class="button button-quiet tabs-button"
+              id="tabs-toggle"
+              type="button"
+              aria-label="Manage browser tabs"
+              aria-expanded="false"
+              aria-controls="tabs-panel"
+              title="Tabs"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-tabs" /></svg
+              ><span id="tab-count">0</span>
+            </button>
+            <button
+              class="button button-quiet icon-button"
+              id="zoom"
+              type="button"
+              aria-label="Show actual size"
+              aria-pressed="false"
+              title="Show actual size"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-zoom" /></svg>
+            </button>
+            <div class="servo-ownership">
+              <button
+                class="button button-primary"
+                id="take"
+                type="button"
+                title="Take control"
+                aria-label="Take control"
+              >
+                <svg class="icon" aria-hidden="true"><use href="#icon-hand" /></svg
+                ><span class="ownership-label">Take control</span>
+              </button>
+              <button
+                class="button button-primary"
+                id="return"
+                type="button"
+                title="Return to agents"
+                aria-label="Return to agents"
+                hidden
+              >
+                <svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg
+                ><span class="ownership-label">Return to agents</span>
+              </button>
+            </div>
+            <details class="more-menu" id="more-menu">
+              <summary
+                class="button button-quiet icon-button"
+                aria-label="More options"
+                title="More options"
+              >
+                <svg class="icon" aria-hidden="true"><use href="#icon-more" /></svg>
+              </summary>
+              <div class="more-options">
+                <div class="servo-session-summary">
+                  <p id="connection" role="status">Connecting display...</p>
+                  <p id="ownership">Connecting...</p>
+                  <p id="health" role="status">Session health not configured</p>
+                </div>
+                <div class="menu-separator" role="separator"></div>
+                <button class="button button-quiet" id="policy" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-key" /></svg>Session check
+                </button>
+                <button class="button button-quiet" id="reconnect" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-reload" /></svg>Reconnect
+                  display
+                </button>
+                <button
+                  class="button button-quiet button-destructive"
+                  id="disconnect"
+                  type="button"
+                >
+                  <svg class="icon" aria-hidden="true"><use href="#icon-logout" /></svg>Disconnect
+                </button>
+              </div>
+            </details>
+          </nav>
+        </header>
+        <section
+          class="tabs-panel floating-panel"
+          id="tabs-panel"
+          aria-labelledby="tabs-title"
+          hidden
+        >
+          <header class="panel-heading">
+            <h2 id="tabs-title">Browser tabs</h2>
+            <button
+              class="button button-quiet icon-button"
+              type="button"
+              data-panel-close
+              aria-label="Close tab list"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+            </button>
+          </header>
+          <p class="panel-copy">
+            Pages in <span id="tabs-profile">this profile</span>. Reserved tabs remain available to
+            watch.
+          </p>
+          <ul class="tabs-list" id="tabs" aria-label="Profile tabs"></ul>
+          <div class="servo-panel-actions">
+            <button class="button button-secondary new-tab-button" id="open" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-plus" /></svg>New tab</button
+            ><button class="button button-quiet" id="close" type="button">
+              Close selected tab
+            </button>
+          </div>
+        </section>
+        <section
+          class="profiles-panel floating-panel"
+          id="profiles-panel"
+          aria-labelledby="profiles-title"
+          hidden
+        >
+          <header class="panel-heading">
+            <h2 id="profiles-title">Browser profiles</h2>
+            <button
+              class="button button-quiet icon-button"
+              type="button"
+              data-panel-close
+              aria-label="Close profile list"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+            </button>
+          </header>
+          <p class="panel-copy">Each profile keeps its own accounts and website sessions.</p>
+          <label for="profiles">Current profile</label
+          ><select id="profiles" aria-label="Browser profile"></select>
+          <button class="button button-secondary new-tab-button" id="create" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#icon-plus" /></svg>New profile
+          </button>
+        </section>
       </div>
-    </form>
-  </dialog>
-  <dialog id="check-policy">
-    <form id="policy-form">
-      <h2>Configure session check</h2>
-      <small
-        >Use markers specific to the service. Cookie dates estimate credential expiry; they do not
-        prove a session is valid.</small
-      ><label>Service origin<input id="origin" required placeholder="https://example.com" /></label
-      ><label
-        >Authentication cookie names<input id="cookies" placeholder="session, auth_token" /></label
-      ><label
-        >Authenticated page selector<input
-          id="authenticated"
-          placeholder="[data-account-menu]" /></label
-      ><label>Sign-in page selector<input id="login" placeholder="form[data-sign-in]" /></label>
-      <div class="actions">
-        <button type="button" data-dismiss>Cancel</button><button>Save check</button>
-      </div>
-    </form>
-  </dialog>
-  <script>
-    const $ = (id) => document.getElementById(id);
-    let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
-    history.replaceState(null, "", location.pathname);
-    let profileId = "",
-      tabId = "",
-      tabs = [],
-      policies = [],
-      epoch = 0,
-      refreshing = false,
-      frameBusy = false,
-      viewReady = false,
-      inputQueue = Promise.resolve();
-    const canvas = $("view"),
-      context = canvas.getContext("2d");
-    function notice(message = "") {
-      $("notice").textContent = message;
-    }
-    async function api(path, body) {
-      const response = await fetch(path, {
-        method: body ? "POST" : "GET",
-        headers: {
-          Authorization: "Bearer " + token,
-          ...(body ? { "Content-Type": "application/json" } : {}),
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        cache: "no-store",
-      });
-      if (response.status === 401) throw Error("Dashboard authorization required");
-      const value = await response.json();
-      if (!response.ok) throw Error(value.error || "Request failed");
-      return value;
-    }
-    function action(op, args = {}, target = tabId, profile = profileId) {
-      return api("/api/action", { profileId: profile, op, tabId: target || null, args });
-    }
-    function current() {
-      return tabs.find((tab) => tab.id === tabId);
-    }
-    function editable() {
-      const tab = current();
-      return tab && !tab.reservation && !tab.uncertain;
-    }
-    function controls() {
-      const tab = current(),
-        reserved = tab?.reservation;
-      $("ownership").textContent = tab?.uncertain
-        ? "This tab needs an engine restart"
-        : reserved
-          ? "In use by agent: " + reserved.task
-          : tab?.owner === "human"
-            ? "You control this tab"
-            : "Available";
-      for (const id of ["go", "close"])
-        $(id).disabled = !editable() || (id === "close" && !tab?.owned);
-      $("address").disabled = !editable();
-      $("take").hidden = !reserved && tab?.owner === "human";
-      $("take").disabled = !tab || tab.uncertain;
-      $("return").hidden = tab?.owner !== "human";
-      canvas.classList.toggle("locked", !!reserved);
-    }
-    async function loadProfiles(preferred) {
-      const data = await api("/api/profiles");
-      $("profiles").replaceChildren(
-        ...data.profiles.map((profile) => {
-          const option = document.createElement("option");
-          option.value = profile.id;
-          option.textContent = profile.name;
-          option.disabled = !profile.backgroundTabs;
-          return option;
-        }),
-      );
-      profileId =
-        preferred ||
-        profileId ||
-        data.profiles.find((p) => p.isDefault)?.id ||
-        data.profiles[0]?.id ||
-        "";
-      $("profiles").value = profileId;
-      await switchProfile();
-    }
-    function clearView() {
-      epoch++;
-      viewReady = false;
-      context.clearRect(0, 0, 1024, 768);
-      $("health").textContent = "Session status pending";
-    }
-    async function switchProfile() {
-      clearView();
-      tabId = "";
-      tabs = [];
-      drawTabs();
-      context.clearRect(0, 0, 1024, 768);
-      const selected = profileId;
-      const saved = await api("/api/policies", { profileId: selected });
-      if (selected !== profileId) return;
-      policies = saved.policies;
-      $("health").textContent = policies.length
-        ? "Session status pending"
-        : "Session health not configured";
-      await refresh();
-      await checkHealth();
-    }
-    function drawTabs() {
-      const selected = current();
-      $("tabs").replaceChildren(
-        ...tabs.map((tab) => {
-          const button = document.createElement("button");
-          button.textContent = (tab.reservation ? "◉ " : "") + (tab.title || "New tab");
-          button.title = tab.reservation ? "In use: " + tab.reservation.task : tab.url || "";
-          button.setAttribute("aria-current", String(tab.id === tabId));
-          button.onclick = async () => {
-            try {
-              const profile = profileId;
-              await action("view", {}, tab.id, profile);
-              if (profile !== profileId) return;
-              tabId = tab.id;
-              clearView();
-              drawTabs();
-              await frame();
-            } catch (error) {
-              notice(error.message);
-            }
-          };
-          return button;
-        }),
-      );
-      if (document.activeElement !== $("address")) $("address").value = selected?.url || "";
-      controls();
-    }
-    async function refresh() {
-      if (refreshing || !profileId) return;
-      refreshing = true;
-      const selected = profileId;
-      try {
-        const result = await action("tabs", {}, null, selected);
-        if (selected !== profileId) return;
-        tabs = result;
-        if (!tabs.some((tab) => tab.id === tabId))
-          tabId = tabs.find((tab) => tab.active)?.id || tabs[0]?.id || "";
+      <form class="servo-keyboard" id="keyboard-form" aria-label="Page keyboard">
+        <label class="visually-hidden" for="keyboard-input">Type in the focused page field</label
+        ><input
+          id="keyboard-input"
+          aria-label="Type in the focused page field"
+          placeholder="Type in the browser…"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+        />
+        <button
+          class="button button-quiet icon-button"
+          id="keyboard-dismiss"
+          type="button"
+          aria-label="Dismiss keyboard"
+          hidden
+        >
+          <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+        </button>
+        <button
+          class="button button-secondary icon-button"
+          id="keyboard-enter"
+          aria-label="Send Enter"
+        >
+          <svg class="icon" aria-hidden="true"><use href="#icon-enter" /></svg>
+        </button>
+      </form>
+    </main>
+    <dialog id="new-profile" aria-labelledby="profile-title">
+      <form id="profile-form">
+        <h2 id="profile-title">Create profile</h2>
+        <small>Each profile keeps its own website sessions and storage.</small
+        ><label>Profile name<input id="name" required maxlength="120" autocomplete="off" /></label>
+        <p class="form-error" role="alert" data-dialog-error></p>
+        <div class="actions">
+          <button class="button button-quiet" type="button" data-dismiss>Cancel</button
+          ><button class="button button-primary">Create profile</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="check-policy" aria-labelledby="policy-title">
+      <form id="policy-form">
+        <h2 id="policy-title">Configure session check</h2>
+        <small
+          >Use markers specific to the service. Cookie dates estimate credential expiry; they do not
+          prove a session is valid.</small
+        ><label
+          >Service origin<input id="origin" required placeholder="https://example.com" /></label
+        ><label
+          >Authentication cookie names<input
+            id="cookies"
+            placeholder="session, auth_token" /></label
+        ><label
+          >Authenticated page selector<input
+            id="authenticated"
+            placeholder="[data-account-menu]" /></label
+        ><label>Sign-in page selector<input id="login" placeholder="form[data-sign-in]" /></label>
+        <p class="form-error" role="alert" data-dialog-error></p>
+        <div class="actions">
+          <button class="button button-quiet" type="button" data-dismiss>Cancel</button
+          ><button class="button button-primary">Save check</button>
+        </div>
+      </form>
+    </dialog>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+      history.replaceState(null, "", location.pathname);
+      let profileId = "",
+        tabId = "",
+        tabs = [],
+        policies = [],
+        epoch = 0,
+        refreshing = false,
+        frameBusy = false,
+        viewReady = false,
+        inputQueue = Promise.resolve(),
+        tabsSignature = "";
+      const canvas = $("view"),
+        context = canvas.getContext("2d");
+      function notice(message = "") {
+        $("notice").textContent = message;
+        $("notice").hidden = !message;
+        const dialogError = document.querySelector("dialog[open] [data-dialog-error]");
+        if (dialogError) dialogError.textContent = message;
+      }
+      async function api(path, body) {
+        const response = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: {
+            Authorization: "Bearer " + token,
+            ...(body ? { "Content-Type": "application/json" } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          cache: "no-store",
+        });
+        if (response.status === 401) throw Error("Dashboard authorization required");
+        const value = await response.json();
+        if (!response.ok) throw Error(value.error || "Request failed");
+        return value;
+      }
+      function action(op, args = {}, target = tabId, profile = profileId) {
+        return api("/api/action", { profileId: profile, op, tabId: target || null, args });
+      }
+      function current() {
+        return tabs.find((tab) => tab.id === tabId);
+      }
+      function editable() {
+        const tab = current();
+        return tab && !tab.reservation && !tab.uncertain;
+      }
+      function controls() {
+        const tab = current(),
+          reserved = tab?.reservation;
+        $("ownership").textContent = tab?.uncertain
+          ? "This tab needs an engine restart"
+          : reserved
+            ? "In use by agent: " + reserved.task
+            : tab?.owner === "human"
+              ? "You control this tab"
+              : "Available";
+        for (const id of ["go", "close", "reload", "keyboard-input", "keyboard-enter"])
+          $(id).disabled = !editable() || (id === "close" && !tab?.owned);
+        $("address").disabled = !editable();
+        $("take").hidden = !reserved && tab?.owner === "human";
+        $("take").disabled = !tab || tab.uncertain;
+        $("return").hidden = tab?.owner !== "human";
+        canvas.classList.toggle("locked", !!reserved);
+        if (!editable()) resetKeyboard();
+      }
+      async function loadProfiles(preferred) {
+        const data = await api("/api/profiles");
+        $("profiles").replaceChildren(
+          ...data.profiles.map((profile) => {
+            const option = document.createElement("option");
+            option.value = profile.id;
+            option.textContent = profile.name;
+            option.disabled = !profile.backgroundTabs;
+            return option;
+          }),
+        );
+        profileId =
+          preferred ||
+          profileId ||
+          data.profiles.find((p) => p.isDefault)?.id ||
+          data.profiles[0]?.id ||
+          "";
+        $("profiles").value = profileId;
+        await switchProfile();
+      }
+      function clearView() {
+        epoch++;
+        viewReady = false;
+        $("connection").textContent = "Connecting display...";
+        $("display-placeholder").hidden = false;
+        $("health").dataset.state = "unknown";
+        resetKeyboard();
+        context.clearRect(0, 0, 1024, 768);
+        $("health").textContent = "Session status pending";
+      }
+      async function switchProfile() {
+        clearView();
+        tabId = "";
+        tabs = [];
         drawTabs();
-      } catch (error) {
-        notice(error.message);
-      } finally {
-        refreshing = false;
+        context.clearRect(0, 0, 1024, 768);
+        const selected = profileId;
+        const saved = await api("/api/policies", { profileId: selected });
+        if (selected !== profileId) return;
+        policies = saved.policies;
+        $("health").textContent = policies.length
+          ? "Session status pending"
+          : "Session health not configured";
+        await refresh();
+        await checkHealth();
       }
-    }
-    async function frame() {
-      if (frameBusy || !tabId) return;
-      frameBusy = true;
-      const version = epoch,
-        target = tabId,
-        profile = profileId;
-      try {
-        const encoded = await action("screenshot", {}, target, profile);
-        const image = new Image();
-        image.src = "data:image/png;base64," + encoded;
-        await image.decode();
-        if (version === epoch && target === tabId) {
-          context.drawImage(image, 0, 0, 1024, 768);
-          viewReady = true;
+      async function selectTab(id) {
+        try {
+          const profile = profileId;
+          await action("view", {}, id, profile);
+          if (profile !== profileId) return;
+          tabId = id;
+          clearView();
+          drawTabs();
+          hidePanels();
+          await frame();
+          await checkHealth();
+        } catch (error) {
+          notice(error.message);
         }
-      } catch (error) {
-        if (!/busy/i.test(error.message)) notice(error.message);
-      } finally {
-        frameBusy = false;
       }
-    }
-    async function checkHealth() {
-      const tab = current();
-      if (!tab) return;
-      let origin;
-      try {
-        origin = new URL(tab.url).origin;
-      } catch {
-        return;
+      async function closeTab(id) {
+        try {
+          const profile = profileId;
+          await action("close", {}, id, profile);
+          if (profile !== profileId) return;
+          if (tabId === id) {
+            tabId = "";
+            clearView();
+          }
+          await refresh();
+        } catch (error) {
+          notice(error.message);
+        }
       }
-      const policy = policies.find((policy) => new URL(policy.origin).origin === origin);
-      if (!policy) {
-        $("health").textContent = "Session health not configured for this site";
-        return;
+      function icon(name) {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.classList.add("icon");
+        svg.setAttribute("aria-hidden", "true");
+        const use = document.createElementNS(svg.namespaceURI, "use");
+        use.setAttribute("href", "#icon-" + name);
+        svg.append(use);
+        return svg;
       }
-      const version = epoch;
-      try {
-        const status = await action("health", policy);
-        if (version !== epoch) return;
-        const names = {
-          active: "Session active",
-          expiring: "Credential expiry is near",
-          reauthRequired: "Sign in required",
-          unknown: "Session validity unknown",
-        };
-        let text = names[status.state] || "Unknown";
-        if (status.secondsRemaining !== null && status.secondsRemaining !== undefined)
-          text += " · " + Math.ceil(status.secondsRemaining / 3600) + "h to credential expiry";
-        $("health").textContent = text;
-        $("health").title =
-          status.evidence + " · Checked " + new Date(status.checkedAt).toLocaleTimeString();
-      } catch (error) {
-        if (!/busy/i.test(error.message)) $("health").textContent = "Session check unavailable";
+      function drawTabs() {
+        const selected = current();
+        const signature = JSON.stringify([tabs, tabId]);
+        if (signature !== tabsSignature) {
+          tabsSignature = signature;
+          $("tabs").replaceChildren(
+            ...tabs.map((tab) => {
+              const row = document.createElement("li");
+              row.className = "tab-item";
+              row.dataset.active = String(tab.id === tabId);
+              const button = document.createElement("button");
+              button.className = "tab-select";
+              button.setAttribute("aria-current", String(tab.id === tabId));
+              const title = document.createElement("span");
+              title.className = "tab-title";
+              title.textContent = tab.title || "New tab";
+              const url = document.createElement("span");
+              url.className = "tab-url";
+              url.textContent = tab.url || "about:blank";
+              button.append(title, url);
+              if (tab.reservation) {
+                const task = document.createElement("span");
+                task.className = "tab-task";
+                task.append(icon("lock"), document.createTextNode(tab.reservation.task));
+                button.append(task);
+              }
+              button.onclick = () => selectTab(tab.id);
+              row.append(button);
+              if (tab.owned) {
+                const close = document.createElement("button");
+                close.className = "tab-close";
+                close.setAttribute("aria-label", "Close " + (tab.title || "tab"));
+                close.disabled = !!tab.reservation || tab.uncertain;
+                close.append(icon("close"));
+                close.onclick = () => closeTab(tab.id);
+                row.append(close);
+              }
+              return row;
+            }),
+          );
+        }
+        $("tab-count").textContent = tabs.length;
+        const name = $("profiles").selectedOptions[0]?.textContent || "Profiles";
+        $("profile-label").textContent = name;
+        $("tabs-profile").textContent = name;
+        if (document.activeElement !== $("address")) $("address").value = selected?.url || "";
+        controls();
       }
-    }
-    function enqueueInput(args) {
-      if (!editable() || !viewReady) {
-        notice("Wait for the page, or take control if this tab is reserved.");
-        return;
+      async function refresh() {
+        if (refreshing || !profileId) return;
+        refreshing = true;
+        const selected = profileId;
+        try {
+          const result = await action("tabs", {}, null, selected);
+          if (selected !== profileId) return;
+          tabs = result;
+          if (!tabs.some((tab) => tab.id === tabId))
+            tabId = tabs.find((tab) => tab.active)?.id || tabs[0]?.id || "";
+          drawTabs();
+        } catch (error) {
+          notice(error.message);
+        } finally {
+          refreshing = false;
+        }
       }
-      const target = tabId,
-        profile = profileId;
-      inputQueue = inputQueue
-        .catch(() => {})
-        .then(() => action("input", args, target, profile))
-        .catch((error) => notice(error.message));
-    }
-    canvas.addEventListener("click", (event) => {
-      canvas.focus();
-      const rect = canvas.getBoundingClientRect();
-      enqueueInput({
-        kind: "click",
-        x: ((event.clientX - rect.left) * 1024) / rect.width,
-        y: ((event.clientY - rect.top) * 768) / rect.height,
-      });
-    });
-    canvas.addEventListener("keydown", (event) => {
-      if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return;
-      event.preventDefault();
-      enqueueInput({
-        kind: "key",
-        key: event.key,
-        ctrl: event.ctrlKey,
-        alt: event.altKey,
-        shift: event.shiftKey,
-        meta: event.metaKey,
-      });
-    });
-    canvas.addEventListener("paste", (event) => {
-      event.preventDefault();
-      enqueueInput({ kind: "text", text: event.clipboardData.getData("text/plain") });
-    });
-    canvas.addEventListener(
-      "wheel",
-      (event) => {
-        event.preventDefault();
-        if (!editable() || !viewReady) return;
+      async function frame() {
+        if (frameBusy || !tabId) return;
+        frameBusy = true;
+        const version = epoch,
+          target = tabId,
+          profile = profileId;
+        try {
+          const encoded = await action("screenshot", {}, target, profile);
+          const image = new Image();
+          image.src = "data:image/png;base64," + encoded;
+          await image.decode();
+          if (version === epoch && target === tabId) {
+            context.drawImage(image, 0, 0, 1024, 768);
+            viewReady = true;
+            $("connection").textContent = "Display connected";
+            $("display-placeholder").hidden = true;
+          }
+        } catch (error) {
+          if (!/busy/i.test(error.message) && version === epoch) {
+            $("connection").textContent = "Display unavailable";
+            notice(error.message);
+          }
+        } finally {
+          frameBusy = false;
+        }
+      }
+      async function checkHealth() {
+        const tab = current();
+        if (!tab) return;
+        let origin;
+        try {
+          origin = new URL(tab.url).origin;
+        } catch {
+          return;
+        }
+        const policy = policies.find((policy) => new URL(policy.origin).origin === origin);
+        if (!policy) {
+          $("health").textContent = "Session health not configured for this site";
+          return;
+        }
+        const version = epoch;
+        try {
+          const status = await action("health", policy);
+          if (version !== epoch) return;
+          const names = {
+            active: "Session active",
+            expiring: "Credential expiry is near",
+            reauthRequired: "Sign in required",
+            unknown: "Session validity unknown",
+          };
+          let text = names[status.state] || "Unknown";
+          if (status.secondsRemaining !== null && status.secondsRemaining !== undefined)
+            text +=
+              " · " +
+              (status.secondsRemaining < 3600
+                ? Math.max(1, Math.ceil(status.secondsRemaining / 60)) + "m"
+                : Math.ceil(status.secondsRemaining / 3600) + "h") +
+              " to credential expiry";
+          $("health").textContent = text;
+          $("health").dataset.state = status.state;
+          $("health").title =
+            status.evidence + " · Checked " + new Date(status.checkedAt).toLocaleTimeString();
+        } catch (error) {
+          if (!/busy/i.test(error.message)) $("health").textContent = "Session check unavailable";
+        }
+      }
+      function enqueueInput(args) {
+        if (!editable() || !viewReady) {
+          notice("Wait for the page, or take control if this tab is reserved.");
+          return;
+        }
         const target = tabId,
           profile = profileId;
         inputQueue = inputQueue
           .catch(() => {})
-          .then(() =>
-            action(
-              "scroll",
-              {
-                x: Math.trunc(Math.max(-10000, Math.min(10000, event.deltaX))),
-                y: Math.trunc(Math.max(-10000, Math.min(10000, event.deltaY))),
-              },
-              target,
-              profile,
-            ),
-          )
+          .then(() => action("input", args, target, profile))
           .catch((error) => notice(error.message));
-      },
-      { passive: false },
-    );
-    $("navigation").onsubmit = async (event) => {
-      event.preventDefault();
-      try {
-        let url = $("address").value.trim();
-        if (!url.includes(":")) url = "https://" + url;
-        const target = tabId,
-          profile = profileId;
+      }
+      let touchPoint = null,
+        suppressClickUntil = 0;
+      canvas.addEventListener(
+        "touchstart",
+        (event) => {
+          if (actualSize && event.touches.length === 1) return;
+          const touch = event.touches[0];
+          touchPoint = { x: touch.clientX, y: touch.clientY };
+        },
+        { passive: true },
+      );
+      canvas.addEventListener(
+        "touchmove",
+        (event) => {
+          if (!touchPoint || !editable() || !viewReady) return;
+          if (actualSize && event.touches.length === 1) {
+            touchPoint = null;
+            return;
+          }
+          const touch = event.touches[0];
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.round(((touchPoint.x - touch.clientX) * 1024) / rect.width);
+          const y = Math.round(((touchPoint.y - touch.clientY) * 768) / rect.height);
+          if (Math.abs(x) + Math.abs(y) < 4) return;
+          event.preventDefault();
+          suppressClickUntil = Date.now() + 500;
+          touchPoint = { x: touch.clientX, y: touch.clientY };
+          const target = tabId,
+            profile = profileId;
+          inputQueue = inputQueue
+            .catch(() => {})
+            .then(() => action("scroll", { x, y }, target, profile))
+            .catch((error) => notice(error.message));
+        },
+        { passive: false },
+      );
+      canvas.addEventListener("touchend", () => {
+        touchPoint = null;
+      });
+      canvas.addEventListener("touchcancel", () => {
+        touchPoint = null;
+      });
+      canvas.addEventListener("click", (event) => {
+        if (Date.now() < suppressClickUntil) return;
+        canvas.focus();
+        const rect = canvas.getBoundingClientRect();
+        enqueueInput({
+          kind: "click",
+          x: ((event.clientX - rect.left) * 1024) / rect.width,
+          y: ((event.clientY - rect.top) * 768) / rect.height,
+        });
+      });
+      canvas.addEventListener("keydown", (event) => {
+        if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return;
+        event.preventDefault();
+        enqueueInput({
+          kind: "key",
+          key: event.key,
+          ctrl: event.ctrlKey,
+          alt: event.altKey,
+          shift: event.shiftKey,
+          meta: event.metaKey,
+        });
+      });
+      canvas.addEventListener("paste", (event) => {
+        event.preventDefault();
+        enqueueInput({ kind: "text", text: event.clipboardData.getData("text/plain") });
+      });
+      canvas.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          if (!editable() || !viewReady) return;
+          const target = tabId,
+            profile = profileId;
+          inputQueue = inputQueue
+            .catch(() => {})
+            .then(() =>
+              action(
+                "scroll",
+                {
+                  x: Math.trunc(Math.max(-10000, Math.min(10000, event.deltaX))),
+                  y: Math.trunc(Math.max(-10000, Math.min(10000, event.deltaY))),
+                },
+                target,
+                profile,
+              ),
+            )
+            .catch((error) => notice(error.message));
+        },
+        { passive: false },
+      );
+      $("navigation").onsubmit = async (event) => {
+        event.preventDefault();
+        try {
+          let url = $("address").value.trim();
+          if (!url.includes(":")) url = "https://" + url;
+          const target = tabId,
+            profile = profileId;
+          clearView();
+          await action("navigate", { url }, target, profile);
+          if (profile !== profileId || target !== tabId) return;
+          notice();
+          await refresh();
+          await checkHealth();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      $("profiles").onchange = async () => {
+        profileId = $("profiles").value;
+        try {
+          await switchProfile();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      $("open").onclick = async () => {
+        try {
+          const profile = profileId;
+          const id = await action("open", {}, null, profile);
+          await action("view", {}, id, profile);
+          if (profile !== profileId) return;
+          tabId = id;
+          clearView();
+          await refresh();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      $("close").onclick = () => closeTab(tabId);
+      $("take").onclick = async () => {
+        try {
+          notice("Waiting for the current action to finish...");
+          await action("take");
+          notice();
+          await refresh();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      $("return").onclick = async () => {
+        try {
+          await action("return");
+          await refresh();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      $("create").onclick = () => {
+        hidePanels();
+        $("profile-form").reset();
+        $("new-profile").querySelector("[data-dialog-error]").textContent = "";
+        $("new-profile").showModal();
+      };
+      $("profile-form").onsubmit = async (event) => {
+        event.preventDefault();
+        try {
+          const profile = await api("/api/profiles", { name: $("name").value });
+          $("new-profile").close();
+          await loadProfiles(profile.id);
+          notice();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      $("policy").onclick = () => {
+        $("more-menu").open = false;
+        const saved = policies.find((policy) => {
+          try {
+            return new URL(policy.origin).origin === new URL(current()?.url).origin;
+          } catch {
+            return false;
+          }
+        });
+        $("cookies").value = saved?.cookieNames.join(", ") || "";
+        $("authenticated").value = saved?.authenticatedSelector || "";
+        $("login").value = saved?.loginSelector || "";
+        try {
+          $("origin").value = new URL(current()?.url).origin;
+        } catch {
+          $("origin").value = "";
+        }
+        $("check-policy").querySelector("[data-dialog-error]").textContent = "";
+        $("check-policy").showModal();
+      };
+      $("policy-form").onsubmit = async (event) => {
+        event.preventDefault();
+        try {
+          policies = (
+            await api("/api/policies", {
+              profileId,
+              policy: {
+                origin: $("origin").value,
+                cookieNames: $("cookies")
+                  .value.split(",")
+                  .map((value) => value.trim())
+                  .filter(Boolean),
+                authenticatedSelector: $("authenticated").value || null,
+                loginSelector: $("login").value || null,
+                warningSeconds: 86400,
+              },
+            })
+          ).policies;
+          $("check-policy").close();
+          await checkHealth();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      for (const button of document.querySelectorAll("[data-dismiss]"))
+        button.onclick = () => button.closest("dialog").close();
+      async function connect() {
+        if (!token) {
+          $("connect").hidden = false;
+          $("app").hidden = true;
+          return;
+        }
+        try {
+          await loadProfiles();
+          $("connect").hidden = true;
+          $("app").hidden = false;
+          await frame();
+          await checkHealth();
+        } catch (error) {
+          notice(error.message);
+          $("connection-error").textContent = error.message;
+          $("connect").hidden = false;
+          $("app").hidden = true;
+        }
+      }
+      $("connect-form").onsubmit = async (event) => {
+        event.preventDefault();
+        token = $("token").value.trim();
+        $("token").value = "";
+        $("connection-error").textContent = "";
+        $("unlock").disabled = true;
+        try {
+          await connect();
+        } finally {
+          $("unlock").disabled = false;
+        }
+      };
+      function hidePanels() {
+        for (const name of ["tabs", "profiles"]) {
+          $(name + "-panel").hidden = true;
+          $(name + "-toggle").setAttribute("aria-expanded", "false");
+        }
+      }
+      function togglePanel(name) {
+        const wasHidden = $(name + "-panel").hidden;
+        hidePanels();
+        $("more-menu").open = false;
+        $(name + "-panel").hidden = !wasHidden;
+        $(name + "-toggle").setAttribute("aria-expanded", String(wasHidden));
+        if (wasHidden)
+          $(name + "-panel")
+            .querySelector("button")
+            .focus();
+      }
+      for (const name of ["tabs", "profiles"])
+        $(name + "-toggle").onclick = () => togglePanel(name);
+      for (const button of document.querySelectorAll("[data-panel-close]"))
+        button.onclick = () => {
+          const name = button.closest("section").id.split("-")[0];
+          hidePanels();
+          $(name + "-toggle").focus();
+        };
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+          const name = ["tabs", "profiles"].find((name) => !$(name + "-panel").hidden);
+          hidePanels();
+          $("more-menu").open = false;
+          if (name) $(name + "-toggle").focus();
+        }
+      });
+      document.addEventListener("click", (event) => {
+        if (!$("dock").contains(event.target)) {
+          hidePanels();
+          $("more-menu").open = false;
+        }
+      });
+      $("more-menu").addEventListener("toggle", () => {
+        if ($("more-menu").open) hidePanels();
+      });
+      $("reload").onclick = () => {
+        $("address").value = current()?.url || "about:blank";
+        $("navigation").requestSubmit();
+      };
+      $("reconnect").onclick = async () => {
+        $("more-menu").open = false;
         clearView();
-        await action("navigate", { url }, target, profile);
-        if (profile !== profileId || target !== tabId) return;
-        notice();
-        await refresh();
-        await checkHealth();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("profiles").onchange = async () => {
-      profileId = $("profiles").value;
-      try {
-        await switchProfile();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("open").onclick = async () => {
-      try {
-        const profile = profileId;
-        const id = await action("open", {}, null, profile);
-        await action("view", {}, id, profile);
-        if (profile !== profileId) return;
-        tabId = id;
-        clearView();
-        await refresh();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("close").onclick = async () => {
-      try {
-        const target = tabId,
-          profile = profileId;
-        await action("close", {}, target, profile);
-        if (profile !== profileId || target !== tabId) return;
-        tabId = "";
-        clearView();
-        await refresh();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("take").onclick = async () => {
-      try {
-        notice("Waiting for the current action to finish...");
-        await action("take");
-        notice();
-        await refresh();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("return").onclick = async () => {
-      try {
-        await action("return");
-        await refresh();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("create").onclick = () => $("new-profile").showModal();
-    $("profile-form").onsubmit = async (event) => {
-      event.preventDefault();
-      try {
-        const profile = await api("/api/profiles", { name: $("name").value });
-        $("new-profile").close();
-        await loadProfiles(profile.id);
-        notice();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    $("policy").onclick = () => {
-      try {
-        $("origin").value = new URL(current()?.url).origin;
-      } catch {
-        $("origin").value = "";
-      }
-      $("check-policy").showModal();
-    };
-    $("policy-form").onsubmit = async (event) => {
-      event.preventDefault();
-      try {
-        policies = (
-          await api("/api/policies", {
-            profileId,
-            policy: {
-              origin: $("origin").value,
-              cookieNames: $("cookies")
-                .value.split(",")
-                .map((value) => value.trim())
-                .filter(Boolean),
-              authenticatedSelector: $("authenticated").value || null,
-              loginSelector: $("login").value || null,
-              warningSeconds: 86400,
-            },
-          })
-        ).policies;
-        $("check-policy").close();
-        await checkHealth();
-      } catch (error) {
-        notice(error.message);
-      }
-    };
-    for (const button of document.querySelectorAll("[data-dismiss]"))
-      button.onclick = () => button.closest("dialog").close();
-    async function connect() {
-      if (!token) {
-        $("connect").hidden = false;
-        $("app").hidden = true;
-        return;
-      }
-      try {
-        await loadProfiles();
-        $("connect").hidden = true;
-        $("app").hidden = false;
         await frame();
-        await checkHealth();
-      } catch (error) {
-        notice(error.message);
-        $("connection-error").textContent = error.message;
+      };
+      $("disconnect").onclick = () => {
+        token = "";
+        epoch++;
+        hidePanels();
+        $("more-menu").open = false;
         $("connect").hidden = false;
         $("app").hidden = true;
+        $("token").focus();
+      };
+      let actualSize = false;
+      function fitView() {
+        const rect = $("viewport").getBoundingClientRect();
+        const scale = actualSize ? 1 : Math.min(rect.width / 1024, rect.height / 768);
+        canvas.style.width = 1024 * scale + "px";
+        canvas.style.height = 768 * scale + "px";
       }
-    }
-    $("unlock").onclick = () => {
-      token = $("token").value;
-      $("token").value = "";
+      $("zoom").onclick = () => {
+        actualSize = !actualSize;
+        $("viewport").classList.toggle("actual-size", actualSize);
+        $("zoom").setAttribute("aria-pressed", String(actualSize));
+        const label = actualSize ? "Fit to screen" : "Show actual size";
+        $("zoom").setAttribute("aria-label", label);
+        $("zoom").title = label;
+        $("zoom").replaceChildren(icon(actualSize ? "fit" : "zoom"));
+        fitView();
+      };
+      const mobileLayout = matchMedia(
+        "(max-width: 760px), (pointer: coarse) and (max-height: 520px) and (max-width: 960px)",
+      );
+      mobileLayout.addEventListener("change", () => {
+        if (!mobileLayout.matches && actualSize) $("zoom").click();
+      });
+      new ResizeObserver(fitView).observe($("viewport"));
+      function updateViewport() {
+        document.documentElement.style.setProperty(
+          "--viewport-height",
+          (window.visualViewport?.height || window.innerHeight) + "px",
+        );
+        document.documentElement.style.setProperty(
+          "--viewport-top",
+          (window.visualViewport?.offsetTop || 0) + "px",
+        );
+      }
+      window.visualViewport?.addEventListener("resize", updateViewport);
+      window.visualViewport?.addEventListener("scroll", updateViewport);
+      window.addEventListener("resize", updateViewport);
+      updateViewport();
+      let keyboardValue = "";
+      function resetKeyboard() {
+        keyboardValue = "";
+        $("keyboard-input").value = "";
+      }
+      function sendKeyboardText() {
+        const value = $("keyboard-input").value;
+        let prefix = 0;
+        while (
+          prefix < keyboardValue.length &&
+          prefix < value.length &&
+          keyboardValue[prefix] === value[prefix]
+        )
+          prefix++;
+        for (const character of Array.from(keyboardValue.slice(prefix)))
+          enqueueInput({ kind: "key", key: "Backspace" });
+        if (value.slice(prefix)) enqueueInput({ kind: "text", text: value.slice(prefix) });
+        keyboardValue = value;
+      }
+      $("keyboard-input").addEventListener("input", (event) => {
+        if (!event.isComposing) sendKeyboardText();
+      });
+      $("keyboard-input").addEventListener("compositionend", sendKeyboardText);
+      $("keyboard-input").addEventListener("focus", () => {
+        $("keyboard-dismiss").hidden = false;
+      });
+      $("keyboard-input").addEventListener("blur", () => {
+        $("keyboard-dismiss").hidden = true;
+      });
+      $("keyboard-dismiss").addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+      });
+      $("keyboard-dismiss").onclick = () => {
+        resetKeyboard();
+        $("keyboard-input").blur();
+      };
+      $("keyboard-form").onsubmit = (event) => {
+        event.preventDefault();
+        enqueueInput({ kind: "key", key: "Enter" });
+        resetKeyboard();
+      };
+      setInterval(() => {
+        if (token && !$("app").hidden) {
+          refresh();
+          frame();
+        }
+      }, 500);
+      setInterval(() => {
+        if (token && !$("app").hidden) checkHealth();
+      }, 15000);
       connect();
-    };
-    setInterval(() => {
-      if (token && !$("app").hidden) {
-        refresh();
-        frame();
-      }
-    }, 500);
-    setInterval(() => {
-      if (token && !$("app").hidden) checkHealth();
-    }, 15000);
-    connect();
-  </script>
+    </script>
+  </body>
 </html>
