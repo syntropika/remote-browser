@@ -102,6 +102,9 @@ The last object is for `browser_navigate`. Use `browser_tabs` actions `renew` an
 minutes. Expired, released, and superseded tokens fail. Listings show task names
 and expiry, never lease tokens. Only API-created tabs can be closed. There are at
 most 32 profiles and 32 tabs per embedded profile.
+Tab listings limit page titles to 4 KiB and URLs to 16 KiB on UTF-8 boundaries.
+The full page URL remains inside the engine; only display metadata is shortened.
+These limits keep all 32 rows below the transport budget even with JSON escaping.
 
 Different embedded tabs accept concurrent calls. A slow navigation on one tab does
 not hold the host's operation lock for another. Calls targeting one busy tab fail
@@ -188,6 +191,14 @@ block the whole profile. Restart after inspecting the outcome. Mutations are not
 automatically retried. A definitive element error allows fresh observation and
 recovery. `--timeout-seconds` defaults to 15; engine actions have a 12-second
 limit. Choosing a shorter transport deadline can leave actions uncertain sooner.
+Standard error emits structured `Servo diagnostic` events when completion becomes
+uncertain. Events distinguish operation timeouts, closed script channels, tab
+crashes, malformed responses, and response-size violations. They contain process,
+request, operation, and tab identifiers, never page URLs, titles, arguments, or
+lease tokens. A tab timeout can require recovery while the engine process and
+other tabs remain usable; it does not by itself mean the MCP server crashed.
+The stdio reader rejects frames over 8 MiB while reading, including frames with
+no newline, rather than first allocating an unbounded response.
 
 The public Rust `Automation` interface supports `embedded(binary, directory,
 timeout)` and `connect(webdriver_url, timeout)`. Cloned embedded handles retain
@@ -245,6 +256,8 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo build --locked
 python3 ../tests/embedded_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/failure_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 ```
 
 Real-engine tests exercise native input, rendered PNGs, independent tab references,

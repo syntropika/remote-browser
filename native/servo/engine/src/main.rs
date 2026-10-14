@@ -23,6 +23,7 @@ use std::{
 };
 use url::Url;
 use webdriver::error::ErrorStatus;
+mod metadata;
 mod operations;
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -51,6 +52,7 @@ struct Tab {
 }
 struct Pending {
     tab: String,
+    operation: String,
     deadline: Instant,
     exclusive: bool,
 }
@@ -121,6 +123,12 @@ impl WebViewDelegate for Delegate {
                 .find(|t| t.view.id() == view.id())
         {
             tab.uncertain = true;
+            remote_browser_servo::native::diagnostic(
+                "tab_crashed",
+                None,
+                None,
+                Some(&view.id().to_string()),
+            );
         }
     }
 }
@@ -222,6 +230,7 @@ impl Engine {
             request.id,
             Pending {
                 tab: id.into(),
+                operation: request.op.clone(),
                 deadline: Instant::now() + Duration::from_secs(12),
                 exclusive,
             },
@@ -324,7 +333,7 @@ impl Engine {
                 }
                 Err(TryReceiveError::Empty) => false,
                 Err(_) => {
-                    engine.poison(id);
+                    engine.poison(id, "script_channel_closed");
                     true
                 }
             }
@@ -342,7 +351,15 @@ impl Engine {
             self.complete(id, Ok(json!({"ok":true})));
         }
     }
-    fn poison(&self, id: u64) {
+    fn poison(&self, id: u64, reason: &str) {
+        if let Some(pending) = self.pending.borrow().get(&id) {
+            remote_browser_servo::native::diagnostic(
+                reason,
+                Some(id),
+                Some(&pending.operation),
+                Some(&pending.tab),
+            );
+        }
         let takeover = self.pending.borrow().get(&id).and_then(|p| {
             self.tabs.borrow_mut().get_mut(&p.tab).and_then(|t| {
                 t.uncertain = true;
@@ -370,7 +387,7 @@ impl Engine {
             .map(|(id, _)| *id)
             .collect();
         for id in expired {
-            self.poison(id);
+            self.poison(id, "operation_timeout");
         }
     }
     fn dispatch(self: &Rc<Self>, request: Request) {
