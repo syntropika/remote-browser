@@ -33,8 +33,9 @@ cargo build --locked
 
 This single executable contains both the host and the engine worker. It creates a
 default profile and saves the catalog under the chosen root. `--dashboard-port 0`
-chooses an available loopback port. Open the dashboard URL printed on standard
-error, including its token fragment. Keep stdin open for MCP; EOF or SIGTERM closes
+chooses an available loopback port. Open the dashboard origin to sign in with a username and password. On first run,
+create the owner account. The private token fragment printed on standard error
+remains available for trusted local integrations; it is not required for human login. Keep stdin open for MCP; EOF or SIGTERM closes
 the engines and saves persistent data. The dashboard is tied to the MCP lifetime.
 An MCP client configuration can launch it directly:
 
@@ -54,7 +55,8 @@ An MCP client configuration can launch it directly:
 
 Standard output carries MCP messages only. The engine uses private stdio IPC;
 it opens no WebDriver or CDP listener. The dashboard listens on loopback, requires a
-random bearer token, rejects foreign browser origins, and limits request bodies.
+an owner session cookie or private integration bearer, rejects foreign browser
+origins, and limits request bodies.
 It is not a public hosting interface. Catalog files are written atomically with
 mode `0600`, and embedded profile directories use mode `0700` on Unix. Catalog and
 engine locks prevent simultaneous writers. Profile data contains authentication
@@ -179,10 +181,11 @@ profile and tab panels. Mobile places navigation above the page and a native key
 input below it. Mobile zoom switches between fit and actual size; one-finger swipes
 scroll the fitted page or pan the actual-size display, and two fingers scroll the
 actual-size page. Session status and check settings are available in More options.
-The access-token connection screen uses the same visual system; username/password
-authentication from the Chromium service is not part of this prototype.
-It supports basic clicking, typing, paste, named keys, and scrolling. Downloads,
-file uploads, popup windows, browser permission prompts, clipboard integration,
+The owner sign-in screen uses the same visual system and accepts username/password
+authentication, including compatible owner records from the Chromium service.
+It supports basic clicking, typing, paste, named keys, scrolling, and explicit
+downloads and uploads through the managed file workspace. Automatic download
+capture, popup windows, browser permission prompts, clipboard integration,
 IME composition, full-page captures, and asynchronous evaluation are not supported.
 
 Transport cancellation, engine timeouts, crashes, and incomplete responses leave
@@ -366,3 +369,55 @@ Verify the feature with the actual embedded executable:
 ```sh
 python3 native/servo/tests/files_smoke.py --engine-binary /path/to/remote-browser-servo-engine
 ```
+
+## Dashboard owner account
+
+The dashboard restores the original username/password flow independently of website
+logins inside profiles. The first visit creates one owner account; later visits
+sign in with that account. The default record is `dashboard-account.json` beside
+the profiles catalog. Set `--dashboard-account /path/to/account.json` (or
+`SERVO_DASHBOARD_ACCOUNT`) to use a different protected file. The schema is compatible
+with the original application's version-1 scrypt record (N=32768, r=8, p=1,
+64-byte hash), so an existing `account.json` can be reused without resetting the
+password or exporting plaintext credentials. Keep the original file as a backup.
+
+Passwords use scrypt with a random salt and are never stored as plaintext or
+logged. Authentication creates an HttpOnly, SameSite=Strict session cookie lasting
+at most eight hours. Sign out revokes it; restarting the process requires another
+sign-in but preserves the account, profiles, website sessions and files. Sessions
+are bounded to 32, authentication attempts to 30 per minute, and concurrent password
+derivations to two. Use `--dashboard-secure-cookie` behind HTTPS. Cookie-authenticated
+mutations and owner setup/login/logout require the expected Origin header. A reverse
+proxy must preserve cookies and Set-Cookie responses while validating the external
+origin before any origin rewrite. Forwarding authentication headers alone is insufficient.
+
+The stdio MCP interface does not depend on a dashboard login. The private bearer
+continues to support trusted integration clients; the human login form does not
+ask for it. Username and password belong to the dashboard owner, not to a website
+account or a particular browser profile.
+
+```sh
+python3 native/servo/tests/account_smoke.py --engine-binary /path/to/remote-browser-servo-engine
+```
+
+## Shared HTTP MCP adapter
+
+To connect an MCP gateway to the same live profiles as the dashboard and stdio
+client, enable the optional loopback Streamable HTTP listener:
+
+```sh
+./remote-browser-servo-engine --profile-root /path/to/private-browser-data \
+  --dashboard-port 8081 --mcp-http-port 8083 \
+  --mcp-http-token-file /path/to/private-mcp-bearer
+```
+
+The token file must contain a 32–256 character bearer and be private to its owner
+on Unix. HTTP requests require `Authorization: Bearer <value>`; dashboard login
+cookies do not authorize MCP. The endpoint is `/mcp`, uses stateless JSON responses,
+validates Host and Origin, and limits request bodies to 64 KiB. The service calls
+the same automation handler and profile registry as stdio, so reservations and
+human takeover are shared across both transports. Keep stdin open for the host
+lifetime. A reverse proxy must forward Accept, authorization and MCP protocol
+headers to the correct loopback listener and preserve response headers. Configure
+its external origin/peer policy explicitly. Existing gateways can retain their
+upstream bearer by putting that same secret in the protected token file.

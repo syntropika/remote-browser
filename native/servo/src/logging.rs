@@ -282,6 +282,11 @@ fn operation(value: &str) -> &'static str {
         "renew" => "renew",
         "release" => "release",
         "shutdown" => "shutdown",
+        "http_mcp" => "http_mcp",
+        "auth_status" => "auth_status",
+        "auth_setup" => "auth_setup",
+        "login" => "login",
+        "logout" => "logout",
         "profiles" => "profiles",
         "action" => "action",
         "create_profile" => "create_profile",
@@ -302,6 +307,9 @@ fn normal_level(op: &str) -> Level {
             | "reserve"
             | "release"
             | "create_profile"
+            | "login"
+            | "logout"
+            | "auth_setup"
             | "browser_navigate"
             | "browser_click"
             | "browser_fill"

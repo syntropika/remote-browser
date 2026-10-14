@@ -1,5 +1,10 @@
 //! Loopback dashboard routes human input through the same per-tab ownership checks.
-use crate::{Result, health::HealthPolicy, profiles::Profiles};
+use crate::{
+    Result,
+    account::{AuthError, Credentials, DashboardAuth},
+    health::HealthPolicy,
+    profiles::Profiles,
+};
 use axum::{
     Json, Router,
     extract::Request,
@@ -11,16 +16,22 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::{path::PathBuf, sync::Arc};
 #[derive(Clone)]
 struct Host {
     profiles: Profiles,
     token: String,
     origin: String,
+    auth: Arc<DashboardAuth>,
 }
 type Reply = std::result::Result<Json<Value>, DashboardError>;
 async fn observe(request: Request, next: Next) -> Response {
     let op = match (request.method().as_str(), request.uri().path()) {
         ("POST", "/api/profiles") => "create_profile",
+        (_, "/api/auth/status") => "auth_status",
+        (_, "/api/auth/setup") => "auth_setup",
+        (_, "/api/login") => "login",
+        (_, "/api/logout") => "logout",
         (_, "/api/profiles") => "profiles",
         (_, "/api/action") => "action",
         (_, "/api/policies") => "policies",
@@ -37,6 +48,9 @@ async fn observe(request: Request, next: Next) -> Response {
     log.finish_http(response.status().as_u16());
     response
         .headers_mut()
+        .insert("cache-control", "no-store".parse().unwrap());
+    response
+        .headers_mut()
         .insert("x-request-id", log.context.trace_id.parse().unwrap());
     response
 }
@@ -48,9 +62,7 @@ impl IntoResponse for DashboardError {
     }
 }
 fn authorize(host: &Host, headers: &HeaderMap) -> std::result::Result<(), DashboardError> {
-    if headers.get("authorization").and_then(|h| h.to_str().ok())
-        != Some(format!("Bearer {}", host.token).as_str())
-    {
+    if !bearer(host, headers) && !host.auth.authenticated(cookie(headers)) {
         return Err(DashboardError(
             StatusCode::UNAUTHORIZED,
             "Dashboard authorization required".into(),
@@ -66,6 +78,99 @@ fn authorize(host: &Host, headers: &HeaderMap) -> std::result::Result<(), Dashbo
     }
     Ok(())
 }
+fn cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("cookie")
+        .and_then(|header| header.to_str().ok())
+}
+fn bearer(host: &Host, headers: &HeaderMap) -> bool {
+    headers.get("authorization").and_then(|h| h.to_str().ok())
+        == Some(format!("Bearer {}", host.token).as_str())
+}
+fn same_origin(host: &Host, headers: &HeaderMap) -> std::result::Result<(), DashboardError> {
+    if headers
+        .get("origin")
+        .and_then(|header| header.to_str().ok())
+        != Some(host.origin.as_str())
+    {
+        return Err(DashboardError(
+            StatusCode::FORBIDDEN,
+            "A same-origin request is required.".into(),
+        ));
+    }
+    Ok(())
+}
+fn authorize_mutation(host: &Host, headers: &HeaderMap) -> std::result::Result<(), DashboardError> {
+    authorize(host, headers)?;
+    if !bearer(host, headers) {
+        same_origin(host, headers)?;
+    }
+    Ok(())
+}
+fn auth_failure(error: AuthError) -> DashboardError {
+    DashboardError(StatusCode::from_u16(error.0).unwrap(), error.1.into())
+}
+async fn auth_status(State(host): State<Host>, headers: HeaderMap) -> Reply {
+    if headers.get("origin").is_some() {
+        same_origin(&host, &headers)?;
+    }
+    Ok(Json(
+        json!({"configured":host.auth.configured().map_err(auth_failure)?,"authenticated":host.auth.authenticated(cookie(&headers))}),
+    ))
+}
+async fn credentials(
+    host: Host,
+    headers: HeaderMap,
+    input: Credentials,
+    setup: bool,
+) -> std::result::Result<Response, DashboardError> {
+    same_origin(&host, &headers)?;
+    host.auth.allow_attempt().map_err(auth_failure)?;
+    host.auth
+        .credentials(input, setup)
+        .await
+        .map_err(auth_failure)?;
+    let session = host.auth.issue(cookie(&headers)).map_err(auth_failure)?;
+    let mut response = (
+        if setup {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({"authenticated":true})),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("set-cookie", session.parse().unwrap());
+    Ok(response)
+}
+async fn login(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<Credentials>,
+) -> std::result::Result<Response, DashboardError> {
+    credentials(host, headers, input, false).await
+}
+async fn setup(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<Credentials>,
+) -> std::result::Result<Response, DashboardError> {
+    credentials(host, headers, input, true).await
+}
+async fn logout(
+    State(host): State<Host>,
+    headers: HeaderMap,
+) -> std::result::Result<Response, DashboardError> {
+    same_origin(&host, &headers)?;
+    let mut response = Json(json!({"authenticated":false})).into_response();
+    response.headers_mut().insert(
+        "set-cookie",
+        host.auth.logout(cookie(&headers)).parse().unwrap(),
+    );
+    Ok(response)
+}
 fn failure(error: impl ToString) -> DashboardError {
     DashboardError(StatusCode::CONFLICT, error.to_string())
 }
@@ -79,7 +184,7 @@ struct Action {
     args: Value,
 }
 async fn action(State(host): State<Host>, headers: HeaderMap, Json(input): Json<Action>) -> Reply {
-    authorize(&host, &headers)?;
+    authorize_mutation(&host, &headers)?;
     let browser = host
         .profiles
         .browser(Some(&input.profile_id))
@@ -101,7 +206,7 @@ struct Create {
     name: String,
 }
 async fn create(State(host): State<Host>, headers: HeaderMap, Json(input): Json<Create>) -> Reply {
-    authorize(&host, &headers)?;
+    authorize_mutation(&host, &headers)?;
     host.profiles
         .create(&input.name)
         .await
@@ -119,7 +224,7 @@ async fn policies(
     headers: HeaderMap,
     Json(input): Json<Policies>,
 ) -> Reply {
-    authorize(&host, &headers)?;
+    authorize_mutation(&host, &headers)?;
     if let Some(policy) = input.policy {
         host.profiles
             .save_policy(&input.profile_id, policy)
@@ -152,13 +257,19 @@ async fn styles() -> impl IntoResponse {
         ),
     )
 }
-pub async fn start(profiles: Profiles, port: u16) -> Result<tokio::task::JoinHandle<()>> {
+pub async fn start(
+    profiles: Profiles,
+    port: u16,
+    account: PathBuf,
+    secure_cookie: bool,
+) -> Result<tokio::task::JoinHandle<()>> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let address = listener.local_addr()?;
     let origin = format!("http://{address}");
     let token = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     eprintln!("Servo dashboard: {origin}/#token={token}");
     let host = Host {
+        auth: Arc::new(DashboardAuth::new(account, secure_cookie)),
         profiles,
         token,
         origin,
@@ -166,6 +277,13 @@ pub async fn start(profiles: Profiles, port: u16) -> Result<tokio::task::JoinHan
     let app = Router::new()
         .route("/", get(index))
         .route("/styles.css", get(styles))
+        .route("/api/auth/status", get(auth_status))
+        .route(
+            "/api/auth/setup",
+            post(setup).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route("/api/login", post(login).layer(DefaultBodyLimit::max(4096)))
+        .route("/api/logout", post(logout))
         .route("/api/profiles", get(list_profiles).post(create))
         .route("/api/action", post(action))
         .route("/api/policies", post(policies))
@@ -200,6 +318,10 @@ mod tests {
         )
         .unwrap();
         let host = Host {
+            auth: Arc::new(DashboardAuth::new(
+                std::env::temp_dir().join("servo-auth-test.json"),
+                false,
+            )),
             profiles,
             token: "test-token".into(),
             origin: "http://127.0.0.1:8000".into(),

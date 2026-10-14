@@ -106,27 +106,74 @@
           <span>Remote Browser</span>
         </div>
         <h1 id="login-title">Remote Browser</h1>
-        <p class="login-description">One browser for you and your agents.</p>
-        <form id="connect-form">
-          <label for="token">Access token</label>
-          <input
-            id="token"
-            name="token"
-            autocomplete="off"
-            type="password"
-            required
-            aria-describedby="token-note"
-          />
-          <p class="field-note" id="token-note">
-            Use the access token provided with your dashboard link.
-          </p>
-          <button class="button button-primary login-submit" id="unlock">
-            Connect<svg class="icon" aria-hidden="true">
-              <use href="#icon-arrow" />
-            </svg>
+        <p class="login-description" id="login-description">One browser for you and your agents.</p>
+        <form id="connect-form" method="post" action="/api/login" autocomplete="on" hidden>
+          <div class="form-field">
+            <label for="username">Username</label>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
+              minlength="3"
+              maxlength="64"
+              required
+              placeholder="Your username"
+            />
+          </div>
+          <div class="form-field">
+            <label for="password">Password</label>
+            <div class="password-field">
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="new-password"
+                passwordrules="minlength: 12; maxlength: 256;"
+                aria-describedby="password-note generated-password-note"
+                maxlength="256"
+                required
+                placeholder="Your password"
+              />
+              <button
+                id="password-toggle"
+                class="password-toggle"
+                type="button"
+                aria-label="Show password"
+                aria-pressed="false"
+              >
+                Show
+              </button>
+            </div>
+            <p class="field-note" id="password-note" hidden>Use at least 12 characters.</p>
+            <button id="generate-password" class="generate-password" type="button" hidden>
+              Generate password
+            </button>
+            <p class="field-note" id="generated-password-note" role="status" hidden>
+              Password generated. Use Show to view it and save it in your password manager before
+              continuing.
+            </p>
+          </div>
+          <div class="form-field" id="confirm-password-field" hidden>
+            <label for="confirm-password">Confirm password</label>
+            <input
+              id="confirm-password"
+              name="confirmPassword"
+              type="password"
+              autocomplete="new-password"
+              maxlength="256"
+              placeholder="Enter your password again"
+              disabled
+            />
+          </div>
+          <button class="button button-primary login-submit" id="unlock" type="submit">
+            <span id="login-submit-label">Sign in</span
+            ><svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg>
           </button>
-          <p class="form-error" id="connection-error" role="alert"></p>
         </form>
+        <p class="form-error" id="connection-error" role="alert"></p>
         <p class="login-footer">
           <svg class="icon" aria-hidden="true"><use href="#icon-lock" /></svg>Your website sessions
           stay separate in each browser profile.
@@ -295,7 +342,7 @@
                 >
                   <svg class="icon" aria-hidden="true">
                     <use href="#icon-logout" /></svg
-                  >Disconnect
+                  >Sign out
                 </button>
               </div>
             </details>
@@ -502,15 +549,18 @@
         const response = await fetch(path, {
           method: body ? "POST" : "GET",
           headers: {
-            Authorization: "Bearer " + token,
+            ...(token ? { Authorization: "Bearer " + token } : {}),
             ...(body ? { "Content-Type": "application/json" } : {}),
           },
           body: body ? JSON.stringify(body) : undefined,
           cache: "no-store",
         });
-        if (response.status === 401) throw Error("Dashboard authorization required");
         const value = await response.json();
-        if (!response.ok) throw Error(value.error || "Request failed");
+        if (!response.ok) {
+          if (response.status === 401 && !["/api/login", "/api/auth/setup"].includes(path))
+            showLogin();
+          throw Error(value.error || "Request failed");
+        }
         return value;
       }
       function action(op, args = {}, target = tabId, profile = profileId) {
@@ -996,36 +1046,93 @@
       };
       for (const button of document.querySelectorAll("[data-dismiss]"))
         button.onclick = () => button.closest("dialog").close();
+      let setupRequired = false;
+      function showLogin() {
+        token = "";
+        epoch++;
+        for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+        $("connect").hidden = false;
+        $("app").hidden = true;
+      }
+      function loginMode(setup) {
+        setupRequired = setup;
+        $("connect-form").hidden = false;
+        $("connect-form").action = setup ? "/api/auth/setup" : "/api/login";
+        $("login-submit-label").textContent = setup ? "Create account" : "Sign in";
+        $("login-description").textContent = setup
+          ? "Create your dashboard account to get started."
+          : "One browser for you and your agents.";
+        $("password").type = "password";
+        $("password-toggle").textContent = "Show";
+        $("password-toggle").setAttribute("aria-label", "Show password");
+        $("password-toggle").setAttribute("aria-pressed", "false");
+        $("password").autocomplete = setup ? "new-password" : "current-password";
+        $("password").minLength = setup ? 12 : 1;
+        $("confirm-password-field").hidden = !setup;
+        $("confirm-password").disabled = !setup;
+        $("confirm-password").required = setup;
+        $("password-note").hidden = !setup;
+        $("generate-password").hidden = !setup;
+        $("generated-password-note").hidden = true;
+      }
       async function connect() {
-        if (!token) {
-          $("connect").hidden = false;
-          $("app").hidden = true;
-          return;
-        }
         try {
+          const status = await api("/api/auth/status");
+          loginMode(!status.configured);
+          if (!status.authenticated && !token) {
+            showLogin();
+            return;
+          }
           await loadProfiles();
           $("connect").hidden = true;
           $("app").hidden = false;
           await frame();
           await checkHealth();
         } catch (error) {
-          notice(error.message);
+          showLogin();
           $("connection-error").textContent = error.message;
-          $("connect").hidden = false;
-          $("app").hidden = true;
         }
       }
       $("connect-form").onsubmit = async (event) => {
         event.preventDefault();
-        token = $("token").value.trim();
-        $("token").value = "";
         $("connection-error").textContent = "";
+        if (setupRequired && $("password").value !== $("confirm-password").value) {
+          $("connection-error").textContent = "Passwords do not match.";
+          return;
+        }
         $("unlock").disabled = true;
         try {
+          await api(setupRequired ? "/api/auth/setup" : "/api/login", {
+            username: $("username").value,
+            password: $("password").value,
+          });
+          token = "";
+          $("password").value = "";
+          $("confirm-password").value = "";
           await connect();
+        } catch (error) {
+          $("connection-error").textContent = error.message;
         } finally {
           $("unlock").disabled = false;
         }
+      };
+      $("password-toggle").onclick = () => {
+        const showing = $("password").type === "password";
+        $("password").type = showing ? "text" : "password";
+        $("password-toggle").textContent = showing ? "Hide" : "Show";
+        $("password-toggle").setAttribute(
+          "aria-label",
+          showing ? "Hide password" : "Show password",
+        );
+        $("password-toggle").setAttribute("aria-pressed", String(showing));
+      };
+      $("generate-password").onclick = () => {
+        const bytes = crypto.getRandomValues(new Uint8Array(24));
+        const password =
+          "Aa1!" + Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+        $("password").value = password;
+        $("confirm-password").value = password;
+        $("generated-password-note").hidden = false;
       };
       let fileContext = null,
         fileBusy = false;
@@ -1263,14 +1370,17 @@
         clearView();
         await frame();
       };
-      $("disconnect").onclick = () => {
-        token = "";
-        epoch++;
-        hidePanels();
-        $("more-menu").open = false;
-        $("connect").hidden = false;
-        $("app").hidden = true;
-        $("token").focus();
+      $("disconnect").onclick = async () => {
+        try {
+          await api("/api/logout", {});
+          showLogin();
+          hidePanels();
+          $("more-menu").open = false;
+          await connect();
+          $("username").focus();
+        } catch (error) {
+          notice(error.message);
+        }
       };
       let actualSize = false;
       function fitView() {
@@ -1352,13 +1462,13 @@
         resetKeyboard();
       };
       setInterval(() => {
-        if (token && !$("app").hidden) {
+        if (!$("app").hidden) {
           refresh();
           frame();
         }
       }, 500);
       setInterval(() => {
-        if (token && !$("app").hidden) checkHealth();
+        if (!$("app").hidden) checkHealth();
       }, 15000);
       connect();
     </script>

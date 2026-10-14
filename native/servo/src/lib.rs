@@ -1,9 +1,11 @@
 //! Local Servo automation with an engine boundary and an MCP adapter.
+pub mod account;
 pub mod automation;
 pub mod cli;
 pub mod dashboard;
 pub mod files;
 pub mod health;
+pub mod http_mcp;
 pub mod logging;
 pub mod mcp;
 pub mod native;

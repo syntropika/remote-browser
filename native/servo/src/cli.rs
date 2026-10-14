@@ -14,6 +14,18 @@ use rmcp::ServiceExt;
     about = "Experimental Servo automation MCP over stdio; no Docker or CDP"
 )]
 struct Args {
+    /// Optional loopback Streamable HTTP MCP listener sharing the stdio browser.
+    #[arg(long)]
+    mcp_http_port: Option<u16>,
+    /// Protected file holding the bearer required for HTTP MCP requests.
+    #[arg(long, env = "SERVO_MCP_HTTP_TOKEN_FILE")]
+    mcp_http_token_file: Option<PathBuf>,
+    /// Persistent dashboard account file, compatible with the existing application.
+    #[arg(long, env = "SERVO_DASHBOARD_ACCOUNT")]
+    dashboard_account: Option<PathBuf>,
+    /// Mark dashboard session cookies Secure when served behind HTTPS.
+    #[arg(long)]
+    dashboard_secure_cookie: bool,
     /// Local file workspace root; each embedded profile gets its own subdirectory.
     #[arg(long, env = "SERVO_FILES_ROOT")]
     files_root: Option<PathBuf>,
@@ -138,12 +150,39 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
         std::fs::create_dir_all(&root)?;
         config.files_root = Some(std::fs::canonicalize(root)?);
     }
+    let account = args.dashboard_account.or_else(|| {
+        catalog
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|parent| parent.join("dashboard-account.json"))
+    });
     let profiles =
         Profiles::with_catalog(config, Duration::from_secs(args.timeout_seconds), catalog)?;
     // Preserve the original startup handshake and fail early if the default browser is unavailable.
     profiles.browser(None).await?;
     let dashboard = if let Some(port) = args.dashboard_port {
-        Some(crate::dashboard::start(profiles.clone(), port).await?)
+        Some(
+            crate::dashboard::start(
+                profiles.clone(),
+                port,
+                account.ok_or_else(|| {
+                    Error::Invalid(
+                        "Dashboard requires --dashboard-account or a persistent profile catalog"
+                            .into(),
+                    )
+                })?,
+                args.dashboard_secure_cookie,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let http_mcp = if let Some(port) = args.mcp_http_port {
+        let file = args.mcp_http_token_file.ok_or_else(|| {
+            Error::Invalid("--mcp-http-port requires --mcp-http-token-file".into())
+        })?;
+        Some(crate::http_mcp::start(profiles.clone(), port, &file).await?)
     } else {
         None
     };
@@ -165,6 +204,9 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
     // Save embedded profiles on engine shutdown; external browsers keep running.
     if let Some(dashboard) = dashboard {
         dashboard.abort();
+    }
+    if let Some(http_mcp) = http_mcp {
+        http_mcp.abort();
     }
     profiles.close().await;
     result
