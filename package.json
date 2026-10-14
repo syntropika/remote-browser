@@ -11,6 +11,7 @@
   "type": "module",
   "scripts": {
     "build": "tsx scripts/build.ts",
+    "build:servo-ui": "tsx scripts/build-servo-ui.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.tools.json --noEmit",
     "start": "node dist/src/server.js",
     "test": "tsx --test test/*.test.ts",

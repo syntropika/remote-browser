@@ -411,8 +411,8 @@ client, enable the optional loopback Streamable HTTP listener:
   --mcp-http-token-file /path/to/private-mcp-bearer
 ```
 
-The token file must contain a 32–256 character bearer and be private to its owner
-on Unix. HTTP requests require `Authorization: Bearer <value>`; dashboard login
+An optional token file must contain a 32–256 character bearer and be private to its
+owner on Unix. It seeds an **Initial key** only when no registry exists. HTTP requests require `Authorization: Bearer <value>`; dashboard login
 cookies do not authorize MCP. The endpoint is `/mcp`, uses stateless JSON responses,
 validates Host and Origin, and limits request bodies to 64 KiB. The service calls
 the same automation handler and profile registry as stdio, so reservations and
@@ -420,4 +420,35 @@ human takeover are shared across both transports. Keep stdin open for the host
 lifetime. A reverse proxy must forward Accept, authorization and MCP protocol
 headers to the correct loopback listener and preserve response headers. Configure
 its external origin/peer policy explicitly. Existing gateways can retain their
-upstream bearer by putting that same secret in the protected token file.
+upstream bearer by putting that same secret in the protected token file on initial
+setup, or by reusing a compatible registry that already contains its hash.
+
+
+## API key management
+
+Sign in with the owner account, then open **More options → API keys**. The restored
+settings panel provides the MCP endpoint, named key creation, one-time secret
+display and copy, creation and last-use dates, and confirmed revocation. Leaving
+settings clears the displayed secret. The panel uses the same component and
+stylesheet as the original dashboard; run `npm run build:servo-ui` after changing
+that component to regenerate the committed JavaScript bundle before a Rust build.
+
+Only the owner session cookie can list, create or revoke keys. Automation bearers
+cannot manage keys or sign in. Mutations require the exact dashboard Origin. New
+keys have 256 random bits; only SHA-256 hashes and display metadata are stored in
+the private version-1 `api-keys.json` registry beside the owner account. Configure
+`--api-keys-file` or `SERVO_API_KEYS_FILE` to change this path. The schema accepts
+the original application's registry, so existing named keys can be retained. Use
+one registry owner process and retain the original as a backup during migration.
+
+Every HTTP MCP request checks the registry, including requests with an existing
+MCP session. Revocation rejects subsequent requests immediately; an action already
+accepted may finish. Other keys continue working. A revoked initial key is never
+reimported on restart, and a malformed registry fails closed. Last-use metadata
+writes are limited to once per minute per key; the displayed timestamp can lag
+within that interval. Up to 100 active keys are supported. The HTTP listener does
+not need a seed token when the owner manages keys through the dashboard.
+
+```sh
+python3 native/servo/tests/keys_smoke.py --engine-binary /path/to/remote-browser-servo-engine
+```

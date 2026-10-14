@@ -2,6 +2,7 @@
 use crate::{
     Result,
     account::{AuthError, Credentials, DashboardAuth},
+    api_keys::{ApiKeys, KeyError},
     health::HealthPolicy,
     profiles::Profiles,
 };
@@ -23,11 +24,15 @@ struct Host {
     token: String,
     origin: String,
     auth: Arc<DashboardAuth>,
+    keys: Arc<ApiKeys>,
 }
 type Reply = std::result::Result<Json<Value>, DashboardError>;
 async fn observe(request: Request, next: Next) -> Response {
     let op = match (request.method().as_str(), request.uri().path()) {
         ("POST", "/api/profiles") => "create_profile",
+        ("POST", "/api/keys/revoke") => "revoke_key",
+        ("POST", "/api/keys") => "create_key",
+        (_, "/api/keys") => "keys",
         (_, "/api/auth/status") => "auth_status",
         (_, "/api/auth/setup") => "auth_setup",
         (_, "/api/login") => "login",
@@ -171,6 +176,94 @@ async fn logout(
     );
     Ok(response)
 }
+// Key management requires the owner cookie, never an automation bearer.
+fn owner(
+    host: &Host,
+    headers: &HeaderMap,
+    mutation: bool,
+) -> std::result::Result<(), DashboardError> {
+    if !host.auth.authenticated(cookie(headers)) {
+        return Err(DashboardError(
+            StatusCode::UNAUTHORIZED,
+            "Sign in to manage API keys.".into(),
+        ));
+    }
+    if mutation || headers.get("origin").is_some() {
+        same_origin(host, headers)?;
+    }
+    Ok(())
+}
+fn key_failure(error: KeyError) -> DashboardError {
+    DashboardError(StatusCode::from_u16(error.0).unwrap(), error.1.into())
+}
+async fn list_keys(State(host): State<Host>, headers: HeaderMap) -> Reply {
+    owner(&host, &headers, false)?;
+    let keys = host.keys.clone();
+    let keys = tokio::task::spawn_blocking(move || keys.list())
+        .await
+        .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+        .map_err(key_failure)?;
+    owner(&host, &headers, false)?;
+    Ok(Json(json!({"keys":keys})))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewKey {
+    name: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeKey {
+    id: String,
+}
+async fn create_key(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<NewKey>,
+) -> std::result::Result<Response, DashboardError> {
+    owner(&host, &headers, true)?;
+    let cookie = cookie(&headers).unwrap().to_owned();
+    let value = tokio::task::spawn_blocking(move || {
+        host.keys.create(&input.name, || {
+            if host.auth.authenticated(Some(&cookie)) {
+                Ok(())
+            } else {
+                Err(KeyError(401, "Session expired. Sign in again."))
+            }
+        })
+    })
+    .await
+    .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+    .map_err(key_failure)?;
+    Ok((StatusCode::CREATED, Json(value)).into_response())
+}
+async fn revoke_key(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<RevokeKey>,
+) -> Reply {
+    owner(&host, &headers, true)?;
+    let cookie = cookie(&headers).unwrap().to_owned();
+    tokio::task::spawn_blocking(move || {
+        host.keys.revoke(&input.id, || {
+            if host.auth.authenticated(Some(&cookie)) {
+                Ok(())
+            } else {
+                Err(KeyError(401, "Session expired. Sign in again."))
+            }
+        })
+    })
+    .await
+    .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+    .map_err(key_failure)?;
+    Ok(Json(json!({"revoked":true})))
+}
+async fn keys_script() -> impl IntoResponse {
+    (
+        [("content-type", "text/javascript; charset=utf-8")],
+        include_str!("../ui/api-keys.js"),
+    )
+}
 fn failure(error: impl ToString) -> DashboardError {
     DashboardError(StatusCode::CONFLICT, error.to_string())
 }
@@ -241,7 +334,7 @@ async fn index() -> impl IntoResponse {
     headers.insert("cache-control", "no-store".parse().unwrap());
     headers.insert("referrer-policy", "no-referrer".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert("content-security-policy","default-src 'none'; script-src 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
+    headers.insert("content-security-policy","default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
     response
 }
 async fn styles() -> impl IntoResponse {
@@ -262,6 +355,7 @@ pub async fn start(
     port: u16,
     account: PathBuf,
     secure_cookie: bool,
+    keys: Arc<ApiKeys>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let address = listener.local_addr()?;
@@ -270,6 +364,7 @@ pub async fn start(
     eprintln!("Servo dashboard: {origin}/#token={token}");
     let host = Host {
         auth: Arc::new(DashboardAuth::new(account, secure_cookie)),
+        keys,
         profiles,
         token,
         origin,
@@ -277,6 +372,17 @@ pub async fn start(
     let app = Router::new()
         .route("/", get(index))
         .route("/styles.css", get(styles))
+        .route("/api-keys.js", get(keys_script))
+        .route(
+            "/api/keys",
+            get(list_keys)
+                .post(create_key)
+                .layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/keys/revoke",
+            post(revoke_key).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/api/auth/status", get(auth_status))
         .route(
             "/api/auth/setup",
@@ -322,6 +428,13 @@ mod tests {
                 std::env::temp_dir().join("servo-auth-test.json"),
                 false,
             )),
+            keys: Arc::new(
+                ApiKeys::new(
+                    std::env::temp_dir().join(format!("servo-keys-{}.json", uuid::Uuid::new_v4())),
+                    None,
+                )
+                .unwrap(),
+            ),
             profiles,
             token: "test-token".into(),
             origin: "http://127.0.0.1:8000".into(),

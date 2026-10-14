@@ -4,10 +4,16 @@ import { uiFailure } from "./api.js";
 import type { ApiKeyMetadata, UiOptions } from "./contracts.js";
 import { element as domElement } from "./dom.js";
 
-export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
+export function createApiKeys({
+  api,
+  onOpen,
+  onUnauthorized,
+  workspace: suppliedWorkspace,
+  backgroundSelector = ".toolbar, .browser-shell, .bottom-stack, .tabs-panel, .notice, .session-footer, .recording-indicator",
+}: UiOptions & { workspace?: HTMLElement; backgroundSelector?: string }) {
   const byId = domElement;
   const panel = byId("api-keys-panel");
-  const workspace = byId("workspace");
+  const workspace = suppliedWorkspace || byId("workspace");
   const form = byId("api-key-form");
   const nameInput = byId("api-key-name");
   const createButton = byId("api-key-create");
@@ -57,9 +63,7 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
 
   // Keep the display's geometry intact while removing browser controls from focus.
   function setBackgroundInactive(value: boolean) {
-    for (const element of workspace.querySelectorAll<HTMLElement>(
-      ".toolbar, .browser-shell, .bottom-stack, .tabs-panel, .notice, .session-footer, .recording-indicator",
-    )) {
+    for (const element of workspace.querySelectorAll<HTMLElement>(backgroundSelector)) {
       element.inert = value;
     }
   }

@@ -320,6 +320,14 @@
                   <p id="health" role="status">Session health not configured</p>
                 </div>
                 <div class="menu-separator" role="separator"></div>
+                <button
+                  class="button button-quiet"
+                  id="api-keys-button"
+                  type="button"
+                  aria-controls="api-keys-panel"
+                >
+                  <svg class="icon" aria-hidden="true"><use href="#icon-key" /></svg>API keys
+                </button>
                 <button class="button button-quiet" id="files-open" type="button">
                   <svg class="icon" aria-hidden="true">
                     <use href="#icon-files" /></svg
@@ -437,6 +445,117 @@
           <svg class="icon" aria-hidden="true"><use href="#icon-enter" /></svg>
         </button>
       </form>
+      <section class="settings-panel" id="api-keys-panel" aria-labelledby="api-keys-title" hidden>
+        <div class="settings-content">
+          <button class="button button-quiet settings-back" id="api-keys-close" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#icon-back" /></svg>Back to browser
+          </button>
+          <header class="settings-heading">
+            <h1 id="api-keys-title" tabindex="-1">API keys</h1>
+            <p>
+              Connect your agents to this browser. Create a separate key for each client so you can
+              revoke access individually.
+            </p>
+          </header>
+
+          <section class="mcp-connection" aria-labelledby="mcp-connection-title">
+            <h2 id="mcp-connection-title">Connect over MCP</h2>
+            <label for="mcp-endpoint">Server URL</label>
+            <div class="copy-field">
+              <input
+                id="mcp-endpoint"
+                type="text"
+                readonly
+                spellcheck="false"
+                autocomplete="off"
+              /><button
+                class="button button-secondary"
+                id="mcp-endpoint-copy"
+                type="button"
+                aria-label="Copy MCP server URL"
+              >
+                Copy
+              </button>
+            </div>
+            <p class="field-note">
+              Use Streamable HTTP with the header
+              <code>Authorization: Bearer &lt;API_KEY&gt;</code>. Each key grants access to the
+              browser profiles and their signed-in websites.
+            </p>
+          </section>
+
+          <section class="key-creation" aria-labelledby="key-creation-title">
+            <h2 id="key-creation-title">Create a key</h2>
+            <form id="api-key-form">
+              <label for="api-key-name">Key name</label>
+              <div class="key-create-fields">
+                <input
+                  id="api-key-name"
+                  name="name"
+                  type="text"
+                  maxlength="64"
+                  required
+                  autocomplete="off"
+                  placeholder="e.g. Work laptop"
+                /><button class="button button-primary" id="api-key-create" type="submit">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-plus" /></svg>Create key
+                </button>
+              </div>
+            </form>
+            <div class="created-key" id="api-key-created" hidden>
+              <h3 id="api-key-created-title">Your key is ready</h3>
+              <p>Copy this key now. You won't be able to view it again.</p>
+              <label class="visually-hidden" for="api-key-secret">New API key</label>
+              <div class="copy-field">
+                <input
+                  id="api-key-secret"
+                  type="text"
+                  readonly
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-describedby="api-key-created-title"
+                /><button
+                  class="button button-secondary"
+                  id="api-key-copy"
+                  type="button"
+                  aria-label="Copy new API key"
+                >
+                  Copy
+                </button>
+              </div>
+              <button class="button button-quiet" id="api-key-dismiss" type="button">
+                I've saved this key
+              </button>
+            </div>
+          </section>
+
+          <p class="form-error" id="api-keys-error" role="alert" hidden></p>
+          <p class="key-feedback" id="api-keys-status" role="status" hidden></p>
+
+          <section class="key-management" aria-labelledby="api-keys-list-title">
+            <header class="panel-heading">
+              <h2 id="api-keys-list-title">Active keys <span id="api-keys-count"></span></h2>
+              <button
+                class="button button-quiet icon-button"
+                id="api-keys-refresh"
+                type="button"
+                aria-label="Refresh API keys"
+                title="Refresh keys"
+              >
+                <svg class="icon" aria-hidden="true"><use href="#icon-reload" /></svg>
+              </button>
+            </header>
+            <p class="field-note" id="api-keys-loading" role="status" hidden>Loading keys…</p>
+            <p class="keys-empty" id="api-keys-empty" hidden>
+              No active keys. Create one above to connect your first agent.
+            </p>
+            <ul class="api-keys-list" id="api-keys-list"></ul>
+            <p class="field-note key-revoke-note">
+              Revoking a key stops new requests immediately. An action already running may finish.
+            </p>
+          </section>
+        </div>
+      </section>
     </main>
     <dialog id="new-profile" aria-labelledby="profile-title">
       <form id="profile-form">
@@ -523,6 +642,7 @@
         </form>
       </details>
     </dialog>
+    <script src="api-keys.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
@@ -559,7 +679,9 @@
         if (!response.ok) {
           if (response.status === 401 && !["/api/login", "/api/auth/setup"].includes(path))
             showLogin();
-          throw Error(value.error || "Request failed");
+          const error = Error(value.error || "Request failed");
+          error.statusCode = response.status;
+          throw error;
         }
         return value;
       }
@@ -744,7 +866,8 @@
           if (
             current()?.filePicker &&
             !$("files-dialog").open &&
-            !document.querySelector("dialog[open]")
+            !document.querySelector("dialog[open]") &&
+            $("api-keys-panel").hidden
           )
             await openFiles();
         } catch (error) {
@@ -1047,7 +1170,16 @@
       for (const button of document.querySelectorAll("[data-dismiss]"))
         button.onclick = () => button.closest("dialog").close();
       let setupRequired = false;
+      const apiKeys = window.createServoApiKeys({
+        api,
+        onOpen: () => {
+          hidePanels();
+          $("more-menu").open = false;
+        },
+        onUnauthorized: () => showLogin(),
+      });
       function showLogin() {
+        apiKeys.reset();
         token = "";
         epoch++;
         for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
@@ -1462,7 +1594,7 @@
         resetKeyboard();
       };
       setInterval(() => {
-        if (!$("app").hidden) {
+        if (!$("app").hidden && $("api-keys-panel").hidden) {
           refresh();
           frame();
         }

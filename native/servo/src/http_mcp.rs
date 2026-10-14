@@ -1,5 +1,5 @@
 //! Optional authenticated HTTP adapter over the same profiles as stdio and the dashboard.
-use crate::{Error, Result, mcp::ServoMcp, profiles::Profiles};
+use crate::{Error, Result, api_keys::ApiKeys, mcp::ServoMcp, profiles::Profiles};
 use axum::{
     Router,
     extract::{Request, State},
@@ -11,23 +11,26 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use std::{io::Read, path::Path, sync::Arc};
-use subtle::ConstantTimeEq;
 
-async fn authorize(State(token): State<Arc<String>>, request: Request, next: Next) -> Response {
+async fn authorize(State(keys): State<Arc<ApiKeys>>, request: Request, next: Next) -> Response {
     let supplied = request
         .headers()
         .get("authorization")
         .and_then(|header| header.to_str().ok())
         .and_then(|header| header.strip_prefix("Bearer "))
         .unwrap_or("");
-    if !bool::from(token.as_bytes().ct_eq(supplied.as_bytes())) {
+    let supplied = supplied.to_owned();
+    let allowed = tokio::task::spawn_blocking(move || keys.authenticate(&supplied)).await;
+    let status = match allowed {
+        Ok(Ok(true)) => None,
+        Ok(Ok(false)) => Some(StatusCode::UNAUTHORIZED),
+        _ => Some(StatusCode::SERVICE_UNAVAILABLE),
+    };
+    if let Some(status) = status {
         return (
-            StatusCode::UNAUTHORIZED,
-            [
-                ("www-authenticate", "Bearer realm=\"servo-mcp\""),
-                ("cache-control", "no-store"),
-            ],
-            "MCP authorization required",
+            status,
+            [("cache-control", "no-store")],
+            "MCP authorization unavailable or invalid",
         )
             .into_response();
     }
@@ -48,7 +51,7 @@ async fn authorize(State(token): State<Arc<String>>, request: Request, next: Nex
         .insert("x-request-id", log.context.trace_id.parse().unwrap());
     response
 }
-fn token(path: &Path) -> Result<String> {
+pub fn token(path: &Path) -> Result<String> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -87,9 +90,8 @@ fn token(path: &Path) -> Result<String> {
 pub async fn start(
     profiles: Profiles,
     port: u16,
-    token_file: &Path,
+    keys: Arc<ApiKeys>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let token = Arc::new(token(token_file)?);
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let address = listener.local_addr()?;
     let config = StreamableHttpServerConfig::default()
@@ -109,7 +111,7 @@ pub async fn start(
     );
     let app = Router::new()
         .route_service("/mcp", service)
-        .layer(middleware::from_fn_with_state(token, authorize));
+        .layer(middleware::from_fn_with_state(keys, authorize));
     Ok(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     }))

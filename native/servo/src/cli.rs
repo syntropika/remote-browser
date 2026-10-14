@@ -14,6 +14,9 @@ use rmcp::ServiceExt;
     about = "Experimental Servo automation MCP over stdio; no Docker or CDP"
 )]
 struct Args {
+    /// Protected API key registry shared by dashboard management and HTTP MCP.
+    #[arg(long, env = "SERVO_API_KEYS_FILE")]
+    api_keys_file: Option<PathBuf>,
     /// Optional loopback Streamable HTTP MCP listener sharing the stdio browser.
     #[arg(long)]
     mcp_http_port: Option<u16>,
@@ -156,6 +159,31 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
             .and_then(|path| path.parent())
             .map(|parent| parent.join("dashboard-account.json"))
     });
+    let keys = if args.dashboard_port.is_some() || args.mcp_http_port.is_some() {
+        let path = args
+            .api_keys_file
+            .or_else(|| {
+                account
+                    .as_ref()
+                    .or(args.mcp_http_token_file.as_ref())
+                    .and_then(|path| path.parent())
+                    .map(|parent| parent.join("api-keys.json"))
+            })
+            .ok_or_else(|| {
+                Error::Invalid("Dashboard or HTTP MCP requires a persistent --api-keys-file".into())
+            })?;
+        let seed = args
+            .mcp_http_token_file
+            .as_deref()
+            .map(crate::http_mcp::token)
+            .transpose()?;
+        Some(std::sync::Arc::new(
+            crate::api_keys::ApiKeys::new(path, seed)
+                .map_err(|error| Error::Invalid(error.1.into()))?,
+        ))
+    } else {
+        None
+    };
     let profiles =
         Profiles::with_catalog(config, Duration::from_secs(args.timeout_seconds), catalog)?;
     // Preserve the original startup handshake and fail early if the default browser is unavailable.
@@ -172,6 +200,7 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
                     )
                 })?,
                 args.dashboard_secure_cookie,
+                keys.as_ref().unwrap().clone(),
             )
             .await?,
         )
@@ -179,10 +208,7 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
         None
     };
     let http_mcp = if let Some(port) = args.mcp_http_port {
-        let file = args.mcp_http_token_file.ok_or_else(|| {
-            Error::Invalid("--mcp-http-port requires --mcp-http-token-file".into())
-        })?;
-        Some(crate::http_mcp::start(profiles.clone(), port, &file).await?)
+        Some(crate::http_mcp::start(profiles.clone(), port, keys.unwrap()).await?)
     } else {
         None
     };

@@ -6,7 +6,8 @@ import core from "ultracite/oxlint/core";
 export default defineConfig({
   extends: [core],
   jsPlugins: antiSlop.jsPlugins,
-  ignorePatterns: core.ignorePatterns,
+  // The committed native bundle is generated from the checked UI sources.
+  ignorePatterns: [...core.ignorePatterns, "native/servo/ui/api-keys.js"],
   options: { typeAware: true },
   rules: {
     "func-style": "off",

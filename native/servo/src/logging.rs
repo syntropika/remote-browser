@@ -282,6 +282,9 @@ fn operation(value: &str) -> &'static str {
         "renew" => "renew",
         "release" => "release",
         "shutdown" => "shutdown",
+        "keys" => "keys",
+        "create_key" => "create_key",
+        "revoke_key" => "revoke_key",
         "http_mcp" => "http_mcp",
         "auth_status" => "auth_status",
         "auth_setup" => "auth_setup",
@@ -310,6 +313,8 @@ fn normal_level(op: &str) -> Level {
             | "login"
             | "logout"
             | "auth_setup"
+            | "create_key"
+            | "revoke_key"
             | "browser_navigate"
             | "browser_click"
             | "browser_fill"

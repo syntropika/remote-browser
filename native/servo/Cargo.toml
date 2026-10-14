@@ -10,6 +10,8 @@ description = "Experimental Servo automation API and local MCP server"
 axum = "0.8.8"
 fs2 = "0.4"
 libc = "0.2"
+sha2 = "0.10"
+getrandom = "0.4"
 scrypt = { version = "0.11", default-features = false }
 subtle = "2.6"
 unicode-normalization = "0.1"
