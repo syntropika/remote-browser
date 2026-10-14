@@ -8,10 +8,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DOWNLOAD_LIMIT: usize = 8 * 1024 * 1024;
+pub const DOWNLOAD_LIMIT: usize = 20 * 1024 * 1024;
 pub const UPLOAD_LIMIT: u64 = 64 * 1024 * 1024;
 const FILE_LIMIT: usize = 200;
 
+#[derive(Clone)]
 pub struct Files {
     root: PathBuf,
 }
@@ -21,6 +22,8 @@ pub struct LocalFile {
     pub id: String,
     pub path: PathBuf,
     pub bytes: u64,
+    pub created_at: String,
+    pub mime_type: String,
 }
 fn invalid(message: &str) -> Error {
     Error::Invalid(message.into())
@@ -45,7 +48,7 @@ impl Files {
     pub fn new(root: &Path) -> Result<Self> {
         private_directory(root)?;
         let root = fs::canonicalize(root)?;
-        for bucket in ["downloads", "uploads"] {
+        for bucket in ["downloads", "uploads", "captures", "recordings"] {
             private_directory(&root.join(bucket))?;
         }
         Ok(Self { root })
@@ -57,7 +60,7 @@ impl Files {
         let (bucket, name) = id
             .split_once('/')
             .ok_or_else(|| invalid("Use a file ID from the workspace listing"))?;
-        if !matches!(bucket, "downloads" | "uploads") {
+        if !matches!(bucket, "downloads" | "uploads" | "captures" | "recordings") {
             return Err(invalid("Unknown file folder"));
         }
         validate_name(name)?;
@@ -82,7 +85,7 @@ impl Files {
     }
     pub fn list(&self) -> Result<Vec<LocalFile>> {
         let mut files = Vec::new();
-        for bucket in ["downloads", "uploads"] {
+        for bucket in ["downloads", "uploads", "captures", "recordings"] {
             // Validate the folder before opening it, including empty folders.
             self.path(&format!("{bucket}/check"))?;
             for entry in fs::read_dir(self.root.join(bucket))?.take(FILE_LIMIT + 1) {
@@ -95,13 +98,15 @@ impl Files {
                     id: format!("{bucket}/{name}"),
                     path: entry.path(),
                     bytes: entry.metadata()?.len(),
+                    created_at: created_at(&entry.metadata()?),
+                    mime_type: mime_type(&name).into(),
                 });
             }
         }
         files.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(files)
     }
-    fn create(&self, id: &str) -> Result<File> {
+    pub fn create(&self, id: &str) -> Result<File> {
         let path = self.path(id)?;
         if fs::read_dir(path.parent().unwrap())?
             .take(FILE_LIMIT)
@@ -122,11 +127,14 @@ impl Files {
         Ok(options.open(path)?)
     }
     pub fn save_download(&self, name: &str, bytes: &[u8]) -> Result<LocalFile> {
+        self.save("downloads", name, bytes)
+    }
+    pub fn save(&self, bucket: &str, name: &str, bytes: &[u8]) -> Result<LocalFile> {
         validate_name(name)?;
         if bytes.len() > DOWNLOAD_LIMIT {
-            return Err(invalid("Download exceeds 8 MiB"));
+            return Err(invalid("Download exceeds 20 MiB"));
         }
-        let id = format!("downloads/{name}");
+        let id = format!("{bucket}/{name}");
         let mut file = self.create(&id)?;
         if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
             let _ = fs::remove_file(self.path(&id)?);
@@ -136,10 +144,55 @@ impl Files {
             path: self.path(&id)?,
             id,
             bytes: bytes.len() as u64,
+            created_at: created_at(&file.metadata()?),
+            mime_type: mime_type(name).into(),
         })
+    }
+    pub fn publish(&self, bucket: &str, name: &str, source: &Path) -> Result<LocalFile> {
+        validate_name(name)?;
+        let metadata = fs::symlink_metadata(source)?;
+        if !metadata.file_type().is_file() || metadata.len() > UPLOAD_LIMIT {
+            return Err(invalid("Media exceeds 64 MiB or is not a regular file"));
+        }
+        let id = format!("{bucket}/{name}");
+        let mut output = self.create(&id)?;
+        let result = (|| {
+            let mut input = OpenOptions::new()
+                .read(true)
+                .open(source)?
+                .take(UPLOAD_LIMIT + 1);
+            let bytes = std::io::copy(&mut input, &mut output)?;
+            if bytes > UPLOAD_LIMIT {
+                return Err(invalid("Media exceeds 64 MiB"));
+            }
+            output.sync_all()?;
+            Ok(LocalFile {
+                id: id.clone(),
+                path: self.path(&id)?,
+                bytes,
+                created_at: created_at(&output.metadata()?),
+                mime_type: mime_type(name).into(),
+            })
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(self.path(&id)?);
+        }
+        result
     }
     /// Stage a bounded chunk. Offsets prevent accidental overwrites and interleaving.
     pub fn stage(&self, name: &str, offset: u64, encoded: &str) -> Result<LocalFile> {
+        self.stage_bucket("uploads", name, offset, encoded)
+    }
+    pub fn stage_bucket(
+        &self,
+        bucket: &str,
+        name: &str,
+        offset: u64,
+        encoded: &str,
+    ) -> Result<LocalFile> {
+        if !matches!(bucket, "uploads" | "downloads") {
+            return Err(invalid("Invalid staging folder"));
+        }
         validate_name(name)?;
         if encoded.len() > 44000 {
             return Err(invalid("Stage at most 32 KiB per chunk"));
@@ -150,7 +203,7 @@ impl Files {
         if bytes.len() > 32768 || offset.saturating_add(bytes.len() as u64) > UPLOAD_LIMIT {
             return Err(invalid("File exceeds staging limits"));
         }
-        let id = format!("uploads/{name}");
+        let id = format!("{bucket}/{name}");
         let mut file = if offset == 0 {
             self.create(&id)?
         } else {
@@ -175,6 +228,8 @@ impl Files {
             path: self.path(&id)?,
             id,
             bytes: offset + bytes.len() as u64,
+            created_at: created_at(&file.metadata()?),
+            mime_type: mime_type(name).into(),
         })
     }
     pub fn read_chunk(&self, id: &str, offset: u64) -> Result<(String, u64)> {
@@ -215,6 +270,31 @@ fn private_directory(path: &Path) -> Result<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+fn created_at(meta: &std::fs::Metadata) -> String {
+    chrono::DateTime::<chrono::Utc>::from(
+        meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+    )
+    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+fn mime_type(name: &str) -> &'static str {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        _ => "application/octet-stream",
+    }
 }
 
 #[cfg(test)]

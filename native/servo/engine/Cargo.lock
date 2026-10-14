@@ -5111,13 +5111,18 @@ dependencies = [
  "base64 0.23.1",
  "dpi",
  "fs2",
+ "http",
  "image",
+ "percent-encoding",
  "remote-browser-servo",
  "serde",
  "serde_json",
  "servo",
  "servo-base",
+ "servo-net",
+ "servo-net-traits",
  "url",
+ "uuid",
  "webdriver",
 ]
 
@@ -6594,8 +6599,6 @@ dependencies = [
 [[package]]
 name = "servo-net"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98af1ef87ba1355f3fae135c4b4ff26b52b75bf5eea1802751ecf3ba5ce65f15"
 dependencies = [
  "async-compression",
  "async-recursion",

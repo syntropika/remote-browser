@@ -13,6 +13,8 @@ use crate::{Error, Result};
 #[serde(rename_all = "camelCase")]
 pub struct ReservationInfo {
     pub task: String,
+    #[serde(default)]
+    pub agent_name: String,
     pub expires_at: u64,
 }
 
@@ -22,12 +24,15 @@ pub struct Lease {
     pub tab_id: String,
     pub lease_id: String,
     pub task: String,
+    #[serde(default)]
+    pub agent_name: String,
     pub ttl_ms: u64,
     pub expires_at: u64,
 }
 
 struct Entry {
     token: String,
+    client: String,
     info: ReservationInfo,
     deadline: Instant,
 }
@@ -48,9 +53,18 @@ impl Reservations {
     }
 
     pub fn check(&mut self, tab: &str, token: Option<&str>, now: Instant) -> Result<()> {
+        self.check_for(tab, token, "stdio", now)
+    }
+    pub fn check_for(
+        &mut self,
+        tab: &str,
+        token: Option<&str>,
+        client: &str,
+        now: Instant,
+    ) -> Result<()> {
         self.prune(now);
         match (self.entries.get(tab), token) {
-            (Some(entry), Some(token)) if entry.token == token => Ok(()),
+            (Some(entry), Some(token)) if entry.token == token && entry.client == client => Ok(()),
             (Some(_), _) => Err(Error::Invalid(
                 "This tab is reserved; supply its matching leaseId".into(),
             )),
@@ -62,19 +76,50 @@ impl Reservations {
     }
 
     pub fn reserve(&mut self, tab: &str, task: &str, ttl_ms: u64, now: Instant) -> Result<Lease> {
-        self.check(tab, None, now)?;
+        self.reserve_for(tab, task, ttl_ms, "stdio", now)
+    }
+    pub fn reserve_for(
+        &mut self,
+        tab: &str,
+        task: &str,
+        ttl_ms: u64,
+        client: &str,
+        now: Instant,
+    ) -> Result<Lease> {
+        self.reserve_named_for(tab, task, task, ttl_ms, client, now)
+    }
+    pub fn reserve_named_for(
+        &mut self,
+        tab: &str,
+        task: &str,
+        agent_name: &str,
+        ttl_ms: u64,
+        client: &str,
+        now: Instant,
+    ) -> Result<Lease> {
+        self.check_for(tab, None, client, now)?;
+        if agent_name.trim().is_empty()
+            || agent_name.chars().count() > 120
+            || agent_name.chars().any(char::is_control)
+        {
+            return Err(Error::Invalid(
+                "agentName must contain 1 to 120 characters without controls".into(),
+            ));
+        }
         if task.trim().is_empty() || task.chars().count() > 120 {
             return Err(Error::Invalid(
                 "Task must contain 1 to 120 characters".into(),
             ));
         }
-        let lease = lease(tab, task, Uuid::new_v4().to_string(), ttl_ms)?;
+        let lease = lease(tab, task, agent_name, Uuid::new_v4().to_string(), ttl_ms)?;
         self.entries.insert(
             tab.into(),
             Entry {
                 token: lease.lease_id.clone(),
+                client: client.into(),
                 info: ReservationInfo {
                     task: lease.task.clone(),
+                    agent_name: lease.agent_name.clone(),
                     expires_at: lease.expires_at,
                 },
                 deadline: now + Duration::from_millis(ttl_ms),
@@ -84,19 +129,44 @@ impl Reservations {
     }
 
     pub fn renew(&mut self, tab: &str, token: &str, ttl_ms: u64, now: Instant) -> Result<Lease> {
-        self.check(tab, Some(token), now)?;
+        self.renew_for(tab, token, ttl_ms, "stdio", now)
+    }
+    pub fn renew_for(
+        &mut self,
+        tab: &str,
+        token: &str,
+        ttl_ms: u64,
+        client: &str,
+        now: Instant,
+    ) -> Result<Lease> {
+        self.check_for(tab, Some(token), client, now)?;
         let entry = self
             .entries
             .get_mut(tab)
             .ok_or_else(|| Error::Invalid("Missing reservation".into()))?;
-        let lease = lease(tab, &entry.info.task, entry.token.clone(), ttl_ms)?;
+        let lease = lease(
+            tab,
+            &entry.info.task,
+            &entry.info.agent_name,
+            entry.token.clone(),
+            ttl_ms,
+        )?;
         entry.deadline = now + Duration::from_millis(ttl_ms);
         entry.info.expires_at = lease.expires_at;
         Ok(lease)
     }
 
     pub fn release(&mut self, tab: &str, token: &str, now: Instant) -> Result<()> {
-        self.check(tab, Some(token), now)?;
+        self.release_for(tab, token, "stdio", now)
+    }
+    pub fn release_for(
+        &mut self,
+        tab: &str,
+        token: &str,
+        client: &str,
+        now: Instant,
+    ) -> Result<()> {
+        self.check_for(tab, Some(token), client, now)?;
         self.entries.remove(tab);
         Ok(())
     }
@@ -106,7 +176,7 @@ impl Reservations {
     }
 }
 
-fn lease(tab: &str, task: &str, token: String, ttl_ms: u64) -> Result<Lease> {
+fn lease(tab: &str, task: &str, agent_name: &str, token: String, ttl_ms: u64) -> Result<Lease> {
     if !(1000..=300_000).contains(&ttl_ms) {
         return Err(Error::Invalid(
             "ttlMs must be between 1000 and 300000".into(),
@@ -120,6 +190,7 @@ fn lease(tab: &str, task: &str, token: String, ttl_ms: u64) -> Result<Lease> {
         tab_id: tab.into(),
         lease_id: token,
         task: task.trim().into(),
+        agent_name: agent_name.trim().into(),
         ttl_ms,
         expires_at: now_ms + ttl_ms,
     })
@@ -129,6 +200,34 @@ fn lease(tab: &str, task: &str, token: String, ttl_ms: u64) -> Result<Lease> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn copied_tokens_do_not_authorize_another_client() {
+        let mut registry = Reservations::default();
+        let now = Instant::now();
+        let lease = registry
+            .reserve_for("tab", "work", 1000, "key-a", now)
+            .unwrap();
+        assert!(
+            registry
+                .check_for("tab", Some(&lease.lease_id), "key-a", now)
+                .is_ok()
+        );
+        assert!(
+            registry
+                .check_for("tab", Some(&lease.lease_id), "key-b", now)
+                .is_err()
+        );
+        assert!(
+            registry
+                .renew_for("tab", &lease.lease_id, 1000, "key-b", now)
+                .is_err()
+        );
+        assert!(
+            registry
+                .release_for("tab", &lease.lease_id, "key-b", now)
+                .is_err()
+        );
+    }
     #[test]
     fn tasks_need_matching_tokens_and_listing_does_not_expose_them() {
         let mut registry = Reservations::default();

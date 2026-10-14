@@ -37,12 +37,12 @@ def run(binary):
             http.request('initialize',init,authorized=False,expected=401)
             http.request('initialize',init,origin='https://foreign.example',expected=403)
             assert 'result' in http.request('initialize',init)
-            assert len(http.request('tools/list',{})['result']['tools'])==15
+            assert len(http.request('tools/list',{})['result']['tools'])==16
             tab=stdio.call('browser_tabs',{'action':'open'})['tabId']
             assert any(t['id']==tab for t in http.call('browser_tabs',{'action':'list'})['tabs'])
-            lease=http.call('browser_tabs',{'action':'reserve','tabId':tab,'task':'shared HTTP lease'})['leaseId']
+            lease=http.call('browser_tabs',{'action':'reserve','agentName':'Test agent','tabId':tab,'task':'shared HTTP lease'})['leaseId']
             stdio.call('browser_evaluate',{'tabId':tab,'script':'return 42;'},expect_error=True)
-            assert stdio.call('browser_evaluate',{'tabId':tab,'leaseId':lease,'script':'return 42;'})['value']==42
+            stdio.call('browser_evaluate',{'tabId':tab,'leaseId':lease,'script':'return 42;'},expect_error=True)
             assert http.call('browser_evaluate',{'tabId':tab,'leaseId':lease,'script':'return 84;'})['value']==84
             dashboard.action('take',tab)
             http.call('browser_evaluate',{'tabId':tab,'leaseId':lease,'script':'return 42;'},error=True)

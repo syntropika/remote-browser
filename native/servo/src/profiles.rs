@@ -147,6 +147,7 @@ impl Profiles {
     }
     pub async fn browser(&self, id: Option<&str>) -> Result<Automation> {
         let id = id.unwrap_or(&self.default_id);
+        crate::identity::check_profile(id)?;
         let entry = self.entries.read().await.get(id).cloned().ok_or_else(|| {
             Error::Invalid("Unknown profileId; list browser_profiles first".into())
         })?;
@@ -188,7 +189,7 @@ impl Profiles {
                     })
             })
             .await?;
-        Ok(browser.clone())
+        Ok(browser.clone().with_profile(id))
     }
     pub async fn list(&self) -> Vec<ProfileInfo> {
         let mut profiles: Vec<_> = self
@@ -196,6 +197,7 @@ impl Profiles {
             .read()
             .await
             .iter()
+            .filter(|(id, _)| crate::identity::check_profile(id).is_ok())
             .map(|(id, entry)| {
                 let native = entry.definition.data_directory.is_some();
                 ProfileInfo {
@@ -213,6 +215,7 @@ impl Profiles {
         profiles
     }
     pub async fn create(&self, name: &str) -> Result<ProfileInfo> {
+        crate::identity::owner()?;
         let catalog = self.catalog.as_deref().ok_or_else(|| {
             Error::Invalid("Profile creation requires a persistent profiles catalog".into())
         })?;
@@ -270,6 +273,7 @@ impl Profiles {
         })
     }
     pub async fn policies(&self, id: &str) -> Result<Vec<crate::health::HealthPolicy>> {
+        crate::identity::check_profile(id)?;
         self.config
             .lock()
             .await
@@ -280,6 +284,7 @@ impl Profiles {
             .ok_or_else(|| Error::Invalid("Unknown profileId".into()))
     }
     pub async fn save_policy(&self, id: &str, policy: crate::health::HealthPolicy) -> Result<()> {
+        crate::identity::check_profile(id)?;
         policy.validate()?;
         let catalog = self.catalog.as_deref().ok_or_else(|| {
             Error::Invalid("Service policies require a persistent profiles catalog".into())

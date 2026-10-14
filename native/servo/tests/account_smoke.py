@@ -33,13 +33,13 @@ def run(binary):
         try:
             html=urllib.request.urlopen(browser.origin).read().decode()
             assert 'id="username"' in html and 'id="password"' in html and 'Access token' not in html
-            assert browser.api('/api/auth/status')[0]=={'configured':False,'authenticated':False}
+            assert browser.api('/api/auth/status')[0]=={'configured':False,'authenticated':False,'owner':False}
             browser.api('/api/profiles',expected=401)
             browser.api('/api/auth/setup',credentials,403,origin=False)
             browser.api('/api/auth/setup',credentials,403,origin='https://foreign.example')
             _,headers=browser.api('/api/auth/setup',credentials,201)
             cookie=headers.get('Set-Cookie');assert 'HttpOnly; SameSite=Strict; Path=/' in cookie and 'Max-Age=28800' in cookie
-            assert browser.api('/api/auth/status')[0]=={'configured':True,'authenticated':True}
+            assert browser.api('/api/auth/status')[0]=={'configured':True,'authenticated':True,'owner':True}
             assert browser.api('/api/profiles')[0]['profiles']
             action={'profileId':'default','op':'files','args':{}}
             browser.api('/api/action',action,403,origin=False)
@@ -55,7 +55,7 @@ def run(binary):
         assert secret not in ''.join(runtime.logs) and cookie.split(';')[0].split('=')[1] not in ''.join(runtime.logs)
         runtime=Runtime(binary,root/'browser');browser=Browser(runtime.url.split('/#token=')[0])
         try:
-            assert browser.api('/api/auth/status')[0]=={'configured':True,'authenticated':False}
+            assert browser.api('/api/auth/status')[0]=={'configured':True,'authenticated':False,'owner':False}
             browser.api('/api/login',credentials)
             assert hashlib.sha256(record.read_bytes()).hexdigest()==digest
         finally:runtime.stop()

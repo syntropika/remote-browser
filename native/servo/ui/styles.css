@@ -44,7 +44,8 @@
 .servo-workspace .panel-heading {
   margin-bottom: 12px;
 }
-.profiles-panel select {
+.profiles-panel select,
+.key-profile-permissions select {
   display: block;
   width: 100%;
   margin: 8px 0 16px;
@@ -148,6 +149,7 @@ dialog label {
 }
 dialog .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
   margin-top: 24px;
@@ -253,49 +255,45 @@ dialog .actions {
 }
 
 #files-dialog {
-  width: min(700px, calc(100vw - 32px));
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
+  position: fixed;
 }
 #files-dialog .panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  margin-bottom: 12px;
 }
-.file-root {
-  overflow-wrap: anywhere;
+#files-dialog h1 {
+  font-size: 28px;
+  line-height: 1.2;
+}
+#files-dialog .panel-copy {
   color: var(--muted-foreground);
-  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 24px;
 }
-.managed-files {
-  list-style: none;
-  padding: 0;
-  margin: 24px 0;
+#files-dialog .file-add {
+  display: block;
+  margin-top: 24px;
 }
-.managed-files li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-}
-.managed-files label {
-  flex: 1;
-  min-width: 0;
+#files-dialog .actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 8px;
-  margin: 0;
+  margin-top: 24px;
+}
+#files-dialog .file-download label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.managed-files label {
+  display: block;
   overflow-wrap: anywhere;
 }
 .managed-files input {
   width: auto;
-}
-.managed-files small {
-  font-variant-numeric: tabular-nums;
-  margin: 0;
 }
 .managed-files .file-empty {
   color: var(--muted-foreground);
@@ -310,11 +308,110 @@ dialog .actions {
   cursor: pointer;
   padding: 12px 0;
 }
-@media (max-width: 640px) {
-  .managed-files li {
-    flex-wrap: wrap;
-  }
-  .managed-files label {
-    flex-basis: 100%;
+
+#clipboard-dialog textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 140px;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+#media-preview {
+  width: min(900px, calc(100vw - 32px));
+}
+#media-preview img,
+#media-preview video {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+#agent-handoff {
+  max-width: 420px;
+}
+
+.login-method {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 20px;
+}
+.key-profile-permissions {
+  min-width: 0;
+  border: 0;
+  margin: 16px 0;
+  padding: 0;
+}
+.key-profile-permissions label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.key-profile-permissions input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  accent-color: var(--primary);
+}
+.key-profile-permissions select[hidden] {
+  display: none;
+}
+.api-key-row > details {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.api-key-row > details summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted-foreground);
+}
+
+.login-method button[aria-pressed="true"] {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+#clipboard-dialog {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: 16px;
+  position: fixed;
+  z-index: 6;
+  left: 50%;
+  translate: -50% 0;
+  bottom: 100px;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 210px);
+  overflow: auto;
+}
+#clipboard-dialog h2 {
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+#clipboard-dialog > p {
+  color: var(--muted-foreground);
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+#clipboard-dialog label {
+  display: block;
+  margin-bottom: 10px;
+}
+#clipboard-dialog textarea {
+  min-height: 88px;
+}
+.managed-files video {
+  object-fit: contain;
+}
+@media (max-width: 760px) {
+  #clipboard-dialog {
+    bottom: 82px;
   }
 }

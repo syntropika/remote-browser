@@ -74,13 +74,13 @@ def exercise(binary,hold):
     with tempfile.TemporaryDirectory(prefix='servo-unified-') as directory:
         runtime=Runtime(binary,pathlib.Path(directory));client=runtime.client;dashboard=runtime.dashboard
         try:
-            assert len(client.request('tools/list',{})['tools'])==15
+            assert len(client.request('tools/list',{})['tools'])==16
             dashboard.api('/api/profiles',token=False,expected=401)
             dashboard.api('/api/profiles',origin='https://foreign.example',expected=403)
             a=client.call('browser_tabs',{'action':'open'})['tabId']
             b=client.call('browser_tabs',{'action':'open'})['tabId']
-            lease=client.call('browser_tabs',{'action':'reserve','tabId':a,'task':'agent a'})['leaseId']
-            lease_b=client.call('browser_tabs',{'action':'reserve','tabId':b,'task':'agent b'})['leaseId']
+            lease=client.call('browser_tabs',{'action':'reserve','agentName':'Test agent','tabId':a,'task':'agent a'})['leaseId']
+            lease_b=client.call('browser_tabs',{'action':'reserve','agentName':'Test agent','tabId':b,'task':'agent b'})['leaseId']
             client.call('browser_navigate',{'tabId':b,'leaseId':lease_b,'url':origin})
             Fixture.slow_started.clear()
             slow=client.begin('browser_navigate',{'tabId':a,'leaseId':lease,'url':origin+'/slow'})
@@ -96,7 +96,7 @@ def exercise(binary,hold):
             client.call('browser_evaluate',{'tabId':a,'leaseId':lease,'script':'return 1;'},expect_error=True)
             dashboard.action('navigate',a,{'url':origin})
             dashboard.action('return',a)
-            client.call('browser_evaluate',{'tabId':a,'leaseId':lease,'script':'return 1;'},expect_error=True)
+            assert client.call('browser_evaluate',{'tabId':a,'leaseId':lease,'script':'return 1;'})['value']==1
             created=client.call('browser_profiles',{'action':'create','name':'Account two'})
             extra=dashboard.api('/api/profiles',{'name':'Account three'})
             assert len(dashboard.api('/api/profiles')['profiles'])==3

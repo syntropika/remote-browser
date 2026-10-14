@@ -107,6 +107,31 @@
         </div>
         <h1 id="login-title">Remote Browser</h1>
         <p class="login-description" id="login-description">One browser for you and your agents.</p>
+        <div class="login-method" id="login-method" hidden>
+          <button type="button" class="button button-quiet" id="login-owner" aria-pressed="true">
+            Username and password
+          </button>
+          <button type="button" class="button button-quiet" id="login-key" aria-pressed="false">
+            API key
+          </button>
+        </div>
+        <form id="key-login-form" hidden autocomplete="off">
+          <div class="form-field">
+            <label for="key-login-secret">API key</label
+            ><input
+              id="key-login-secret"
+              type="password"
+              required
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="rb_…"
+            />
+          </div>
+          <p class="field-note">Access is limited to the profiles assigned to this key.</p>
+          <button type="submit" class="button button-primary login-submit" id="key-login-submit">
+            Sign in with API key
+          </button>
+        </form>
         <form id="connect-form" method="post" action="/api/login" autocomplete="on" hidden>
           <div class="form-field">
             <label for="username">Username</label>
@@ -203,6 +228,24 @@
       <div class="servo-dock" id="dock">
         <header class="control-bar">
           <nav class="toolbar" aria-label="Browser controls">
+            <button
+              class="button button-quiet icon-button"
+              id="back"
+              type="button"
+              aria-label="Back"
+              title="Back"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-back" /></svg>
+            </button>
+            <button
+              class="button button-quiet icon-button"
+              id="forward"
+              type="button"
+              aria-label="Forward"
+              title="Forward"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#icon-forward" /></svg>
+            </button>
             <button
               class="button button-quiet icon-button"
               id="reload"
@@ -328,6 +371,18 @@
                 >
                   <svg class="icon" aria-hidden="true"><use href="#icon-key" /></svg>API keys
                 </button>
+                <button class="button button-quiet" id="clipboard-open" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-clipboard" /></svg>Clipboard
+                </button>
+                <button class="button button-quiet" id="capture-save" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-screen" /></svg>Save
+                  screenshot
+                </button>
+                <button class="button button-quiet" id="recording-toggle" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-screen" /></svg
+                  ><span id="recording-label">Record browser</span>
+                </button>
+                <p id="recording-status" role="status" hidden></p>
                 <button class="button button-quiet" id="files-open" type="button">
                   <svg class="icon" aria-hidden="true">
                     <use href="#icon-files" /></svg
@@ -445,6 +500,9 @@
           <svg class="icon" aria-hidden="true"><use href="#icon-enter" /></svg>
         </button>
       </form>
+      <button class="button recording-indicator" id="recording-indicator" type="button" hidden>
+        <span class="recording-dot" aria-hidden="true"></span>Recording · Open Files
+      </button>
       <section class="settings-panel" id="api-keys-panel" aria-labelledby="api-keys-title" hidden>
         <div class="settings-content">
           <button class="button button-quiet settings-back" id="api-keys-close" type="button">
@@ -593,56 +651,111 @@
         </div>
       </form>
     </dialog>
-    <dialog id="files-dialog" aria-labelledby="files-title">
-      <header class="panel-heading">
-        <h2 id="files-title">Profile files</h2>
-        <button
-          class="button button-quiet icon-button"
-          id="files-close"
-          aria-label="Close files"
-          type="button"
-        >
-          <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+    <section class="settings-panel" id="files-dialog" aria-labelledby="files-title" hidden>
+      <div class="settings-content">
+        <button class="button button-quiet settings-back" id="files-close" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#icon-back" /></svg>Back to browser
         </button>
-      </header>
-      <p class="panel-copy" id="files-description">
-        Downloads and uploads stay on the machine running this browser.
-      </p>
-      <p class="file-root" id="files-root"></p>
-      <p class="form-error" role="alert" data-dialog-error></p>
-      <label class="file-add"
-        >Add files from this device<input id="file-add" type="file" multiple
-      /></label>
-      <p class="field-note" id="file-progress" role="status">
-        Up to 64 MiB per upload. Existing files are never overwritten.
-      </p>
-      <ul class="managed-files" id="managed-files"></ul>
-      <div class="actions">
-        <button class="button button-secondary" id="files-refresh" type="button">
-          Refresh files</button
-        ><button class="button button-primary" id="files-choose" type="button" hidden>
-          Use selected files
-        </button>
+        <header class="panel-heading">
+          <h1 id="files-title" tabindex="-1">Files</h1>
+          <button class="button button-quiet" id="files-recording-stop" type="button" hidden>
+            Stop recording
+          </button>
+        </header>
+        <p class="panel-copy" id="files-description">
+          Downloads and uploads stay on the machine running this browser.
+        </p>
+
+        <p class="form-error" role="alert" data-dialog-error></p>
+        <label class="file-add"
+          >Add files from this device<input id="file-add" type="file" multiple
+        /></label>
+        <p class="field-note" id="file-progress" role="status">
+          Up to 64 MiB per upload. Existing files are never overwritten.
+        </p>
+        <ul class="managed-files files-list" id="managed-files"></ul>
+        <div class="actions">
+          <button class="button button-secondary" id="files-refresh" type="button">
+            Refresh files</button
+          ><button class="button button-primary" id="files-choose" type="button" hidden>
+            Use selected files
+          </button>
+        </div>
+        <details class="file-download">
+          <summary>Save a download link</summary>
+          <form id="file-download-form">
+            <label
+              >Download URL<input
+                id="file-url"
+                required
+                placeholder="https://example.com/report.pdf" /></label
+            ><label
+              >Save as<input id="file-name" required maxlength="180" placeholder="report.pdf"
+            /></label>
+            <p class="field-note">
+              Uses this page's session. Downloads up to 20 MiB; cross-site links require CORS.
+            </p>
+            <button class="button button-secondary">Save to downloads</button>
+          </form>
+        </details>
       </div>
-      <details class="file-download">
-        <summary>Save a download link</summary>
-        <form id="file-download-form">
-          <label
-            >Download URL<input
-              id="file-url"
-              required
-              placeholder="https://example.com/report.pdf" /></label
-          ><label
-            >Save as<input id="file-name" required maxlength="180" placeholder="report.pdf"
-          /></label>
-          <p class="field-note">
-            Uses this page's session. Downloads up to 8 MiB; cross-site links require CORS.
-          </p>
-          <button class="button button-secondary">Save to downloads</button>
-        </form>
-      </details>
+    </section>
+    <section
+      class="floating-panel clipboard-panel"
+      id="clipboard-dialog"
+      aria-labelledby="clipboard-title"
+      hidden
+    >
+      <h2 id="clipboard-title">Clipboard</h2>
+      <p>Copy selected browser text or paste text into its focused field.</p>
+      <label for="clipboard-text">Clipboard text</label
+      ><textarea id="clipboard-text" rows="6" maxlength="8192"></textarea>
+      <p id="clipboard-status" role="status"></p>
+      <p class="form-error" role="alert" data-dialog-error></p>
+      <div class="clipboard-actions">
+        <button class="button button-secondary" id="clipboard-read" type="button">
+          Copy from browser</button
+        ><button class="button button-secondary" id="clipboard-device-copy" type="button">
+          Copy to device</button
+        ><button class="button button-primary" id="clipboard-send" type="button">
+          Paste into browser</button
+        ><button class="button button-quiet" id="clipboard-close" type="button">Close</button>
+      </div>
+    </section>
+    <dialog id="media-preview" aria-labelledby="media-title">
+      <header class="panel-heading">
+        <h2 id="media-title">Saved media</h2>
+        <button class="button button-quiet" id="media-close" type="button">Close</button>
+      </header>
+      <img id="media-image" alt="Saved screenshot" hidden /><video
+        id="media-video"
+        controls
+        playsinline
+        hidden
+      ></video>
+    </dialog>
+    <dialog
+      id="agent-handoff"
+      aria-labelledby="agent-handoff-title"
+      aria-describedby="agent-handoff-description agent-handoff-countdown"
+    >
+      <h2 id="agent-handoff-title">The agent wants control</h2>
+      <p id="agent-handoff-description">
+        Cancel to keep browsing. Otherwise, your input will pause while the agent uses this tab.
+      </p>
+      <p
+        class="handoff-countdown"
+        id="agent-handoff-countdown"
+        role="status"
+        aria-live="polite"
+      ></p>
+      <button class="button button-primary" id="agent-handoff-cancel" type="button" autofocus>
+        Cancel · Keep control
+      </button>
+      <p class="form-error" id="agent-handoff-error" role="alert" hidden></p>
     </dialog>
     <script src="api-keys.js"></script>
+    <script src="features.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
@@ -677,7 +790,10 @@
         });
         const value = await response.json();
         if (!response.ok) {
-          if (response.status === 401 && !["/api/login", "/api/auth/setup"].includes(path))
+          if (
+            response.status === 401 &&
+            !["/api/login", "/api/login/key", "/api/auth/setup"].includes(path)
+          )
             showLogin();
           const error = Error(value.error || "Request failed");
           error.statusCode = response.status;
@@ -698,22 +814,24 @@
       }
       function editable() {
         const tab = current();
-        return tab && !tab.reservation && !tab.uncertain;
+        return tab && (!tab.reservation || tab.owner === "human") && !tab.uncertain;
       }
       function controls() {
         const tab = current(),
           reserved = tab?.reservation;
         $("ownership").textContent = tab?.uncertain
           ? "This tab needs an engine restart"
-          : reserved
-            ? "In use by agent: " + reserved.task
-            : tab?.owner === "human"
-              ? "You control this tab"
+          : tab?.owner === "human"
+            ? "You control this tab"
+            : reserved
+              ? "In use by agent: " + (reserved.agentName || reserved.task)
               : "Available";
         for (const id of ["go", "close", "reload", "keyboard-input", "keyboard-enter"])
           $(id).disabled = !editable() || (id === "close" && !tab?.owned);
+        $("back").disabled = !editable() || !tab?.canGoBack;
+        $("forward").disabled = !editable() || !tab?.canGoForward;
         $("address").disabled = !editable();
-        $("take").hidden = !reserved && tab?.owner === "human";
+        $("take").hidden = tab?.owner === "human";
         $("take").disabled = !tab || tab.uncertain;
         $("return").hidden = tab?.owner !== "human";
         canvas.classList.toggle("locked", !!reserved);
@@ -721,6 +839,8 @@
       }
       async function loadProfiles(preferred) {
         const data = await api("/api/profiles");
+        profileCatalog = data.profiles;
+        knownProfiles = data.profiles.filter((p) => p.connected).map((p) => p.id);
         $("profiles").replaceChildren(
           ...data.profiles.map((profile) => {
             const option = document.createElement("option");
@@ -732,7 +852,7 @@
         );
         profileId =
           preferred ||
-          profileId ||
+          (data.profiles.some((p) => p.id === profileId) ? profileId : "") ||
           data.profiles.find((p) => p.isDefault)?.id ||
           data.profiles[0]?.id ||
           "";
@@ -740,7 +860,7 @@
         await switchProfile();
       }
       function clearView() {
-        if ($("files-dialog").open) $("files-dialog").close();
+        if (!$("files-dialog").hidden) closeFiles();
         epoch++;
         viewReady = false;
         $("connection").textContent = "Connecting display...";
@@ -751,6 +871,7 @@
         $("health").textContent = "Session status pending";
       }
       async function switchProfile() {
+        if (!knownProfiles.includes(profileId)) knownProfiles.push(profileId);
         clearView();
         tabId = "";
         tabs = [];
@@ -827,7 +948,12 @@
               if (tab.reservation) {
                 const task = document.createElement("span");
                 task.className = "tab-task";
-                task.append(icon("lock"), document.createTextNode(tab.reservation.task));
+                task.append(
+                  icon("lock"),
+                  document.createTextNode(
+                    (tab.reservation.agentName || "Agent") + " · " + tab.reservation.task,
+                  ),
+                );
                 button.append(task);
               }
               button.onclick = () => selectTab(tab.id);
@@ -836,7 +962,7 @@
                 const close = document.createElement("button");
                 close.className = "tab-close";
                 close.setAttribute("aria-label", "Close " + (tab.title || "tab"));
-                close.disabled = !!tab.reservation || tab.uncertain;
+                close.disabled = !(!tab.reservation || tab.owner === "human") || tab.uncertain;
                 close.append(icon("close"));
                 close.onclick = () => closeTab(tab.id);
                 row.append(close);
@@ -865,7 +991,7 @@
           drawTabs();
           if (
             current()?.filePicker &&
-            !$("files-dialog").open &&
+            $("files-dialog").hidden &&
             !document.querySelector("dialog[open]") &&
             $("api-keys-panel").hidden
           )
@@ -1008,6 +1134,7 @@
       });
       canvas.addEventListener("keydown", (event) => {
         if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return;
+        if (features.shortcut(event)) return;
         event.preventDefault();
         enqueueInput({
           kind: "key",
@@ -1020,10 +1147,17 @@
       });
       canvas.addEventListener("paste", (event) => {
         event.preventDefault();
-        enqueueInput({
-          kind: "text",
-          text: event.clipboardData.getData("text/plain"),
-        });
+        if (!editable()) return;
+        const target = tabId,
+          profile = profileId,
+          text = event.clipboardData.getData("text/plain");
+        inputQueue = inputQueue
+          .catch(() => {})
+          .then(async () => {
+            await action("clipboard_write", { text }, target, profile);
+            await action("clipboard_paste", {}, target, profile);
+          })
+          .catch((error) => notice(error.message));
       });
       canvas.addEventListener(
         "wheel",
@@ -1170,15 +1304,42 @@
       for (const button of document.querySelectorAll("[data-dismiss]"))
         button.onclick = () => button.closest("dialog").close();
       let setupRequired = false;
+      let profileCatalog = [];
       const apiKeys = window.createServoApiKeys({
         api,
         onOpen: () => {
+          features.closeClipboard();
           hidePanels();
           $("more-menu").open = false;
         },
         onUnauthorized: () => showLogin(),
+        keyProfiles: () => profileCatalog,
+      });
+      let knownProfiles = [];
+      const features = window.createServoFeatures({
+        action,
+        profile: () => profileId,
+        tab: () => tabId,
+        profiles: () => knownProfiles,
+        token: () => token,
+        connected: () => !$("app").hidden,
+        notice,
+        openFiles: (profile) => openFiles(profile),
+        history: async (op) => {
+          const target = tabId,
+            profile = profileId;
+          await action(op, {}, target, profile);
+          if (target === tabId && profile === profileId) {
+            clearView();
+            await refresh();
+            await frame();
+          }
+        },
       });
       function showLogin() {
+        features.reset();
+        $("files-dialog").hidden = true;
+        $("app").inert = false;
         apiKeys.reset();
         token = "";
         epoch++;
@@ -1188,6 +1349,10 @@
       }
       function loginMode(setup) {
         setupRequired = setup;
+        $("login-method").hidden = setup;
+        $("key-login-form").hidden = true;
+        $("login-owner").setAttribute("aria-pressed", "true");
+        $("login-key").setAttribute("aria-pressed", "false");
         $("connect-form").hidden = false;
         $("connect-form").action = setup ? "/api/auth/setup" : "/api/login";
         $("login-submit-label").textContent = setup ? "Create account" : "Sign in";
@@ -1215,6 +1380,8 @@
             showLogin();
             return;
           }
+          $("api-keys-button").hidden = !status.owner;
+          $("create").hidden = !status.owner;
           await loadProfiles();
           $("connect").hidden = true;
           $("app").hidden = false;
@@ -1248,6 +1415,35 @@
           $("unlock").disabled = false;
         }
       };
+      $("login-owner").onclick = () => {
+        $("login-owner").setAttribute("aria-pressed", "true");
+        $("login-key").setAttribute("aria-pressed", "false");
+        $("connect-form").hidden = false;
+        $("key-login-form").hidden = true;
+        $("username").focus();
+      };
+      $("login-key").onclick = () => {
+        $("login-owner").setAttribute("aria-pressed", "false");
+        $("login-key").setAttribute("aria-pressed", "true");
+        $("connect-form").hidden = true;
+        $("key-login-form").hidden = false;
+        $("key-login-secret").focus();
+      };
+      $("key-login-form").onsubmit = async (event) => {
+        event.preventDefault();
+        $("key-login-submit").disabled = true;
+        $("connection-error").textContent = "";
+        try {
+          await api("/api/login/key", { secret: $("key-login-secret").value });
+          $("key-login-secret").value = "";
+          token = "";
+          await connect();
+        } catch (error) {
+          $("connection-error").textContent = error.message;
+        } finally {
+          $("key-login-submit").disabled = false;
+        }
+      };
       $("password-toggle").onclick = () => {
         const showing = $("password").type === "password";
         $("password").type = showing ? "text" : "password";
@@ -1271,7 +1467,12 @@
       function fileAction(op, args = {}, target = null) {
         return action(op, args, target, fileContext.profile);
       }
-      async function openFiles() {
+      async function openFiles(profile) {
+        if (typeof profile === "string" && profile && profile !== profileId) {
+          $("profiles").value = profile;
+          await switchProfile();
+        }
+        features.closeClipboard();
         hidePanels();
         $("more-menu").open = false;
         fileContext = {
@@ -1280,10 +1481,12 @@
           picker: !!current()?.filePicker,
         };
         $("files-description").textContent = fileContext.picker
-          ? "Choose files for this page, or close to cancel."
-          : "Downloads and uploads stay on the machine running this browser.";
+          ? "Choose files for this page, or go back to cancel."
+          : "Captures, recordings and downloads in this profile. Add a file for your agent to attach on a website.";
         $("files-choose").hidden = !fileContext.picker;
-        $("files-dialog").showModal();
+        $("files-dialog").hidden = false;
+        $("app").inert = true;
+        $("files-title").focus();
         try {
           await listFiles();
         } catch (error) {
@@ -1293,8 +1496,8 @@
       async function listFiles() {
         const active = fileContext;
         const data = await fileAction("files");
-        if (active !== fileContext || !$("files-dialog").open) return;
-        $("files-root").textContent = data.root;
+        if (active !== fileContext || $("files-dialog").hidden) return;
+        features.clearThumbnails();
         $("managed-files").replaceChildren();
         if (!data.files.length) {
           const empty = document.createElement("li");
@@ -1304,6 +1507,7 @@
         }
         for (const file of data.files) {
           const row = document.createElement("li");
+          row.className = "file-row";
           const label = document.createElement("label");
           if (active.picker) {
             const check = document.createElement("input");
@@ -1313,14 +1517,26 @@
             label.append(check);
           }
           const name = document.createElement("span");
-          name.textContent = file.id;
+          name.textContent = file.id.split("/").pop();
           const size = document.createElement("small");
           size.textContent =
             file.bytes < 1024
               ? file.bytes + " B"
               : (file.bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 }) +
                 " KiB";
-          label.append(name, size);
+          label.className = "file-info";
+          const heading = document.createElement("h3");
+          heading.append(name);
+          const meta = document.createElement("p");
+          meta.className = "file-meta";
+          meta.textContent = [
+            file.mimeType || "File",
+            size.textContent,
+            new Date(file.createdAt).toLocaleString(),
+          ].join(" · ");
+          label.append(heading, meta);
+          const actions = document.createElement("div");
+          actions.className = "file-actions";
           row.append(label);
           const save = document.createElement("button");
           save.className = "button button-quiet";
@@ -1362,7 +1578,32 @@
               await listFiles();
             });
           };
-          row.append(save, remove);
+          if (
+            (file.mimeType || "").startsWith("image/") ||
+            (file.mimeType || "").startsWith("video/")
+          ) {
+            const preview = document.createElement("button");
+            preview.className = "button button-quiet";
+            preview.textContent = "Preview";
+            preview.setAttribute("aria-label", "Preview " + file.id);
+            preview.onclick = () =>
+              fileWork(() => features.preview(active.profile, file.id, file.mimeType));
+            const thumbnail = document.createElement(
+              file.mimeType.startsWith("video/") ? "video" : "img",
+            );
+            thumbnail.className = "file-preview";
+            if (thumbnail instanceof HTMLImageElement)
+              thumbnail.alt = "Preview of " + file.id.split("/").pop();
+            else {
+              thumbnail.muted = true;
+              thumbnail.preload = "metadata";
+            }
+            row.prepend(thumbnail);
+            features.thumbnail(thumbnail, active.profile, file.id, file.mimeType);
+            actions.append(preview);
+          }
+          actions.append(save, remove);
+          row.append(actions);
           $("managed-files").append(row);
         }
       }
@@ -1393,11 +1634,14 @@
             notice(error.message);
           }
         }
-        $("files-dialog").close();
+        $("files-dialog").hidden = true;
+        $("app").inert = false;
+        features.clearThumbnails();
         await refresh();
       }
       $("files-close").onclick = closeFiles;
-      $("files-dialog").addEventListener("cancel", (event) => {
+      $("files-dialog").addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
         event.preventDefault();
         closeFiles();
       });
@@ -1408,7 +1652,9 @@
           );
           if (!fileIds.length) throw Error("Select a file first.");
           await fileAction("choose_files", { fileIds }, fileContext.tab);
-          $("files-dialog").close();
+          $("files-dialog").hidden = true;
+          $("app").inert = false;
+          features.clearThumbnails();
           await refresh();
         });
       $("file-add").onchange = () => {
@@ -1493,10 +1739,6 @@
       $("more-menu").addEventListener("toggle", () => {
         if ($("more-menu").open) hidePanels();
       });
-      $("reload").onclick = () => {
-        $("address").value = current()?.url || "about:blank";
-        $("navigation").requestSubmit();
-      };
       $("reconnect").onclick = async () => {
         $("more-menu").open = false;
         clearView();

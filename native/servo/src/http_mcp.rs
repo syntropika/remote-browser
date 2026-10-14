@@ -12,7 +12,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use std::{io::Read, path::Path, sync::Arc};
 
-async fn authorize(State(keys): State<Arc<ApiKeys>>, request: Request, next: Next) -> Response {
+async fn authorize(State(keys): State<Arc<ApiKeys>>, mut request: Request, next: Next) -> Response {
     let supplied = request
         .headers()
         .get("authorization")
@@ -20,10 +20,17 @@ async fn authorize(State(keys): State<Arc<ApiKeys>>, request: Request, next: Nex
         .and_then(|header| header.strip_prefix("Bearer "))
         .unwrap_or("");
     let supplied = supplied.to_owned();
-    let allowed = tokio::task::spawn_blocking(move || keys.authenticate(&supplied)).await;
+    let registry = keys.clone();
+    let allowed = tokio::task::spawn_blocking(move || registry.authenticate_id(&supplied)).await;
     let status = match allowed {
-        Ok(Ok(true)) => None,
-        Ok(Ok(false)) => Some(StatusCode::UNAUTHORIZED),
+        Ok(Ok(Some(id))) => {
+            request.extensions_mut().insert(crate::identity::Client {
+                id,
+                keys: Some(keys),
+            });
+            None
+        }
+        Ok(Ok(None)) => Some(StatusCode::UNAUTHORIZED),
         _ => Some(StatusCode::SERVICE_UNAVAILABLE),
     };
     if let Some(status) = status {

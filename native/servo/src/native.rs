@@ -74,6 +74,8 @@ struct State {
     profile_key: Option<String>,
     next: AtomicU64,
     timeout: Duration,
+    media: crate::media::Media,
+    handoffs: Arc<crate::handoff::Handoffs>,
 }
 struct PendingReply {
     sender: oneshot::Sender<Value>,
@@ -85,6 +87,7 @@ struct PendingReply {
 pub struct NativeClient {
     state: Arc<State>,
     lease_id: Option<String>,
+    profile_id: Option<String>,
 }
 struct CompletionGuard {
     state: Arc<State>,
@@ -182,6 +185,8 @@ impl NativeClient {
             profile_key: crate::logging::Context::current().profile_key,
             next: AtomicU64::new(1),
             timeout,
+            media: crate::media::Media::default(),
+            handoffs: Arc::new(crate::handoff::Handoffs::default()),
         });
         let weak = Arc::downgrade(&state);
         let reader_context = crate::logging::Context::current();
@@ -235,6 +240,7 @@ impl NativeClient {
         let client = Self {
             state,
             lease_id: None,
+            profile_id: None,
         };
         client.request("status", None, Value::Null, false).await?;
         Ok(client)
@@ -242,10 +248,56 @@ impl NativeClient {
     pub fn with_lease(&self, lease: Option<&str>) -> Self {
         Self {
             state: self.state.clone(),
+            profile_id: self.profile_id.clone(),
             lease_id: lease.map(str::to_owned),
         }
     }
+    pub fn with_profile(mut self, id: &str) -> Self {
+        self.profile_id = Some(id.into());
+        self
+    }
     pub async fn request(
+        &self,
+        op: &str,
+        tab: Option<&str>,
+        args: Value,
+        human: bool,
+    ) -> Result<Value> {
+        crate::identity::check()?;
+        if let Some(profile) = &self.profile_id {
+            crate::identity::check_profile(profile)?;
+        }
+        if matches!(op, "record_start" | "record_stop" | "record_status") {
+            return self
+                .state
+                .media
+                .action(self.clone(), op, tab.unwrap_or(""), args, human)
+                .await;
+        }
+        if human && matches!(op, "handoff_status" | "handoff_ack" | "handoff_cancel") {
+            return self.state.handoffs.control(op, tab.unwrap_or(""), args);
+        }
+        if human && matches!(op, "return" | "close") {
+            self.state.handoffs.clear(tab.unwrap_or(""));
+        }
+        let result = self.engine_request(op, tab, args.clone(), human).await;
+        if !human
+            && self.state.handoffs.available()
+            && matches!(result, Err(Error::HumanControl))
+            && let Some(tab) = tab
+        {
+            self.state.handoffs.wait(tab, op).await?;
+            crate::identity::check()?;
+            if let Some(profile) = &self.profile_id {
+                crate::identity::check_profile(profile)?;
+            }
+            self.engine_request("return", Some(tab), Value::Null, true)
+                .await?;
+            return self.engine_request(op, Some(tab), args, false).await;
+        }
+        result
+    }
+    pub async fn engine_request(
         &self,
         op: &str,
         tab: Option<&str>,
@@ -272,6 +324,10 @@ impl NativeClient {
         args: Value,
         human: bool,
     ) -> Result<Value> {
+        crate::identity::check()?;
+        if let Some(profile) = &self.profile_id {
+            crate::identity::check_profile(profile)?;
+        }
         if op != "shutdown"
             && (self.state.failed.load(Ordering::SeqCst)
                 || tab.is_some_and(|tab| self.state.unknown.lock().unwrap().contains(tab)))
@@ -298,7 +354,7 @@ impl NativeClient {
             reason: "request_cancelled",
         };
         let bytes = serde_json::to_vec(
-            &json!({"id":id,"op":op,"tabId":tab,"leaseId":self.lease_id,"human":human,"args":args,"traceId":crate::logging::Context::current().trace_id,"profileKey":self.state.profile_key}),
+            &json!({"id":id,"op":op,"tabId":tab,"leaseId":self.lease_id,"human":human,"args":args,"traceId":crate::logging::Context::current().trace_id,"profileKey":self.state.profile_key,"clientId":crate::identity::current().id}),
         )?;
         if bytes.len() > 65536 {
             self.state.pending.lock().unwrap().remove(&id);
@@ -355,6 +411,7 @@ impl NativeClient {
         })
     }
     pub async fn close(&self) -> Result<()> {
+        self.state.media.stop().await;
         crate::logging::lifecycle(
             "native",
             "engine_stopping",

@@ -73,6 +73,10 @@ pub struct Tab {
     pub owned: bool,
     #[serde(default)]
     pub file_picker: bool,
+    #[serde(default)]
+    pub can_go_back: bool,
+    #[serde(default)]
+    pub can_go_forward: bool,
     pub reservation: Option<ReservationInfo>,
     #[serde(default)]
     pub title: Option<String>,
@@ -200,6 +204,8 @@ impl WebDriverAutomation {
                 active: current.as_deref() == Some(id.as_str()),
                 owned: state.owned_tabs.contains(&id),
                 file_picker: false,
+                can_go_back: false,
+                can_go_forward: false,
                 reservation: state.reservations.info(&id, Instant::now()),
                 title: None,
                 url: None,
@@ -571,6 +577,12 @@ impl Automation {
                 .await?,
         )))
     }
+    pub fn with_profile(self, id: &str) -> Self {
+        Self(match self.0 {
+            Backend::Native(browser) => Backend::Native(browser.with_profile(id)),
+            other => other,
+        })
+    }
     pub fn is_embedded(&self) -> bool {
         matches!(self.0, Backend::Native(_))
     }
@@ -579,6 +591,31 @@ impl Automation {
             Backend::WebDriver(browser) => Backend::WebDriver(browser.with_lease(lease_id)),
             Backend::Native(browser) => Backend::Native(browser.with_lease(lease_id)),
         })
+    }
+    pub async fn control(&self, op: &str, tab: &str, args: Value) -> Result<Value> {
+        if !matches!(
+            op,
+            "back"
+                | "forward"
+                | "reload"
+                | "clipboard_read"
+                | "clipboard_write"
+                | "clipboard_copy"
+                | "clipboard_cut"
+                | "clipboard_paste"
+                | "save_screenshot"
+                | "record_start"
+                | "record_stop"
+                | "record_status"
+        ) {
+            return Err(Error::Invalid("Unknown browser control".into()));
+        }
+        match &self.0 {
+            Backend::Native(browser) => browser.request(op, Some(tab), args, false).await,
+            Backend::WebDriver(_) => Err(Error::Invalid(
+                "This control requires the embedded engine".into(),
+            )),
+        }
     }
     pub async fn status(&self) -> Status {
         match &self.0 {
@@ -650,12 +687,27 @@ impl Automation {
     pub async fn human_action(&self, op: &str, tab: Option<&str>, args: Value) -> Result<Value> {
         if !matches!(
             op,
-            "tabs"
+            "handoff_status"
+                | "handoff_ack"
+                | "handoff_cancel"
+                | "tabs"
                 | "open"
                 | "view"
                 | "take"
                 | "return"
                 | "navigate"
+                | "back"
+                | "forward"
+                | "reload"
+                | "clipboard_read"
+                | "clipboard_write"
+                | "clipboard_copy"
+                | "clipboard_cut"
+                | "clipboard_paste"
+                | "save_screenshot"
+                | "record_start"
+                | "record_stop"
+                | "record_status"
                 | "close"
                 | "screenshot"
                 | "input"
@@ -690,6 +742,47 @@ impl Automation {
                     )
                     .await?,
             )?),
+        }
+    }
+    pub async fn reserve_named(
+        &self,
+        tab: &str,
+        task: &str,
+        agent_name: &str,
+        ttl_ms: u64,
+    ) -> Result<Lease> {
+        match &self.0 {
+            Backend::Native(browser) => Ok(serde_json::from_value(
+                browser
+                    .request(
+                        "reserve",
+                        Some(tab),
+                        json!({"task":task,"agentName":agent_name,"ttlMs":ttl_ms}),
+                        false,
+                    )
+                    .await?,
+            )?),
+            Backend::WebDriver(browser) => {
+                let mut state = browser.state.try_lock().map_err(|_| Error::Busy)?;
+                state.check()?;
+                let handles: Vec<String> = serde_json::from_value(
+                    state
+                        .driver
+                        .command(Method::GET, &["window", "handles"], None)
+                        .await?,
+                )?;
+                if !handles.iter().any(|id| id == tab) {
+                    return Err(Error::Invalid("Unknown tab".into()));
+                }
+                state.reservations.reserve_named_for(
+                    tab,
+                    task,
+                    agent_name,
+                    ttl_ms,
+                    "stdio",
+                    Instant::now(),
+                )
+            }
         }
     }
     pub async fn renew(&self, tab: &str, lease_id: &str, ttl_ms: u64) -> Result<Lease> {

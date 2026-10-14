@@ -18,11 +18,15 @@ use std::{
     io::{BufRead, Write},
     path::PathBuf,
     rc::{Rc, Weak},
+    sync::Arc,
     sync::mpsc,
     time::{Duration, Instant},
 };
 use url::Url;
 use webdriver::error::ErrorStatus;
+mod clipboard;
+mod download_bridge;
+mod download_capture;
 mod file_operations;
 mod metadata;
 mod operations;
@@ -39,6 +43,11 @@ struct Request {
     args: Value,
     trace_id: Option<String>,
     profile_key: Option<String>,
+    #[serde(default = "default_client")]
+    client_id: String,
+}
+fn default_client() -> String {
+    "stdio".into()
 }
 struct Tab {
     view: WebView,
@@ -53,6 +62,9 @@ struct Tab {
     initialized: bool,
     queued_navigation: Option<Url>,
     load_started: bool,
+    history: (usize, usize),
+    bridge_polling: bool,
+    requested_url: Option<String>,
 }
 struct Pending {
     tab: String,
@@ -64,6 +76,7 @@ type Poller = Box<dyn FnMut(&Rc<Engine>) -> bool>;
 struct Engine {
     servo: Servo,
     files: remote_browser_servo::files::Files,
+    clipboard: Rc<clipboard::Clipboard>,
     tabs: RefCell<HashMap<String, Tab>>,
     reservations: RefCell<Reservations>,
     visible: RefCell<String>,
@@ -73,6 +86,10 @@ struct Engine {
     inputs: RefCell<HashMap<InputEventId, u64>>,
     output: mpsc::Sender<Value>,
     quitting: Cell<bool>,
+    blob_names: RefCell<HashMap<(String, String), String>>,
+    bridge_tick: Cell<Instant>,
+    downloads: std::sync::mpsc::Receiver<download_capture::Notice>,
+    download_hints: Arc<download_capture::Hints>,
 }
 struct Delegate(Weak<Engine>);
 impl WebViewDelegate for Delegate {
@@ -94,6 +111,28 @@ impl WebViewDelegate for Delegate {
                 .is_some_and(|picker| picker.id() == id)
         {
             tab.file_picker = None;
+        }
+    }
+    fn notify_history_changed(&self, view: WebView, entries: Vec<Url>, current: usize) {
+        if let Some(engine) = self.0.upgrade()
+            && let Some(tab) = engine.tabs.borrow_mut().get_mut(&view.id().to_string())
+        {
+            tab.history = (entries.len(), current);
+        }
+    }
+    fn notify_traversal_complete(&self, view: WebView, _: servo::TraversalId) {
+        if view.load_status() != LoadStatus::Complete {
+            return;
+        }
+        if let Some(engine) = self.0.upgrade() {
+            let request = engine
+                .tabs
+                .borrow_mut()
+                .get_mut(&view.id().to_string())
+                .and_then(|tab| tab.load_request.take());
+            if let Some(id) = request {
+                engine.complete(id, Ok(json!({"ok":true})));
+            }
         }
     }
     fn notify_new_frame_ready(&self, view: WebView) {
@@ -127,12 +166,10 @@ impl WebViewDelegate for Delegate {
                 (None, None)
             }
         };
+        engine.install_download_bridge(&view, complete);
         // Initial about:blank must finish before a requested navigation begins.
         if let Some(url) = queued {
             view.load(url);
-        }
-        if let Some(id) = complete {
-            engine.complete(id, Ok(json!({"ok":true})));
         }
     }
     fn notify_input_event_handled(&self, _: WebView, event: InputEventId, _: InputEventResult) {
@@ -199,6 +236,7 @@ impl Engine {
         let view = WebViewBuilder::new(&self.servo, context)
             .url(Url::parse("about:blank").unwrap())
             .delegate(Rc::new(Delegate(Rc::downgrade(self))))
+            .clipboard_delegate(self.clipboard.clone())
             .build();
         let id = view.id().to_string();
         self.tabs.borrow_mut().insert(
@@ -216,6 +254,9 @@ impl Engine {
                 initialized: false,
                 queued_navigation: None,
                 load_started: false,
+                history: (0, 0),
+                bridge_polling: false,
+                requested_url: None,
             },
         );
         id
@@ -245,7 +286,6 @@ impl Engine {
             };
             self.reply(id, result);
             if let Some(takeover) = takeover {
-                self.reservations.borrow_mut().remove(&p.tab);
                 if let Some(t) = self.tabs.borrow_mut().get_mut(&p.tab) {
                     t.human = true;
                     t.refs.clear();
@@ -265,7 +305,11 @@ impl Engine {
             return Err("humanControl".into());
         }
         if request.human {
-            if !matches!(request.op.as_str(), "screenshot" | "health")
+            if !tab.human
+                && !matches!(
+                    request.op.as_str(),
+                    "screenshot" | "save_screenshot" | "record_check" | "clipboard_read" | "health"
+                )
                 && self
                     .reservations
                     .borrow_mut()
@@ -277,10 +321,19 @@ impl Engine {
         } else {
             self.reservations
                 .borrow_mut()
-                .check(id, request.lease_id.as_deref(), Instant::now())
+                .check_for(
+                    id,
+                    request.lease_id.as_deref(),
+                    &request.client_id,
+                    Instant::now(),
+                )
                 .map_err(|e| e.to_string())?;
         }
-        let exclusive = !(request.human && request.op == "screenshot");
+        let exclusive = !(request.human
+            && matches!(
+                request.op.as_str(),
+                "screenshot" | "save_screenshot" | "record_check"
+            ));
         if exclusive && tab.busy {
             return Err("busy".into());
         }
@@ -437,6 +490,35 @@ impl Engine {
         self.complete(id, Err("uncertain".into()));
     }
     fn tick(self: &Rc<Self>) {
+        while let Ok(notice) = self.downloads.try_recv() {
+            let request = {
+                let mut tabs = self.tabs.borrow_mut();
+                tabs.iter_mut()
+                    .find(|(id, tab)| {
+                        notice.view.as_deref() == Some(id.as_str())
+                            && tab.requested_url.as_deref() == Some(&notice.url)
+                    })
+                    .and_then(|(_, tab)| {
+                        tab.requested_url = None;
+                        tab.load_started = false;
+                        tab.load_request.take()
+                    })
+            };
+            if let Some(id) = request {
+                self.complete(
+                    id,
+                    if notice.success {
+                        Ok(json!({"ok":true,"downloaded":true}))
+                    } else {
+                        Err("Download failed or exceeded 20 MiB".into())
+                    },
+                );
+            }
+        }
+        if self.bridge_tick.get().elapsed() > Duration::from_millis(50) {
+            self.bridge_tick.set(Instant::now());
+            self.poll_blob_downloads();
+        }
         self.servo.spin_event_loop();
         let tasks = std::mem::take(&mut *self.pollers.borrow_mut());
         for mut task in tasks {
@@ -542,6 +624,7 @@ fn run_engine(
     let files = remote_browser_servo::files::Files::new(
         &files_root.unwrap_or_else(|| directory.join("files")),
     )?;
+    let (downloads, download_hints) = download_capture::install(files.clone());
     let opts = Opts {
         config_dir: Some(directory),
         temporary_storage: false,
@@ -549,6 +632,7 @@ fn run_engine(
     };
     let engine = Rc::new(Engine {
         files,
+        clipboard: Rc::new(clipboard::Clipboard::default()),
         servo: ServoBuilder::default().opts(opts).build(),
         tabs: RefCell::new(HashMap::new()),
         reservations: RefCell::new(Reservations::default()),
@@ -559,6 +643,10 @@ fn run_engine(
         inputs: RefCell::new(HashMap::new()),
         output: output_tx,
         quitting: Cell::new(false),
+        blob_names: RefCell::new(HashMap::new()),
+        bridge_tick: Cell::new(Instant::now()),
+        downloads,
+        download_hints,
     });
     *engine.visible.borrow_mut() = engine.add_tab(false);
     while !engine.quitting.get() {

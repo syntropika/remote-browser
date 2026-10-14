@@ -54,7 +54,7 @@ def exercise(binary):
                 snapshot = client.call('browser_snapshot', {'tabId': tab})
                 client.call('browser_fill', {'tabId': tab, 'reference': reference(snapshot, 'Email'), 'text': SECRET})
                 client.call('browser_evaluate', {'tabId': tab, 'script': "document.title='" + SECRET + "';document.cookie='credential=" + SECRET + "';return true;"})
-                lease = client.call('browser_tabs', {'action': 'reserve', 'tabId': tab, 'task': SECRET})['leaseId']
+                lease = client.call('browser_tabs', {'action': 'reserve','agentName':'Test agent', 'tabId': tab, 'task': SECRET})['leaseId']
                 request = urllib.request.Request(runtime.dashboard.origin + '/api/action', data=json.dumps({'profileId': 'default', 'op': 'navigate', 'tabId': tab, 'args': {'url': origin}}).encode(), headers={'Authorization': 'Bearer ' + runtime.dashboard.token, 'Content-Type': 'application/json'})
                 try:
                     urllib.request.urlopen(request, timeout=20)

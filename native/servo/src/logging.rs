@@ -285,10 +285,29 @@ fn operation(value: &str) -> &'static str {
         "keys" => "keys",
         "create_key" => "create_key",
         "revoke_key" => "revoke_key",
+        "back" => "back",
+        "forward" => "forward",
+        "reload" => "reload",
+        "clipboard_read" => "clipboard_read",
+        "clipboard_write" => "clipboard_write",
+        "clipboard_copy" => "clipboard_copy",
+        "clipboard_cut" => "clipboard_cut",
+        "clipboard_paste" => "clipboard_paste",
+        "save_screenshot" => "save_screenshot",
+        "record_check" => "record_check",
+        "record_start" => "record_start",
+        "record_stop" => "record_stop",
+        "record_status" => "record_status",
+        "handoff_status" => "handoff_status",
+        "handoff_ack" => "handoff_ack",
+        "handoff_cancel" => "handoff_cancel",
+        "file_content" => "file_content",
         "http_mcp" => "http_mcp",
         "auth_status" => "auth_status",
         "auth_setup" => "auth_setup",
         "login" => "login",
+        "key_login" => "key_login",
+        "key_permissions" => "key_permissions",
         "logout" => "logout",
         "profiles" => "profiles",
         "action" => "action",
@@ -311,10 +330,19 @@ fn normal_level(op: &str) -> Level {
             | "release"
             | "create_profile"
             | "login"
+            | "key_login"
+            | "key_permissions"
             | "logout"
             | "auth_setup"
             | "create_key"
             | "revoke_key"
+            | "back"
+            | "forward"
+            | "reload"
+            | "clipboard_write"
+            | "save_screenshot"
+            | "record_start"
+            | "record_stop"
             | "browser_navigate"
             | "browser_click"
             | "browser_fill"

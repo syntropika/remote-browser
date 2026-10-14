@@ -86,7 +86,7 @@ Open and reserve a tab for each task. For example, call `browser_tabs` with:
 ```json
 {
   "action":"reserve", "profileId":"<profile-id>", "tabId":"<tab-id>",
-  "task":"check invoices", "ttlMs":300000
+  "agentName":"invoice-agent", "task":"check invoices", "ttlMs":300000
 }
 ```
 
@@ -117,10 +117,10 @@ atomic operations across tabs.
 Agent targeting does not change the dashboard's selected tab. Users can watch a
 reserved tab, but the engine rejects their navigation, keyboard, pointer, scroll,
 and close actions on it. **Take control** waits for an in-flight operation to finish,
-invalidates its reservation and element references, and blocks agents on that tab.
-**Return to agents** makes it available for a new reservation. Other tabs remain
-usable. Human handoff is a host operation, not an MCP tool. Leases coordinate
-trusted clients sharing one host; they are not authenticated agent identities.
+preserves its reservation, invalidates element references, and blocks agents on that tab.
+**Return to agents** lets the original key continue with a valid lease. Other tabs remain
+usable. The dashboard acknowledges cancellable five-second agent handoffs. Leases are
+bound to the authenticated API key; agents sharing a key reserve with their own `agentName` and independent lease token.
 
 ## Session health
 
@@ -184,9 +184,10 @@ actual-size page. Session status and check settings are available in More option
 The owner sign-in screen uses the same visual system and accepts username/password
 authentication, including compatible owner records from the Chromium service.
 It supports basic clicking, typing, paste, named keys, scrolling, and explicit
-downloads and uploads through the managed file workspace. Automatic download
-capture, popup windows, browser permission prompts, clipboard integration,
-IME composition, full-page captures, and asynchronous evaluation are not supported.
+downloads and uploads through the managed file workspace, automatic download capture,
+profile clipboard integration, PNG capture and MP4 recording. Popup windows, browser
+permission prompts, IME composition, full-page captures and asynchronous evaluation
+are not supported.
 
 Transport cancellation, engine timeouts, crashes, and incomplete responses leave
 completion uncertain. Affected tabs block further actions; connection failures
@@ -350,7 +351,7 @@ MCP exposes three embedded-only tools:
   applies to cross-origin fetches.
 
 Uploads are limited to 16 files of 64 MiB each; each folder holds at most 200
-managed files. Downloads are limited to 8 MiB with a nine-second fetch deadline.
+managed files. Downloads are limited to 20 MiB with a nine-second fetch deadline.
 Existing files are never overwritten. Interrupted staging may leave a partial
 file, which can be listed and deleted or resumed from its byte offset. Deleting a
 file selected for upload may prevent the site from reading it; finish the upload
@@ -457,3 +458,15 @@ not need a seed token when the owner manages keys through the dashboard.
 ```sh
 python3 native/servo/tests/keys_smoke.py --engine-binary /path/to/remote-browser-servo-engine
 ```
+
+## Native workflow parity
+
+The dashboard retains username/password owner login and adds API key login. Key sessions use HttpOnly cookies and are revalidated on each request. The owner can assign all profiles (including future profiles) or a specific nonempty profile selection to each key, and edit that selection later. Existing keys retain all-profile access. Restricted keys cannot create profiles or administer keys. MCP and dashboard operations enforce the same profile permissions. Tab reservations are bound to the acquiring key; agents may share one key and reserve with their own `agentName` and independent `leaseId`.
+
+`browser_control` provides native back/forward, real reload, profile clipboard operations (8192 UTF-8 bytes), saved PNG captures and MP4 recording. Recordings require FFmpeg on the runtime host, follow the profile's visible tab, omit audio and run for at most 300 seconds. Captures and recordings appear alongside downloads/uploads in Files, with preview, download and deletion controls. Managed files remain bounded to 64 MiB.
+
+Attachment navigations, download links, blob/data links and POST attachment responses are captured automatically, up to 20 MiB. A pinned `servo-net` fork observes the original network response stream, preserving the original POST body and cookie handling without replay. The fork's provenance and limited changes are documented in `engine/vendor/README.md`. This restores targeted download workflows; it does not establish compatibility with every website.
+
+Human takeover blocks agent actions while preserving the reservation. When the dashboard is connected, a rejected agent action can request an acknowledged five-second handoff that the user can cancel. A cancelled action remains unexecuted. Operations with unknown completion are never retried by this handoff mechanism.
+
+No CDP or Playwright adapter is included. The updated `skills/remote-browser/SKILL.md` documents the individual native MCP tools and their ownership, permission and file contracts.

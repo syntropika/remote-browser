@@ -19,7 +19,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 self.send_response(401); self.end_headers(); return
             data=PAYLOAD; content='application/octet-stream'
         elif self.path == '/large':
-            data=b'x'*(8*1024*1024+1); content='application/octet-stream'
+            data=b'x'*(20*1024*1024+1); content='application/octet-stream'
         elif self.path == '/no-cors':
             data=PAYLOAD; content='application/octet-stream'
         else:
@@ -42,7 +42,7 @@ def run(binary):
         try:
             def files(action,**kwargs):return client.call('browser_files',{'action':action,**kwargs})
             tab=client.call('browser_tabs',{'action':'open'})['tabId']
-            lease=client.call('browser_tabs',{'action':'reserve','tabId':tab,'task':'files smoke'})['leaseId']
+            lease=client.call('browser_tabs',{'action':'reserve','agentName':'Test agent','tabId':tab,'task':'files smoke'})['leaseId']
             client.call('browser_navigate',{'tabId':tab,'leaseId':lease,'url':origin})
             info=files('list');assert pathlib.Path(info['root'])==root/'shared/default',info
             staged=files('stage',name='test.bin',offset=0,data=base64.b64encode(PAYLOAD).decode())

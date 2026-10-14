@@ -40,6 +40,8 @@ impl Engine {
                             "busy": tab.busy,
                             "filePicker": tab.file_picker.is_some(),
                             "uncertain": tab.uncertain,
+                            "canGoBack":tab.history.1>0,
+                            "canGoForward":tab.history.1+1<tab.history.0,
                             "reservation": self.reservations.borrow_mut().info(id, Instant::now()),
                         })
                     })
@@ -76,7 +78,7 @@ impl Engine {
                 } else {
                     t.human = true;
                     t.refs.clear();
-                    self.reservations.borrow_mut().remove(tab_id);
+
                     self.reply(id, Ok(json!({"ok":true})));
                 }
                 return Ok(());
@@ -111,10 +113,14 @@ impl Engine {
                 let value = match request.op.as_str() {
                     "reserve" => serde_json::to_value(
                         registry
-                            .reserve(
+                            .reserve_named_for(
                                 tab_id,
                                 request.args["task"].as_str().ok_or("task is required")?,
+                                request.args["agentName"].as_str().unwrap_or_else(|| {
+                                    request.args["task"].as_str().unwrap_or("Agent")
+                                }),
                                 ttl,
+                                &request.client_id,
                                 Instant::now(),
                             )
                             .map_err(|e| e.to_string())?,
@@ -122,10 +128,11 @@ impl Engine {
                     .map_err(|e| e.to_string())?,
                     "renew" => serde_json::to_value(
                         registry
-                            .renew(
+                            .renew_for(
                                 tab_id,
                                 request.lease_id.as_deref().ok_or("leaseId is required")?,
                                 ttl,
+                                &request.client_id,
                                 Instant::now(),
                             )
                             .map_err(|e| e.to_string())?,
@@ -133,9 +140,10 @@ impl Engine {
                     .map_err(|e| e.to_string())?,
                     _ => {
                         registry
-                            .release(
+                            .release_for(
                                 tab_id,
                                 request.lease_id.as_deref().ok_or("leaseId is required")?,
+                                &request.client_id,
                                 Instant::now(),
                             )
                             .map_err(|e| e.to_string())?;
@@ -157,6 +165,7 @@ impl Engine {
             "upload" => self.upload(request)?,
             "choose_files" => self.choose_files(request)?,
             "download" => self.download(request)?,
+            "record_check" => self.complete(id, Ok(json!({"ok":true}))),
             "select" => self.complete(id, Ok(json!({"ok":true}))),
             "close" => {
                 if !self.tabs.borrow()[tab_id].owned {
@@ -175,6 +184,32 @@ impl Engine {
                         .unwrap_or_default();
                 }
             }
+            "back" | "forward" | "reload" => {
+                self.invalidate(id);
+                let mut tabs = self.tabs.borrow_mut();
+                let tab = tabs.get_mut(tab_id).unwrap();
+                let available = request.op == "reload"
+                    || (request.op == "back" && tab.history.1 > 0)
+                    || (request.op == "forward" && tab.history.1 + 1 < tab.history.0);
+                if !available {
+                    drop(tabs);
+                    self.complete(id, Ok(json!({"ok":true})));
+                } else {
+                    tab.load_request = Some(id);
+                    // Servo reload sets Started internally without notifying the delegate.
+                    tab.load_started = request.op == "reload";
+                    drop(tabs);
+                    match request.op.as_str() {
+                        "back" => {
+                            view.go_back(1);
+                        }
+                        "forward" => {
+                            view.go_forward(1);
+                        }
+                        _ => view.reload(),
+                    }
+                }
+            }
             "navigate" => {
                 let text = request.args["url"].as_str().ok_or("url is required")?;
                 let url = Url::parse(text).map_err(|_| "Invalid page URL")?;
@@ -189,7 +224,8 @@ impl Engine {
                     let mut tabs = self.tabs.borrow_mut();
                     let tab = tabs.get_mut(tab_id).unwrap();
                     tab.load_request = Some(id);
-                    tab.load_started = false;
+                    tab.load_started = tab.initialized;
+                    tab.requested_url = Some(url.as_str().into());
                     if !tab.initialized {
                         tab.queued_navigation = Some(url.clone());
                     }
@@ -366,7 +402,31 @@ impl Engine {
                 }
                 _ => return Err("Unknown human input kind".into()),
             },
-            "screenshot" => {
+            "clipboard_read" => self.complete(id, Ok(json!({"text":self.clipboard.text()}))),
+            "clipboard_write" => {
+                self.clipboard
+                    .write(request.args["text"].as_str().ok_or("text is required")?)?;
+                self.complete(id, Ok(json!({"ok":true})));
+            }
+            "clipboard_copy" | "clipboard_cut" | "clipboard_paste" => {
+                let action = match request.op.as_str() {
+                    "clipboard_copy" => servo::ClipboardAction::Copy,
+                    "clipboard_cut" => servo::ClipboardAction::Cut,
+                    _ => servo::ClipboardAction::Paste,
+                };
+                self.input(id, vec![InputEvent::EditingAction(action)]);
+            }
+            "screenshot" | "save_screenshot" => {
+                let name = if request.op == "save_screenshot" {
+                    let name = request.args["name"].as_str().unwrap_or("Page capture.png");
+                    remote_browser_servo::files::validate_name(name).map_err(|e| e.to_string())?;
+                    if !name.ends_with(".png") {
+                        return Err("Use a .png filename".into());
+                    }
+                    Some(name.to_owned())
+                } else {
+                    None
+                };
                 let weak = Rc::downgrade(self);
                 view.take_screenshot(None, move |result| {
                     let Some(engine) = weak.upgrade() else { return };
@@ -380,7 +440,17 @@ impl Engine {
                                 engine.complete(id, Err("PNG encoding failed".into()));
                                 return;
                             }
-                            let encoded = STANDARD.encode(bytes.into_inner());
+                            let bytes = bytes.into_inner();
+                            if let Some(name) = name {
+                                let result = engine
+                                    .files
+                                    .save("captures", &name, &bytes)
+                                    .map(|file| serde_json::to_value(file).unwrap())
+                                    .map_err(|error| error.to_string());
+                                engine.complete(id, result);
+                                return;
+                            }
+                            let encoded = STANDARD.encode(bytes);
                             if encoded.len() > 6 * 1024 * 1024 {
                                 engine.complete(id, Err("Screenshot exceeds 6 MiB".into()));
                             } else {

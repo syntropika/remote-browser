@@ -50,7 +50,7 @@ struct Attempts {
 }
 pub struct DashboardAuth {
     path: PathBuf,
-    sessions: Mutex<HashMap<String, Instant>>,
+    sessions: Mutex<HashMap<String, (Instant, Option<String>)>>,
     attempts: Mutex<Attempts>,
     derivations: Arc<tokio::sync::Semaphore>,
     secure_cookie: bool,
@@ -307,12 +307,24 @@ impl DashboardAuth {
             return false;
         };
         let mut sessions = self.sessions.lock().unwrap();
-        sessions.retain(|_, expiry| *expiry > Instant::now());
-        sessions.contains_key(id)
+        sessions.retain(|_, (expiry, _)| *expiry > Instant::now());
+        sessions.get(id).is_some_and(|(_, key)| key.is_none())
+    }
+    pub fn authenticated_key(&self, cookie: Option<&str>) -> Option<String> {
+        let id = self.session_id(cookie)?;
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.retain(|_, (expiry, _)| *expiry > Instant::now());
+        sessions.get(id).and_then(|(_, key)| key.clone())
     }
     pub fn issue(&self, cookie: Option<&str>) -> Result<String> {
+        self.issue_for(cookie, None)
+    }
+    pub fn issue_key(&self, cookie: Option<&str>, id: String) -> Result<String> {
+        self.issue_for(cookie, Some(id))
+    }
+    fn issue_for(&self, cookie: Option<&str>, key: Option<String>) -> Result<String> {
         let mut sessions = self.sessions.lock().unwrap();
-        sessions.retain(|_, expiry| *expiry > Instant::now());
+        sessions.retain(|_, (expiry, _)| *expiry > Instant::now());
         if let Some(id) = self.session_id(cookie) {
             sessions.remove(id);
         }
@@ -327,7 +339,7 @@ impl DashboardAuth {
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
-        sessions.insert(id.clone(), Instant::now() + SESSION_TIME);
+        sessions.insert(id.clone(), (Instant::now() + SESSION_TIME, key));
         Ok(self.cookie(&id))
     }
     pub fn logout(&self, cookie: Option<&str>) -> String {

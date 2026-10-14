@@ -9,7 +9,7 @@ use crate::{
 use axum::{
     Json, Router,
     extract::Request,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
@@ -27,12 +27,25 @@ struct Host {
     keys: Arc<ApiKeys>,
 }
 type Reply = std::result::Result<Json<Value>, DashboardError>;
-async fn observe(request: Request, next: Next) -> Response {
+async fn observe(State(host): State<Host>, request: Request, next: Next) -> Response {
+    let key_id =
+        if host.auth.authenticated(cookie(request.headers())) || bearer(&host, request.headers()) {
+            None
+        } else {
+            host.auth.authenticated_key(cookie(request.headers()))
+        };
+    let client = crate::identity::Client {
+        id: key_id.clone().unwrap_or_else(|| "dashboard-owner".into()),
+        keys: key_id.map(|_| host.keys.clone()),
+    };
     let op = match (request.method().as_str(), request.uri().path()) {
         ("POST", "/api/profiles") => "create_profile",
+        ("POST", "/api/keys/permissions") => "key_permissions",
+        (_, "/api/login/key") => "key_login",
         ("POST", "/api/keys/revoke") => "revoke_key",
         ("POST", "/api/keys") => "create_key",
         (_, "/api/keys") => "keys",
+        (_, "/api/files/content") => "file_content",
         (_, "/api/auth/status") => "auth_status",
         (_, "/api/auth/setup") => "auth_setup",
         (_, "/api/login") => "login",
@@ -49,7 +62,8 @@ async fn observe(request: Request, next: Next) -> Response {
         None,
         None,
     );
-    let mut response = log.context.clone().scope(next.run(request)).await;
+    let mut response =
+        crate::identity::scope(client, log.context.clone().scope(next.run(request))).await;
     log.finish_http(response.status().as_u16());
     response
         .headers_mut()
@@ -67,7 +81,14 @@ impl IntoResponse for DashboardError {
     }
 }
 fn authorize(host: &Host, headers: &HeaderMap) -> std::result::Result<(), DashboardError> {
-    if !bearer(host, headers) && !host.auth.authenticated(cookie(headers)) {
+    let key_valid = host
+        .auth
+        .authenticated_key(cookie(headers))
+        .map(|id| host.keys.active(&id))
+        .transpose()
+        .map_err(key_failure)?
+        .unwrap_or(false);
+    if !bearer(host, headers) && !host.auth.authenticated(cookie(headers)) && !key_valid {
         return Err(DashboardError(
             StatusCode::UNAUTHORIZED,
             "Dashboard authorization required".into(),
@@ -120,7 +141,7 @@ async fn auth_status(State(host): State<Host>, headers: HeaderMap) -> Reply {
         same_origin(&host, &headers)?;
     }
     Ok(Json(
-        json!({"configured":host.auth.configured().map_err(auth_failure)?,"authenticated":host.auth.authenticated(cookie(&headers))}),
+        json!({"configured":host.auth.configured().map_err(auth_failure)?,"authenticated":host.auth.authenticated(cookie(&headers)) || host.auth.authenticated_key(cookie(&headers)).map(|id|host.keys.active(&id)).transpose().map_err(key_failure)?.unwrap_or(false),"owner":host.auth.authenticated(cookie(&headers))}),
     ))
 }
 async fn credentials(
@@ -156,6 +177,34 @@ async fn login(
     Json(input): Json<Credentials>,
 ) -> std::result::Result<Response, DashboardError> {
     credentials(host, headers, input, false).await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyLogin {
+    secret: String,
+}
+async fn key_login(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<KeyLogin>,
+) -> std::result::Result<Response, DashboardError> {
+    same_origin(&host, &headers)?;
+    host.auth.allow_attempt().map_err(auth_failure)?;
+    let keys = host.keys.clone();
+    let id = tokio::task::spawn_blocking(move || keys.authenticate_id(&input.secret))
+        .await
+        .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+        .map_err(key_failure)?
+        .ok_or_else(|| DashboardError(StatusCode::UNAUTHORIZED, "Invalid API key.".into()))?;
+    let session = host
+        .auth
+        .issue_key(cookie(&headers), id)
+        .map_err(auth_failure)?;
+    let mut response = Json(json!({"authenticated":true,"owner":false})).into_response();
+    response
+        .headers_mut()
+        .insert("set-cookie", session.parse().unwrap());
+    Ok(response)
 }
 async fn setup(
     State(host): State<Host>,
@@ -207,9 +256,10 @@ async fn list_keys(State(host): State<Host>, headers: HeaderMap) -> Reply {
     Ok(Json(json!({"keys":keys})))
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NewKey {
     name: String,
+    profile_ids: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -222,9 +272,10 @@ async fn create_key(
     Json(input): Json<NewKey>,
 ) -> std::result::Result<Response, DashboardError> {
     owner(&host, &headers, true)?;
+    known_profiles(&host, input.profile_ids.as_deref()).await?;
     let cookie = cookie(&headers).unwrap().to_owned();
     let value = tokio::task::spawn_blocking(move || {
-        host.keys.create(&input.name, || {
+        host.keys.create_scoped(&input.name, input.profile_ids, || {
             if host.auth.authenticated(Some(&cookie)) {
                 Ok(())
             } else {
@@ -257,6 +308,195 @@ async fn revoke_key(
     .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
     .map_err(key_failure)?;
     Ok(Json(json!({"revoked":true})))
+}
+async fn known_profiles(
+    host: &Host,
+    ids: Option<&[String]>,
+) -> std::result::Result<(), DashboardError> {
+    if let Some(ids) = ids {
+        let profiles = host.profiles.list().await;
+        if ids
+            .iter()
+            .any(|id| !profiles.iter().any(|profile| &profile.id == id))
+        {
+            return Err(DashboardError(
+                StatusCode::BAD_REQUEST,
+                "Unknown profile selection.".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KeyPermissions {
+    id: String,
+    profile_ids: Option<Vec<String>>,
+}
+async fn key_permissions(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<KeyPermissions>,
+) -> Reply {
+    owner(&host, &headers, true)?;
+    known_profiles(&host, input.profile_ids.as_deref()).await?;
+    let cookie = cookie(&headers).unwrap().to_owned();
+    tokio::task::spawn_blocking(move || {
+        host.keys.permissions(&input.id, input.profile_ids, || {
+            if host.auth.authenticated(Some(&cookie)) {
+                Ok(())
+            } else {
+                Err(KeyError(401, "Session expired. Sign in again."))
+            }
+        })
+    })
+    .await
+    .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+    .map_err(key_failure)?;
+    Ok(Json(json!({"updated":true})))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FileContent {
+    profile_id: String,
+    file_id: String,
+    #[serde(default)]
+    preview: bool,
+}
+async fn file_content(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Query(input): Query<FileContent>,
+) -> std::result::Result<Response, DashboardError> {
+    authorize(&host, &headers)?;
+    let browser = host
+        .profiles
+        .browser(Some(&input.profile_id))
+        .await
+        .map_err(failure)?;
+    let listing = browser
+        .file_action("files", None, Value::Null)
+        .await
+        .map_err(failure)?;
+    let root = PathBuf::from(
+        listing["root"]
+            .as_str()
+            .ok_or_else(|| failure("File workspace unavailable"))?,
+    );
+    let range = headers
+        .get("range")
+        .and_then(|header| header.to_str().ok())
+        .map(str::to_owned);
+    let profile_id = input.profile_id.clone();
+    let (bytes, total, start, end, mime, name) =
+        tokio::task::spawn_blocking(move || -> crate::Result<_> {
+            use std::io::{Read, Seek, SeekFrom};
+            let files = crate::files::Files::new(&root)?;
+            let path = files.existing(&input.file_id)?;
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            let mut file = options.open(&path)?;
+            let meta = file.metadata()?;
+            if !meta.is_file() || meta.len() > crate::files::UPLOAD_LIMIT {
+                return Err(crate::Error::Invalid("Invalid workspace file".into()));
+            }
+            let total = meta.len();
+            let range = range
+                .map(|range| -> crate::Result<(u64, u64)> {
+                    let value = range
+                        .strip_prefix("bytes=")
+                        .ok_or_else(|| crate::Error::Invalid("Invalid byte range".into()))?;
+                    let (start, end) = value
+                        .split_once('-')
+                        .ok_or_else(|| crate::Error::Invalid("Invalid byte range".into()))?;
+                    let start = start
+                        .parse::<u64>()
+                        .map_err(|_| crate::Error::Invalid("Invalid byte range".into()))?;
+                    let end = if end.is_empty() {
+                        total.saturating_sub(1)
+                    } else {
+                        end.parse::<u64>()
+                            .map_err(|_| crate::Error::Invalid("Invalid byte range".into()))?
+                    };
+                    if start >= total || end < start {
+                        return Err(crate::Error::Invalid("Invalid byte range".into()));
+                    }
+                    Ok((start, end.min(total - 1)))
+                })
+                .transpose()?;
+            let (start, end) = range.unwrap_or((0, total.saturating_sub(1)));
+            file.seek(SeekFrom::Start(start))?;
+            let mut bytes = Vec::new();
+            file.take(if total == 0 { 0 } else { end - start + 1 })
+                .read_to_end(&mut bytes)?;
+            let record = files
+                .list()?
+                .into_iter()
+                .find(|item| item.id == input.file_id)
+                .ok_or_else(|| crate::Error::Invalid("File disappeared".into()))?;
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let mime = if input.preview
+                && matches!(
+                    record.mime_type.as_str(),
+                    "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm"
+                ) {
+                record.mime_type
+            } else {
+                "application/octet-stream".into()
+            };
+            Ok((bytes, total, start, end, mime, name))
+        })
+        .await
+        .map_err(|_| failure("File read worker unavailable"))?
+        .map_err(failure)?;
+    authorize(&host, &headers)?;
+    crate::identity::check_profile(&profile_id).map_err(failure)?;
+    let partial = headers.contains_key("range");
+    let mut response = (
+        if partial {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        },
+        bytes,
+    )
+        .into_response();
+    let output = response.headers_mut();
+    output.insert("content-type", mime.parse().unwrap());
+    output.insert("accept-ranges", "bytes".parse().unwrap());
+    output.insert("x-content-type-options", "nosniff".parse().unwrap());
+    if partial {
+        output.insert(
+            "content-range",
+            format!("bytes {start}-{end}/{total}").parse().unwrap(),
+        );
+    }
+    let encoded: String = name.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    output.insert(
+        "content-disposition",
+        format!(
+            "{}; filename*=UTF-8''{encoded}",
+            if mime == "application/octet-stream" {
+                "attachment"
+            } else {
+                "inline"
+            }
+        )
+        .parse()
+        .unwrap(),
+    );
+    Ok(response)
+}
+async fn features_script() -> impl IntoResponse {
+    (
+        [("content-type", "text/javascript; charset=utf-8")],
+        include_str!("../ui/features.js"),
+    )
 }
 async fn keys_script() -> impl IntoResponse {
     (
@@ -334,7 +574,7 @@ async fn index() -> impl IntoResponse {
     headers.insert("cache-control", "no-store".parse().unwrap());
     headers.insert("referrer-policy", "no-referrer".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert("content-security-policy","default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
+    headers.insert("content-security-policy","default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data: blob:; media-src blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
     response
 }
 async fn styles() -> impl IntoResponse {
@@ -373,6 +613,8 @@ pub async fn start(
         .route("/", get(index))
         .route("/styles.css", get(styles))
         .route("/api-keys.js", get(keys_script))
+        .route("/features.js", get(features_script))
+        .route("/api/files/content", get(file_content))
         .route(
             "/api/keys",
             get(list_keys)
@@ -389,12 +631,20 @@ pub async fn start(
             post(setup).layer(DefaultBodyLimit::max(4096)),
         )
         .route("/api/login", post(login).layer(DefaultBodyLimit::max(4096)))
+        .route(
+            "/api/login/key",
+            post(key_login).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/keys/permissions",
+            post(key_permissions).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/api/logout", post(logout))
         .route("/api/profiles", get(list_profiles).post(create))
         .route("/api/action", post(action))
         .route("/api/policies", post(policies))
         .layer(DefaultBodyLimit::max(65536))
-        .layer(middleware::from_fn(observe))
+        .layer(middleware::from_fn_with_state(host.clone(), observe))
         .with_state(host);
     Ok(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;

@@ -125,6 +125,7 @@ enum TabsArgs {
         tab_id: String,
         profile_id: Option<String>,
         task: String,
+        agent_name: String,
         #[serde(default = "default_ttl")]
         ttl_ms: u64,
     },
@@ -234,6 +235,30 @@ struct DownloadArgs {
 impl ServoMcp {
     async fn execute(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
         let value = match name {
+            "browser_control" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Args {
+                    profile_id: Option<String>,
+                    tab_id: String,
+                    lease_id: Option<String>,
+                    action: String,
+                    name: Option<String>,
+                    text: Option<String>,
+                    max_seconds: Option<u64>,
+                }
+                let args: Args = serde_json::from_value(arguments)?;
+                self.profiles
+                    .browser(args.profile_id.as_deref())
+                    .await?
+                    .with_lease(args.lease_id.as_deref())
+                    .control(
+                        &args.action,
+                        &args.tab_id,
+                        json!({"name":args.name,"text":args.text,"maxSeconds":args.max_seconds}),
+                    )
+                    .await?
+            }
             "browser_files" => {
                 let args: FileArgs = serde_json::from_value(arguments)?;
                 let (profile, tab, lease, op, data) = match args {
@@ -381,9 +406,14 @@ impl ServoMcp {
                     TabsArgs::Reserve {
                         tab_id,
                         task,
+                        agent_name,
                         ttl_ms,
                         ..
-                    } => serde_json::to_value(browser.reserve(&tab_id, &task, ttl_ms).await?)?,
+                    } => serde_json::to_value(
+                        browser
+                            .reserve_named(&tab_id, &task, &agent_name, ttl_ms)
+                            .await?,
+                    )?,
                     TabsArgs::Renew {
                         tab_id,
                         lease_id,
@@ -518,10 +548,10 @@ impl ServerHandler for ServoMcp {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
         let logged_operation = match request.name.as_ref() {
-            "browser_tabs" => request
+            "browser_tabs" | "browser_control" => request
                 .arguments
                 .as_ref()
                 .and_then(|args| args.get("action"))
@@ -554,11 +584,20 @@ impl ServerHandler for ServoMcp {
             ));
         }
         let arguments = Value::Object(request.arguments.unwrap_or_default());
-        let response = operation
-            .context
-            .clone()
-            .scope(self.execute(&request.name, arguments))
-            .await;
+        let client = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<crate::identity::Client>())
+            .cloned()
+            .unwrap_or_else(crate::identity::current);
+        let response = crate::identity::scope(
+            client,
+            operation
+                .context
+                .clone()
+                .scope(self.execute(&request.name, arguments)),
+        )
+        .await;
         operation.finish(crate::logging::outcome(response.as_ref().err()));
         let mut result = match response {
             Ok(result) => result,
@@ -577,6 +616,13 @@ pub fn tools() -> Vec<Tool> {
     let reference = json!({"type":"string","minLength":1,"maxLength":128,"description":"Exact reference from the latest snapshot of this tab. Never invent references."});
     vec![
         tool(
+            "browser_control",
+            "Native history (back, forward, reload), profile clipboard text/read/write/copy/cut/paste, save a PNG to the gallery, and start/status/stop MP4 recording. Respects tab reservations bound to this authenticated client. Human input requires an acknowledged cancellable five-second handoff. Recordings follow the profile's visible tab across calls and human takeover; MP4 requires FFmpeg. Supply a plain .png/.mp4 name and maxSeconds 1–300. Clipboard text limit is 8192 bytes.",
+            json!({"tabId":tab,"action":{"type":"string","enum":["back","forward","reload","clipboard_read","clipboard_write","clipboard_copy","clipboard_cut","clipboard_paste","save_screenshot","record_start","record_status","record_stop"]},"text":{"type":"string","maxLength":8192},"name":{"type":"string","maxLength":180},"maxSeconds":{"type":"integer","minimum":1,"maximum":300}}),
+            &["action", "tabId"],
+            false,
+        ),
+        tool(
             "browser_files",
             "Manage local files in one embedded profile: list workspace paths and open file choosers; read base64 chunks at a byte offset; stage base64 chunks of at most 32 KiB using byte offsets (zero creates without overwriting); delete one file to reclaim disk space; choose or cancel a tab's native file chooser. File IDs come from this listing. Uploads may also use downloaded files. Local paths belong to the machine running the engine.",
             json!({"action":{"type":"string","enum":["list","read","stage","delete","choose","cancel"]},"name":{"type":"string","maxLength":180},"offset":{"type":"integer","minimum":0,"maximum":67108864},"data":{"type":"string","maxLength":44000},"fileId":{"type":"string","maxLength":200},"tabId":tab,"leaseId":lease_schema(),"fileIds":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","maxLength":200}}}),
@@ -592,14 +638,14 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "browser_download",
-            "Save a URL to this profile's local downloads folder using the tab's authenticated fetch session. Supports HTTP(S), relative links and page blob URLs, subject to browser CORS. Maximum 8 MiB and a 9-second fetch deadline. Supply a plain filename; existing files are never overwritten. Returns the file ID and local path. This is explicit downloading, not a general automatic attachment/download-click handler.",
+            "Save a URL to this profile's local downloads folder using the tab's authenticated fetch session. Supports HTTP(S), relative links and page blob URLs, subject to browser CORS. Maximum 20 MiB and a 9-second fetch deadline. Supply a plain filename; existing files are never overwritten. Returns the file ID and local path. This is explicit downloading; native attachment navigations and download links are also captured automatically.",
             json!({"tabId":tab,"url":{"type":"string","maxLength":8192},"name":{"type":"string","maxLength":180}}),
             &["tabId", "url", "name"],
             false,
         ),
         tool(
             "browser_profiles",
-            "List profiles and engine capabilities, or create a persistent embedded profile. Choose a profile explicitly for multi-profile tasks. Each profile owns an independent engine and cookie store.",
+            "List permitted profiles and engine capabilities. Creating a persistent embedded profile requires owner/stdio access. Choose a profile explicitly for multi-profile tasks. Each profile owns an independent engine and cookie store.",
             json!({"action":{"type":"string","enum":["list","create"]},"name":{"type":"string","minLength":1,"maxLength":120}}),
             &["action"],
             false,
@@ -620,8 +666,8 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "browser_tabs",
-            "List, open, select, close, reserve, renew or release tabs in one Servo session. Reserve returns a leaseId required on every action for that tab. Reservations expire; renew before expiry. Listing omits tokens. Only API-created tabs may be closed. Embedded operations serialize within each tab and preserve visible selection; WebDriver operations serialize the session and may change visible selection. Tabs within one profile share cookies. Start by listing tabs.",
-            json!({"action":{"type":"string","enum":["list","open","select","close","reserve","renew","release"]},"tabId":tab,"leaseId":lease_schema(),"task":{"type":"string","minLength":1,"maxLength":120},"ttlMs":{"type":"integer","minimum":1000,"maximum":300000,"default":300000}}),
+            "List, open, select, close, reserve, renew or release tabs in one Servo session. Reserve requires agentName and task, and returns a unique leaseId required on every action for that tab. Agents may share one API key; the name identifies the reservation and the token protects it. Reservations expire; renew before expiry. Listing omits tokens. Only API-created tabs may be closed. Embedded operations serialize within each tab and preserve visible selection; WebDriver operations serialize the session and may change visible selection. Tabs within one profile share cookies. Start by listing tabs.",
+            json!({"action":{"type":"string","enum":["list","open","select","close","reserve","renew","release"]},"tabId":tab,"leaseId":lease_schema(),"task":{"type":"string","minLength":1,"maxLength":120},"agentName":{"type":"string","minLength":1,"maxLength":120,"description":"Name of the reserving agent; required for reserve. Agents may share an API key and use independent leases."},"ttlMs":{"type":"integer","minimum":1000,"maximum":300000,"default":300000}}),
             &["action"],
             false,
         ),
@@ -756,6 +802,9 @@ fn tool(
             json!({"properties":{"action":{"const":action}},"required":required,"not":{"anyOf":forbidden.into_iter().map(|field| json!({"required":[field]})).collect::<Vec<_>>()}})
         }).collect());
     }
+    if name == "browser_tabs" {
+        schema["allOf"] = json!([{"if":{"properties":{"action":{"const":"reserve"}}},"then":{"required":["tabId","task","agentName"]}}]);
+    }
     Tool::new(
         name,
         description,
@@ -819,7 +868,7 @@ mod tests {
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.name.contains("control") || tool.name.contains("cdp"))
+                .any(|tool| tool.name.contains("cdp") || tool.name.contains("playwright"))
         );
     }
 }

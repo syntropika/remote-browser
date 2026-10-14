@@ -37,6 +37,8 @@ struct Key {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     legacy: Option<bool>,
     hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile_ids: Option<Vec<String>>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,11 +85,30 @@ fn valid_hex(value: &str, len: usize) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn metadata(key: &Key) -> Value {
-    let mut value = json!({"id":key.id,"name":key.name,"prefix":key.prefix,"createdAt":key.created_at,"lastUsedAt":key.last_used_at});
+    let mut value = json!({"id":key.id,"name":key.name,"prefix":key.prefix,"createdAt":key.created_at,"lastUsedAt":key.last_used_at,"profileIds":key.profile_ids});
     if key.legacy == Some(true) {
         value["legacy"] = json!(true);
     }
     value
+}
+fn validate_profiles(ids: Option<&[String]>) -> Result<()> {
+    if let Some(ids) = ids {
+        let unique: HashSet<_> = ids.iter().collect();
+        if ids.is_empty()
+            || ids.len() > 32
+            || unique.len() != ids.len()
+            || ids.iter().any(|id| {
+                id.is_empty()
+                    || id.len() > 64
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            })
+        {
+            return Err(KeyError(400, "Select between 1 and 32 distinct profiles."));
+        }
+    }
+    Ok(())
 }
 fn read(path: &Path) -> Result<Registry> {
     let mut options = OpenOptions::new();
@@ -139,6 +160,7 @@ fn read(path: &Path) -> Result<Registry> {
             || !prefix
             || !date(&key.created_at)
             || !key.last_used_at.as_ref().is_none_or(|v| date(v))
+            || validate_profiles(key.profile_ids.as_deref()).is_err()
             || !ids.insert(&key.id)
             || !hashes.insert(&key.hash)
         {
@@ -176,6 +198,7 @@ impl ApiKeys {
                         last_used_at: None,
                         legacy: Some(true),
                         hash: hash(&secret),
+                        profile_ids: None,
                     });
                 }
                 let store = Self {
@@ -237,6 +260,15 @@ impl ApiKeys {
         value: &str,
         before_mutation: impl FnOnce() -> Result<()>,
     ) -> Result<Value> {
+        self.create_scoped(value, None, before_mutation)
+    }
+    pub fn create_scoped(
+        &self,
+        value: &str,
+        profile_ids: Option<Vec<String>>,
+        before_mutation: impl FnOnce() -> Result<()>,
+    ) -> Result<Value> {
+        validate_profiles(profile_ids.as_deref())?;
         let name = name(value).ok_or(KeyError(
             400,
             "Use a key name with 1 to 64 characters and no control characters.",
@@ -260,6 +292,7 @@ impl ApiKeys {
             last_used_at: None,
             legacy: None,
             hash: hash(&secret),
+            profile_ids,
         };
         let result = json!({"key":metadata(&key),"secret":secret});
         record.keys.push(key);
@@ -283,17 +316,54 @@ impl ApiKeys {
     }
     /// Check every HTTP request against the registry; SDK sessions never bypass revocation.
     pub fn authenticate(&self, secret: &str) -> Result<bool> {
+        Ok(self.authenticate_id(secret)?.is_some())
+    }
+    pub fn allows(&self, id: &str, profile: &str) -> Result<bool> {
+        let _guard = self.record.lock().map_err(|_| unavailable())?;
+        Ok(read(&self.path)?.keys.iter().any(|key| {
+            key.id == id
+                && key
+                    .profile_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.iter().any(|id| id == profile))
+        }))
+    }
+    pub fn permissions(
+        &self,
+        id: &str,
+        profile_ids: Option<Vec<String>>,
+        before_mutation: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        validate_profiles(profile_ids.as_deref())?;
+        let mut current = self.record.lock().map_err(|_| unavailable())?;
+        let mut record = read(&self.path)?;
+        let key = record
+            .keys
+            .iter_mut()
+            .find(|key| key.id == id)
+            .ok_or(KeyError(404, "API key not found."))?;
+        key.profile_ids = profile_ids;
+        before_mutation()?;
+        self.commit(&record, false)?;
+        *current = record;
+        Ok(())
+    }
+    pub fn active(&self, id: &str) -> Result<bool> {
+        let _guard = self.record.lock().map_err(|_| unavailable())?;
+        Ok(read(&self.path)?.keys.iter().any(|key| key.id == id))
+    }
+    pub fn authenticate_id(&self, secret: &str) -> Result<Option<String>> {
         let mut current = self.record.lock().map_err(|_| unavailable())?;
         let mut record = read(&self.path)?;
         if !(32..=4096).contains(&secret.len()) {
-            return Ok(false);
+            return Ok(None);
         }
         let digest = hash(secret);
         let key = record
             .keys
             .iter_mut()
             .find(|key| bool::from(key.hash.as_bytes().ct_eq(digest.as_bytes())));
-        let Some(key) = key else { return Ok(false) };
+        let Some(key) = key else { return Ok(None) };
         // Bound metadata writes for active automation clients to one per minute.
         let recent = key
             .last_used_at
@@ -305,12 +375,13 @@ impl ApiKeys {
                     .num_seconds()
                     < 60
             });
+        let id = key.id.clone();
         if !recent {
             key.last_used_at = Some(now());
             self.commit(&record, false)?;
         }
         *current = record;
-        Ok(true)
+        Ok(Some(id))
     }
 }
 #[cfg(test)]

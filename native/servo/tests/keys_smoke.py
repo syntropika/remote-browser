@@ -33,7 +33,40 @@ def run(binary):
             owner.api('/api/keys',{'name':'Wrong origin'},403,origin='https://foreign.example')
             owner.api('/api/keys',{'name':'bad\u200bname'},400)
             created=owner.api('/api/keys',{'name':' Work laptop '},201)[0];secret=created['secret'];identifier=created['key']['id'];assert created['key']['name']=='Work laptop'
-            active=Http(runtime.http.origin,secret);active.request('initialize',INIT);assert len(active.request('tools/list',{})['result']['tools'])==15
+            active=Http(runtime.http.origin,secret);active.request('initialize',INIT);assert len(active.request('tools/list',{})['result']['tools'])==16
+            profile=owner.api('/api/profiles',{'name':'Restricted profile'})[0]['id']
+            limited=owner.api('/api/keys',{'name':'Restricted key','profileIds':[profile]},201)[0]
+            limited_http=Http(runtime.http.origin,limited['secret']);limited_http.request('initialize',INIT)
+            assert [item['id'] for item in limited_http.call('browser_profiles',{'action':'list'})['profiles']]==[profile]
+            limited_http.call('browser_tabs',{'action':'list','profileId':'default'},error=True)
+            limited_http.call('browser_profiles',{'action':'create','name':'Denied'},error=True)
+            key_browser=Browser(runtime.origin);key_browser.api('/api/login/key',{'secret':limited['secret']})
+            assert key_browser.api('/api/auth/status')[0]['owner'] is False
+            assert [item['id'] for item in key_browser.api('/api/profiles')[0]['profiles']]==[profile]
+            key_browser.api('/api/keys',expected=401);key_browser.api('/api/profiles',{'name':'Denied'},409)
+            key_browser.api('/api/action',{'profileId':'default','op':'tabs'},409)
+            tab=limited_http.call('browser_tabs',{'action':'open','profileId':profile})['tabId']
+            lease=limited_http.call('browser_tabs',{'action':'reserve','agentName':'Agent one','profileId':profile,'tabId':tab,'task':'limited client'})['leaseId']
+            active.call('browser_evaluate',{'profileId':profile,'tabId':tab,'leaseId':lease,'script':'return 42;'},error=True)
+            active.call('browser_tabs',{'action':'renew','profileId':profile,'tabId':tab,'leaseId':lease},error=True)
+            active.call('browser_tabs',{'action':'release','profileId':profile,'tabId':tab,'leaseId':lease},error=True)
+            assert limited_http.call('browser_evaluate',{'profileId':profile,'tabId':tab,'leaseId':lease,'script':'return 42;'})['value']==42
+            second=limited_http.call('browser_tabs',{'action':'open','profileId':profile})['tabId']
+            second_lease=limited_http.call('browser_tabs',{'action':'reserve','profileId':profile,'tabId':second,'agentName':'Agent two','task':'second task'})['leaseId']
+            limited_http.call('browser_evaluate',{'profileId':profile,'tabId':second,'leaseId':lease,'script':'return 9;'},error=True)
+            assert limited_http.call('browser_evaluate',{'profileId':profile,'tabId':second,'leaseId':second_lease,'script':'return 9;'})['value']==9
+            reservations=limited_http.call('browser_tabs',{'action':'list','profileId':profile})['tabs']
+            assert next(item for item in reservations if item['id']==tab)['reservation']['agentName']=='Agent one'
+            assert next(item for item in reservations if item['id']==second)['reservation']['agentName']=='Agent two'
+            limited_http.call('browser_tabs',{'action':'reserve','profileId':profile,'tabId':tab,'agentName':'Agent two','task':'conflict'},error=True)
+            owner.api('/api/keys/permissions',{'id':limited['key']['id'],'profileIds':['default']})
+            limited_http.call('browser_tabs',{'action':'list','profileId':profile},error=True)
+            assert [item['id'] for item in key_browser.api('/api/profiles')[0]['profiles']]==['default']
+            owner.api('/api/keys/permissions',{'id':limited['key']['id'],'profileIds':[]},400)
+            owner.api('/api/keys/permissions',{'id':limited['key']['id'],'profileIds':['missing']},400)
+            owner.api('/api/keys/revoke',{'id':limited['key']['id']})
+            key_browser.api('/api/profiles',expected=401)
+            limited_http.request('tools/list',{},expected=401)
             listing=owner.api('/api/keys')[0];assert secret not in json.dumps(listing) and 'hash' not in json.dumps(listing)
             assert next(key for key in listing['keys'] if key['id']==identifier)['lastUsedAt']
             assert secret not in registry.read_text()
