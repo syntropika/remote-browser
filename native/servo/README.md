@@ -433,6 +433,11 @@ settings clears the displayed secret. The panel uses the same component and
 stylesheet as the original dashboard; run `npm run build:servo-ui` after changing
 that component to regenerate the committed JavaScript bundle before a Rust build.
 
+The panel displays `/mcp` on the dashboard origin, assuming a reverse proxy that
+exposes both listeners there. A direct separate-port launch must instead configure
+the MCP client with the `--mcp-http-port` listener, such as `http://127.0.0.1:8083/mcp`
+in the example above. The dashboard listener does not proxy MCP itself.
+
 Only the owner session cookie can list, create or revoke keys. Automation bearers
 cannot manage keys or sign in. Mutations require the exact dashboard Origin. New
 keys have 256 random bits; only SHA-256 hashes and display metadata are stored in
