@@ -14,9 +14,15 @@
   <body>
     <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
-        <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M6 18 18 6M6 6h12v12" /></symbol>
-        <symbol id="icon-back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></symbol>
-        <symbol id="icon-forward" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6" /></symbol>
+        <symbol id="icon-arrow" viewBox="0 0 24 24">
+          <path d="M6 18 18 6M6 6h12v12" />
+        </symbol>
+        <symbol id="icon-back" viewBox="0 0 24 24">
+          <path d="m14 6-6 6 6 6" />
+        </symbol>
+        <symbol id="icon-forward" viewBox="0 0 24 24">
+          <path d="m10 6 6 6-6 6" />
+        </symbol>
         <symbol id="icon-reload" viewBox="0 0 24 24">
           <path d="M20 7v5h-5M19.3 12A7.5 7.5 0 1 1 17 6.3L20 9" />
         </symbol>
@@ -49,8 +55,12 @@
         <symbol id="icon-enter" viewBox="0 0 24 24">
           <path d="M20 5v7a3 3 0 0 1-3 3H4m5-5-5 5 5 5" />
         </symbol>
-        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
-        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24">
+          <path d="m6 6 12 12M18 6 6 18" />
+        </symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24">
+          <path d="M12 5v14M5 12h14" />
+        </symbol>
         <symbol id="icon-screen" viewBox="0 0 24 24">
           <rect x="3" y="4" width="18" height="13" rx="2" />
           <path d="M8 21h8M12 17v4" />
@@ -111,7 +121,9 @@
             Use the access token provided with your dashboard link.
           </p>
           <button class="button button-primary login-submit" id="unlock">
-            Connect<svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg>
+            Connect<svg class="icon" aria-hidden="true">
+              <use href="#icon-arrow" />
+            </svg>
           </button>
           <p class="form-error" id="connection-error" role="alert"></p>
         </form>
@@ -133,7 +145,9 @@
           ></canvas>
         </div>
         <div class="display-placeholder" id="display-placeholder">
-          <svg class="icon display-symbol" aria-hidden="true"><use href="#icon-screen" /></svg>
+          <svg class="icon display-symbol" aria-hidden="true">
+            <use href="#icon-screen" />
+          </svg>
           <h2>Connecting to your browser</h2>
           <p>The selected page will appear here.</p>
         </div>
@@ -149,10 +163,14 @@
               aria-label="Reload page"
               title="Reload page"
             >
-              <svg class="icon" aria-hidden="true"><use href="#icon-reload" /></svg>
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-reload" />
+              </svg>
             </button>
             <form class="address-form" id="navigation" aria-label="Open a website">
-              <svg class="icon address-icon" aria-hidden="true"><use href="#icon-globe" /></svg>
+              <svg class="icon address-icon" aria-hidden="true">
+                <use href="#icon-globe" />
+              </svg>
               <input
                 id="address"
                 aria-label="Page address"
@@ -170,7 +188,9 @@
                 aria-label="Open website"
                 title="Go"
               >
-                <svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg>
+                <svg class="icon" aria-hidden="true">
+                  <use href="#icon-arrow" />
+                </svg>
               </button>
             </form>
             <button
@@ -182,7 +202,8 @@
               aria-controls="profiles-panel"
               title="Profiles"
             >
-              <svg class="icon" aria-hidden="true"><use href="#icon-profile" /></svg
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-profile" /></svg
               ><span id="profile-label">Profiles</span>
             </button>
             <button
@@ -194,7 +215,8 @@
               aria-controls="tabs-panel"
               title="Tabs"
             >
-              <svg class="icon" aria-hidden="true"><use href="#icon-tabs" /></svg
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-tabs" /></svg
               ><span id="tab-count">0</span>
             </button>
             <button
@@ -205,7 +227,9 @@
               aria-pressed="false"
               title="Show actual size"
             >
-              <svg class="icon" aria-hidden="true"><use href="#icon-zoom" /></svg>
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-zoom" />
+              </svg>
             </button>
             <div class="servo-ownership">
               <button
@@ -215,7 +239,8 @@
                 title="Take control"
                 aria-label="Take control"
               >
-                <svg class="icon" aria-hidden="true"><use href="#icon-hand" /></svg
+                <svg class="icon" aria-hidden="true">
+                  <use href="#icon-hand" /></svg
                 ><span class="ownership-label">Take control</span>
               </button>
               <button
@@ -226,7 +251,8 @@
                 aria-label="Return to agents"
                 hidden
               >
-                <svg class="icon" aria-hidden="true"><use href="#icon-arrow" /></svg
+                <svg class="icon" aria-hidden="true">
+                  <use href="#icon-arrow" /></svg
                 ><span class="ownership-label">Return to agents</span>
               </button>
             </div>
@@ -236,7 +262,9 @@
                 aria-label="More options"
                 title="More options"
               >
-                <svg class="icon" aria-hidden="true"><use href="#icon-more" /></svg>
+                <svg class="icon" aria-hidden="true">
+                  <use href="#icon-more" />
+                </svg>
               </summary>
               <div class="more-options">
                 <div class="servo-session-summary">
@@ -245,19 +273,29 @@
                   <p id="health" role="status">Session health not configured</p>
                 </div>
                 <div class="menu-separator" role="separator"></div>
+                <button class="button button-quiet" id="files-open" type="button">
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#icon-files" /></svg
+                  >Files
+                </button>
                 <button class="button button-quiet" id="policy" type="button">
-                  <svg class="icon" aria-hidden="true"><use href="#icon-key" /></svg>Session check
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#icon-key" /></svg
+                  >Session check
                 </button>
                 <button class="button button-quiet" id="reconnect" type="button">
-                  <svg class="icon" aria-hidden="true"><use href="#icon-reload" /></svg>Reconnect
-                  display
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#icon-reload" /></svg
+                  >Reconnect display
                 </button>
                 <button
                   class="button button-quiet button-destructive"
                   id="disconnect"
                   type="button"
                 >
-                  <svg class="icon" aria-hidden="true"><use href="#icon-logout" /></svg>Disconnect
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#icon-logout" /></svg
+                  >Disconnect
                 </button>
               </div>
             </details>
@@ -277,7 +315,9 @@
               data-panel-close
               aria-label="Close tab list"
             >
-              <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-close" />
+              </svg>
             </button>
           </header>
           <p class="panel-copy">
@@ -287,7 +327,9 @@
           <ul class="tabs-list" id="tabs" aria-label="Profile tabs"></ul>
           <div class="servo-panel-actions">
             <button class="button button-secondary new-tab-button" id="open" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-plus" /></svg>New tab</button
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-plus" /></svg
+              >New tab</button
             ><button class="button button-quiet" id="close" type="button">
               Close selected tab
             </button>
@@ -307,7 +349,9 @@
               data-panel-close
               aria-label="Close profile list"
             >
-              <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+              <svg class="icon" aria-hidden="true">
+                <use href="#icon-close" />
+              </svg>
             </button>
           </header>
           <p class="panel-copy">Each profile keeps its own accounts and website sessions.</p>
@@ -383,6 +427,55 @@
         </div>
       </form>
     </dialog>
+    <dialog id="files-dialog" aria-labelledby="files-title">
+      <header class="panel-heading">
+        <h2 id="files-title">Profile files</h2>
+        <button
+          class="button button-quiet icon-button"
+          id="files-close"
+          aria-label="Close files"
+          type="button"
+        >
+          <svg class="icon" aria-hidden="true"><use href="#icon-close" /></svg>
+        </button>
+      </header>
+      <p class="panel-copy" id="files-description">
+        Downloads and uploads stay on the machine running this browser.
+      </p>
+      <p class="file-root" id="files-root"></p>
+      <p class="form-error" role="alert" data-dialog-error></p>
+      <label class="file-add"
+        >Add files from this device<input id="file-add" type="file" multiple
+      /></label>
+      <p class="field-note" id="file-progress" role="status">
+        Up to 64 MiB per upload. Existing files are never overwritten.
+      </p>
+      <ul class="managed-files" id="managed-files"></ul>
+      <div class="actions">
+        <button class="button button-secondary" id="files-refresh" type="button">
+          Refresh files</button
+        ><button class="button button-primary" id="files-choose" type="button" hidden>
+          Use selected files
+        </button>
+      </div>
+      <details class="file-download">
+        <summary>Save a download link</summary>
+        <form id="file-download-form">
+          <label
+            >Download URL<input
+              id="file-url"
+              required
+              placeholder="https://example.com/report.pdf" /></label
+          ><label
+            >Save as<input id="file-name" required maxlength="180" placeholder="report.pdf"
+          /></label>
+          <p class="field-note">
+            Uses this page's session. Downloads up to 8 MiB; cross-site links require CORS.
+          </p>
+          <button class="button button-secondary">Save to downloads</button>
+        </form>
+      </details>
+    </dialog>
     <script>
       const $ = (id) => document.getElementById(id);
       let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
@@ -421,7 +514,12 @@
         return value;
       }
       function action(op, args = {}, target = tabId, profile = profileId) {
-        return api("/api/action", { profileId: profile, op, tabId: target || null, args });
+        return api("/api/action", {
+          profileId: profile,
+          op,
+          tabId: target || null,
+          args,
+        });
       }
       function current() {
         return tabs.find((tab) => tab.id === tabId);
@@ -470,6 +568,7 @@
         await switchProfile();
       }
       function clearView() {
+        if ($("files-dialog").open) $("files-dialog").close();
         epoch++;
         viewReady = false;
         $("connection").textContent = "Connecting display...";
@@ -592,6 +691,12 @@
           if (!tabs.some((tab) => tab.id === tabId))
             tabId = tabs.find((tab) => tab.active)?.id || tabs[0]?.id || "";
           drawTabs();
+          if (
+            current()?.filePicker &&
+            !$("files-dialog").open &&
+            !document.querySelector("dialog[open]")
+          )
+            await openFiles();
         } catch (error) {
           notice(error.message);
         } finally {
@@ -742,7 +847,10 @@
       });
       canvas.addEventListener("paste", (event) => {
         event.preventDefault();
-        enqueueInput({ kind: "text", text: event.clipboardData.getData("text/plain") });
+        enqueueInput({
+          kind: "text",
+          text: event.clipboardData.getData("text/plain"),
+        });
       });
       canvas.addEventListener(
         "wheel",
@@ -918,6 +1026,191 @@
         } finally {
           $("unlock").disabled = false;
         }
+      };
+      let fileContext = null,
+        fileBusy = false;
+      function fileAction(op, args = {}, target = null) {
+        return action(op, args, target, fileContext.profile);
+      }
+      async function openFiles() {
+        hidePanels();
+        $("more-menu").open = false;
+        fileContext = {
+          profile: profileId,
+          tab: tabId,
+          picker: !!current()?.filePicker,
+        };
+        $("files-description").textContent = fileContext.picker
+          ? "Choose files for this page, or close to cancel."
+          : "Downloads and uploads stay on the machine running this browser.";
+        $("files-choose").hidden = !fileContext.picker;
+        $("files-dialog").showModal();
+        try {
+          await listFiles();
+        } catch (error) {
+          notice(error.message);
+        }
+      }
+      async function listFiles() {
+        const active = fileContext;
+        const data = await fileAction("files");
+        if (active !== fileContext || !$("files-dialog").open) return;
+        $("files-root").textContent = data.root;
+        $("managed-files").replaceChildren();
+        if (!data.files.length) {
+          const empty = document.createElement("li");
+          empty.className = "file-empty";
+          empty.textContent = "No files yet. Add a file or save a download link.";
+          $("managed-files").append(empty);
+        }
+        for (const file of data.files) {
+          const row = document.createElement("li");
+          const label = document.createElement("label");
+          if (active.picker) {
+            const check = document.createElement("input");
+            check.type = "checkbox";
+            check.value = file.id;
+            check.name = "chosen-file";
+            label.append(check);
+          }
+          const name = document.createElement("span");
+          name.textContent = file.id;
+          const size = document.createElement("small");
+          size.textContent =
+            file.bytes < 1024
+              ? file.bytes + " B"
+              : (file.bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 }) +
+                " KiB";
+          label.append(name, size);
+          row.append(label);
+          const save = document.createElement("button");
+          save.className = "button button-quiet";
+          save.textContent = "Save copy";
+          save.setAttribute("aria-label", "Save a copy of " + file.id);
+          save.onclick = () =>
+            fileWork(async () => {
+              const chunks = [];
+              let offset = 0;
+              do {
+                const part = await fileAction("read_file", {
+                  fileId: file.id,
+                  offset,
+                });
+                if (part.nextOffset <= offset) break;
+                chunks.push(Uint8Array.from(atob(part.data), (c) => c.charCodeAt(0)));
+                offset = part.nextOffset;
+              } while (offset < file.bytes);
+              const url = URL.createObjectURL(new Blob(chunks));
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = file.id.split("/").pop();
+              link.click();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            });
+          const remove = document.createElement("button");
+          remove.className = "button button-quiet button-destructive";
+          remove.textContent = "Delete";
+          remove.setAttribute("aria-label", "Delete " + file.id);
+          let armed = false;
+          remove.onclick = () => {
+            if (!armed) {
+              armed = true;
+              remove.textContent = "Confirm delete";
+              return;
+            }
+            fileWork(async () => {
+              await fileAction("delete_file", { fileId: file.id });
+              await listFiles();
+            });
+          };
+          row.append(save, remove);
+          $("managed-files").append(row);
+        }
+      }
+      async function fileWork(work) {
+        if (fileBusy) return;
+        fileBusy = true;
+        notice("");
+        const controls = Array.from($("files-dialog").querySelectorAll("button,input"));
+        const previous = controls.map((control) => control.disabled);
+        controls.forEach((control) => (control.disabled = true));
+        try {
+          await work();
+        } catch (error) {
+          notice(error.message);
+        } finally {
+          fileBusy = false;
+          controls.forEach((control, i) => (control.disabled = previous[i]));
+        }
+      }
+      $("files-open").onclick = openFiles;
+      $("files-refresh").onclick = () => fileWork(listFiles);
+      async function closeFiles() {
+        if (fileBusy) return;
+        if (fileContext?.picker) {
+          try {
+            await fileAction("choose_files", { cancel: true }, fileContext.tab);
+          } catch (error) {
+            notice(error.message);
+          }
+        }
+        $("files-dialog").close();
+        await refresh();
+      }
+      $("files-close").onclick = closeFiles;
+      $("files-dialog").addEventListener("cancel", (event) => {
+        event.preventDefault();
+        closeFiles();
+      });
+      $("files-choose").onclick = () =>
+        fileWork(async () => {
+          const fileIds = Array.from($("managed-files").querySelectorAll("input:checked")).map(
+            (input) => input.value,
+          );
+          if (!fileIds.length) throw Error("Select a file first.");
+          await fileAction("choose_files", { fileIds }, fileContext.tab);
+          $("files-dialog").close();
+          await refresh();
+        });
+      $("file-add").onchange = () => {
+        const selected = Array.from($("file-add").files);
+        fileWork(async () => {
+          for (const file of selected) {
+            if (file.size > 64 * 1024 * 1024) throw Error("Upload exceeds 64 MiB: " + file.name);
+            for (let offset = 0; offset < file.size || offset === 0; offset += 32768) {
+              const chunk = new Uint8Array(await file.slice(offset, offset + 32768).arrayBuffer());
+              const data = btoa(String.fromCharCode(...chunk));
+              await fileAction("stage_file", { name: file.name, offset, data });
+              $("file-progress").textContent =
+                "Adding " +
+                file.name +
+                ": " +
+                Math.min(
+                  100,
+                  Math.round(((offset + chunk.length) / Math.max(1, file.size)) * 100),
+                ) +
+                "%";
+              if (!file.size) break;
+            }
+          }
+          $("file-progress").textContent = fileContext.picker
+            ? "Files added. Select a file to attach it to this page."
+            : "Files added to this profile’s uploads folder.";
+          $("file-add").value = "";
+          await listFiles();
+        });
+      };
+      $("file-download-form").onsubmit = (event) => {
+        event.preventDefault();
+        fileWork(async () => {
+          await fileAction(
+            "download",
+            { url: $("file-url").value, name: $("file-name").value },
+            fileContext.tab,
+          );
+          await listFiles();
+          $("file-progress").textContent = "Download saved.";
+        });
       };
       function hidePanels() {
         for (const name of ["tabs", "profiles"]) {

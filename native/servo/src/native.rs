@@ -132,9 +132,25 @@ impl Drop for CompletionGuard {
 }
 impl NativeClient {
     pub async fn start(binary: &Path, directory: &Path, timeout: Duration) -> Result<Self> {
-        let mut child = Command::new(binary)
-            .arg("--engine-profile")
-            .arg(directory)
+        Self::start_with_files(binary, directory, None, timeout).await
+    }
+    pub async fn start_with_files(
+        binary: &Path,
+        directory: &Path,
+        files: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<Self> {
+        let mut command = Command::new(binary);
+        if let Some(files) = files {
+            command
+                .arg("--engine-profile")
+                .arg(directory)
+                .arg("--files-root")
+                .arg(files);
+        } else {
+            command.arg("--engine-profile").arg(directory);
+        }
+        let mut child = command
             .env("SERVO_LOG_LEVEL", crate::logging::level().name())
             .env(
                 "SERVO_LOG_PROFILE_KEY",

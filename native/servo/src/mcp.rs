@@ -175,9 +175,160 @@ fn default_ttl() -> u64 {
     300_000
 }
 
+#[derive(Deserialize)]
+#[serde(
+    tag = "action",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum FileArgs {
+    Read {
+        profile_id: Option<String>,
+        file_id: String,
+        offset: u64,
+    },
+    List {
+        profile_id: Option<String>,
+    },
+    Stage {
+        profile_id: Option<String>,
+        name: String,
+        offset: u64,
+        data: String,
+    },
+    Delete {
+        profile_id: Option<String>,
+        file_id: String,
+    },
+    Choose {
+        profile_id: Option<String>,
+        tab_id: String,
+        lease_id: Option<String>,
+        file_ids: Vec<String>,
+    },
+    Cancel {
+        profile_id: Option<String>,
+        tab_id: String,
+        lease_id: Option<String>,
+    },
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UploadArgs {
+    profile_id: Option<String>,
+    tab_id: String,
+    lease_id: Option<String>,
+    reference: String,
+    file_ids: Vec<String>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DownloadArgs {
+    profile_id: Option<String>,
+    tab_id: String,
+    lease_id: Option<String>,
+    url: String,
+    name: String,
+}
 impl ServoMcp {
     async fn execute(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
         let value = match name {
+            "browser_files" => {
+                let args: FileArgs = serde_json::from_value(arguments)?;
+                let (profile, tab, lease, op, data) = match args {
+                    FileArgs::Read {
+                        profile_id,
+                        file_id,
+                        offset,
+                    } => (
+                        profile_id,
+                        None,
+                        None,
+                        "read_file",
+                        json!({"fileId":file_id,"offset":offset}),
+                    ),
+                    FileArgs::List { profile_id } => (profile_id, None, None, "files", json!({})),
+                    FileArgs::Stage {
+                        profile_id,
+                        name,
+                        offset,
+                        data,
+                    } => (
+                        profile_id,
+                        None,
+                        None,
+                        "stage_file",
+                        json!({"name":name,"offset":offset,"data":data}),
+                    ),
+                    FileArgs::Delete {
+                        profile_id,
+                        file_id,
+                    } => (
+                        profile_id,
+                        None,
+                        None,
+                        "delete_file",
+                        json!({"fileId":file_id}),
+                    ),
+                    FileArgs::Choose {
+                        profile_id,
+                        tab_id,
+                        lease_id,
+                        file_ids,
+                    } => (
+                        profile_id,
+                        Some(tab_id),
+                        lease_id,
+                        "choose_files",
+                        json!({"fileIds":file_ids}),
+                    ),
+                    FileArgs::Cancel {
+                        profile_id,
+                        tab_id,
+                        lease_id,
+                    } => (
+                        profile_id,
+                        Some(tab_id),
+                        lease_id,
+                        "choose_files",
+                        json!({"cancel":true}),
+                    ),
+                };
+                self.profiles
+                    .browser(profile.as_deref())
+                    .await?
+                    .with_lease(lease.as_deref())
+                    .file_action(op, tab.as_deref(), data)
+                    .await?
+            }
+            "browser_upload" => {
+                let args: UploadArgs = serde_json::from_value(arguments)?;
+                self.profiles
+                    .browser(args.profile_id.as_deref())
+                    .await?
+                    .with_lease(args.lease_id.as_deref())
+                    .file_action(
+                        "upload",
+                        Some(&args.tab_id),
+                        json!({"reference":args.reference,"fileIds":args.file_ids}),
+                    )
+                    .await?
+            }
+            "browser_download" => {
+                let args: DownloadArgs = serde_json::from_value(arguments)?;
+                self.profiles
+                    .browser(args.profile_id.as_deref())
+                    .await?
+                    .with_lease(args.lease_id.as_deref())
+                    .file_action(
+                        "download",
+                        Some(&args.tab_id),
+                        json!({"url":args.url,"name":args.name}),
+                    )
+                    .await?
+            }
+
             "browser_profiles" => {
                 let args: ProfilesArgs = serde_json::from_value(arguments)?;
                 match args {
@@ -426,6 +577,27 @@ pub fn tools() -> Vec<Tool> {
     let reference = json!({"type":"string","minLength":1,"maxLength":128,"description":"Exact reference from the latest snapshot of this tab. Never invent references."});
     vec![
         tool(
+            "browser_files",
+            "Manage local files in one embedded profile: list workspace paths and open file choosers; read base64 chunks at a byte offset; stage base64 chunks of at most 32 KiB using byte offsets (zero creates without overwriting); delete one file to reclaim disk space; choose or cancel a tab's native file chooser. File IDs come from this listing. Uploads may also use downloaded files. Local paths belong to the machine running the engine.",
+            json!({"action":{"type":"string","enum":["list","read","stage","delete","choose","cancel"]},"name":{"type":"string","maxLength":180},"offset":{"type":"integer","minimum":0,"maximum":67108864},"data":{"type":"string","maxLength":44000},"fileId":{"type":"string","maxLength":200},"tabId":tab,"leaseId":lease_schema(),"fileIds":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","maxLength":200}}}),
+            &["action"],
+            false,
+        ),
+        tool(
+            "browser_upload",
+            "Set a native file input from a fresh snapshot reference using regular files in this profile's downloads/uploads folders. Does not submit the form. Honors tab reservations and human ownership. At most 16 files, each up to 64 MiB. Stage a file or copy it into the workspace first.",
+            json!({"tabId":tab,"reference":reference,"fileIds":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","maxLength":200}}}),
+            &["tabId", "reference", "fileIds"],
+            false,
+        ),
+        tool(
+            "browser_download",
+            "Save a URL to this profile's local downloads folder using the tab's authenticated fetch session. Supports HTTP(S), relative links and page blob URLs, subject to browser CORS. Maximum 8 MiB and a 9-second fetch deadline. Supply a plain filename; existing files are never overwritten. Returns the file ID and local path. This is explicit downloading, not a general automatic attachment/download-click handler.",
+            json!({"tabId":tab,"url":{"type":"string","maxLength":8192},"name":{"type":"string","maxLength":180}}),
+            &["tabId", "url", "name"],
+            false,
+        ),
+        tool(
             "browser_profiles",
             "List profiles and engine capabilities, or create a persistent embedded profile. Choose a profile explicitly for multi-profile tasks. Each profile owns an independent engine and cookie store.",
             json!({"action":{"type":"string","enum":["list","create"]},"name":{"type":"string","minLength":1,"maxLength":120}}),
@@ -540,6 +712,45 @@ fn tool(
             ("reserve", vec!["tabId", "task"], vec!["leaseId"]),
             ("renew", vec!["tabId", "leaseId"], vec!["task"]),
             ("release", vec!["tabId", "leaseId"], vec!["task", "ttlMs"]),
+        ];
+        schema["oneOf"] = Value::Array(variants.into_iter().map(|(action, required, forbidden)| {
+            json!({"properties":{"action":{"const":action}},"required":required,"not":{"anyOf":forbidden.into_iter().map(|field| json!({"required":[field]})).collect::<Vec<_>>()}})
+        }).collect());
+    }
+    if name == "browser_files" {
+        let variants = [
+            (
+                "list",
+                vec![],
+                vec![
+                    "tabId", "leaseId", "name", "offset", "data", "fileId", "fileIds",
+                ],
+            ),
+            (
+                "read",
+                vec!["fileId", "offset"],
+                vec!["tabId", "leaseId", "name", "data", "fileIds"],
+            ),
+            (
+                "stage",
+                vec!["name", "offset", "data"],
+                vec!["tabId", "leaseId", "fileId", "fileIds"],
+            ),
+            (
+                "delete",
+                vec!["fileId"],
+                vec!["tabId", "leaseId", "name", "offset", "data", "fileIds"],
+            ),
+            (
+                "choose",
+                vec!["tabId", "fileIds"],
+                vec!["name", "offset", "data", "fileId"],
+            ),
+            (
+                "cancel",
+                vec!["tabId"],
+                vec!["name", "offset", "data", "fileId", "fileIds"],
+            ),
         ];
         schema["oneOf"] = Value::Array(variants.into_iter().map(|(action, required, forbidden)| {
             json!({"properties":{"action":{"const":action}},"required":required,"not":{"anyOf":forbidden.into_iter().map(|field| json!({"required":[field]})).collect::<Vec<_>>()}})

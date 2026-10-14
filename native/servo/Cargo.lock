@@ -804,6 +804,7 @@ dependencies = [
  "chrono",
  "clap",
  "fs2",
+ "libc",
  "reqwest",
  "rmcp",
  "serde",

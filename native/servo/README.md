@@ -311,3 +311,58 @@ python3 native/servo/tests/smoke.py \
 It isolates Servo's listener for its disposable local fixture and also checks EOF
 and SIGTERM cleanup. These fixtures verify the adapter, not production-site
 compatibility.
+
+## Local downloads and uploads
+
+Each embedded profile has a private file workspace with flat `downloads` and
+`uploads` folders. The default is `<profile-data-directory>/files`. Set
+`--files-root /path/to/browser-files` (or `SERVO_FILES_ROOT`) to put workspaces at
+`<files-root>/<profile-id>` instead; a profiles catalog can also set `filesRoot`.
+The folders belong to the machine running the engine, including when you view the
+dashboard remotely. Files persist across restart. Unix folders use mode `0700`
+and files created by the application use `0600`.
+
+Open **More options → Files** to add files from your device, see their sizes, save
+copies to your device, or delete them with confirmation. Opening a native page
+file chooser presents this same list; select files and choose **Use selected
+files**, or close to cancel. Reserved tabs require human takeover first.
+The local path is shown so a local agent can also copy regular files directly into
+these folders. The managed APIs accept file IDs such as `uploads/invoice.pdf`,
+never arbitrary paths, directories, or symbolic links.
+
+MCP exposes three embedded-only tools:
+
+- `browser_files`: `list`, `read`, `stage`, `delete`, `choose`, or `cancel`.
+  `stage` accepts a plain `name`, a byte `offset`, and base64 `data` of up to
+  32 KiB per call. Offset zero creates a new file without overwriting; later
+  offsets must match its current size. `read` returns up to 32 KiB and the next
+  byte offset. `delete` permanently removes a single file and reclaims its space.
+- `browser_upload`: use a fresh file input `reference` and `fileIds` from the
+  workspace listing. Selection uses Servo's native file input implementation and
+  fires its normal input/change events. It does not submit the form.
+- `browser_download`: use `tabId`, `url`, and a plain `name` to save a response to
+  `downloads`. The request runs in the target page with that profile's cookies;
+  HTTP-only cookies are preserved without copying their values into the host.
+  Relative HTTP(S) links and page blob URLs are supported. Browser CORS still
+  applies to cross-origin fetches.
+
+Uploads are limited to 16 files of 64 MiB each; each folder holds at most 200
+managed files. Downloads are limited to 8 MiB with a nine-second fetch deadline.
+Existing files are never overwritten. Interrupted staging may leave a partial
+file, which can be listed and deleted or resumed from its byte offset. Deleting a
+file selected for upload may prevent the site from reading it; finish the upload
+before cleanup. Names, paths, URLs and contents are omitted from structured logs.
+Download/upload/chooser operations honor the target tab's reservation and human
+ownership; file management is scoped to the profile independently of tab leases.
+
+Downloads are explicit through the tool or **Save a download link** in Files.
+This prototype does not automatically capture every download click,
+`Content-Disposition` navigation, POST export, or popup download. Site-generated
+links may require page-specific workflows. Workspaces are a managed API boundary,
+not a filesystem sandbox against another process running as the same OS user.
+
+Verify the feature with the actual embedded executable:
+
+```sh
+python3 native/servo/tests/files_smoke.py --engine-binary /path/to/remote-browser-servo-engine
+```

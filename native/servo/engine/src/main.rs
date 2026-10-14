@@ -23,6 +23,7 @@ use std::{
 };
 use url::Url;
 use webdriver::error::ErrorStatus;
+mod file_operations;
 mod metadata;
 mod operations;
 #[derive(Clone, Deserialize)]
@@ -43,6 +44,7 @@ struct Tab {
     view: WebView,
     refs: HashMap<String, String>,
     owned: bool,
+    file_picker: Option<servo::FilePicker>,
     busy: bool,
     uncertain: bool,
     human: bool,
@@ -61,6 +63,7 @@ struct Pending {
 type Poller = Box<dyn FnMut(&Rc<Engine>) -> bool>;
 struct Engine {
     servo: Servo,
+    files: remote_browser_servo::files::Files,
     tabs: RefCell<HashMap<String, Tab>>,
     reservations: RefCell<Reservations>,
     visible: RefCell<String>,
@@ -73,6 +76,26 @@ struct Engine {
 }
 struct Delegate(Weak<Engine>);
 impl WebViewDelegate for Delegate {
+    fn show_embedder_control(&self, view: WebView, control: servo::EmbedderControl) {
+        if let servo::EmbedderControl::FilePicker(picker) = control
+            && let Some(engine) = self.0.upgrade()
+            && let Some(tab) = engine.tabs.borrow_mut().get_mut(&view.id().to_string())
+        {
+            tab.file_picker = Some(picker);
+        }
+    }
+
+    fn hide_embedder_control(&self, view: WebView, id: servo::EmbedderControlId) {
+        if let Some(engine) = self.0.upgrade()
+            && let Some(tab) = engine.tabs.borrow_mut().get_mut(&view.id().to_string())
+            && tab
+                .file_picker
+                .as_ref()
+                .is_some_and(|picker| picker.id() == id)
+        {
+            tab.file_picker = None;
+        }
+    }
     fn notify_new_frame_ready(&self, view: WebView) {
         view.paint();
     }
@@ -85,6 +108,9 @@ impl WebViewDelegate for Delegate {
             let Some(tab) = tabs.values_mut().find(|tab| tab.view.id() == view.id()) else {
                 return;
             };
+            if status == LoadStatus::Started {
+                tab.file_picker = None;
+            }
             if status == LoadStatus::Started && tab.initialized {
                 tab.load_started = true;
             }
@@ -181,6 +207,7 @@ impl Engine {
                 view,
                 refs: HashMap::new(),
                 owned,
+                file_picker: None,
                 busy: false,
                 uncertain: false,
                 human: false,
@@ -464,7 +491,10 @@ fn to_json(value: JSValue) -> Value {
         _ => Value::Null,
     }
 }
-fn run_engine(directory: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn run_engine(
+    directory: PathBuf,
+    files_root: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&directory)?;
     #[cfg(unix)]
     {
@@ -509,12 +539,16 @@ fn run_engine(directory: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    let files = remote_browser_servo::files::Files::new(
+        &files_root.unwrap_or_else(|| directory.join("files")),
+    )?;
     let opts = Opts {
         config_dir: Some(directory),
         temporary_storage: false,
         ..Opts::default()
     };
     let engine = Rc::new(Engine {
+        files,
         servo: ServoBuilder::default().opts(opts).build(),
         tabs: RefCell::new(HashMap::new()),
         reservations: RefCell::new(Reservations::default()),
@@ -548,11 +582,18 @@ fn run_engine(directory: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().nth(1).as_deref() == Some("--engine-profile") {
         remote_browser_servo::logging::lifecycle("engine", "worker_started", None);
-        let result = run_engine(PathBuf::from(
-            std::env::args()
-                .nth(2)
-                .ok_or("Pass the persistent profile directory")?,
-        ));
+        let result = run_engine(
+            PathBuf::from(
+                std::env::args()
+                    .nth(2)
+                    .ok_or("Pass the persistent profile directory")?,
+            ),
+            if std::env::args().nth(3).as_deref() == Some("--files-root") {
+                std::env::args().nth(4).map(PathBuf::from)
+            } else {
+                None
+            },
+        );
         remote_browser_servo::logging::lifecycle("engine", "worker_stopped", None);
         remote_browser_servo::logging::flush();
         result

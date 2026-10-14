@@ -71,6 +71,8 @@ pub struct Tab {
     pub id: String,
     pub active: bool,
     pub owned: bool,
+    #[serde(default)]
+    pub file_picker: bool,
     pub reservation: Option<ReservationInfo>,
     #[serde(default)]
     pub title: Option<String>,
@@ -197,6 +199,7 @@ impl WebDriverAutomation {
             .map(|id| Tab {
                 active: current.as_deref() == Some(id.as_str()),
                 owned: state.owned_tabs.contains(&id),
+                file_picker: false,
                 reservation: state.reservations.info(&id, Instant::now()),
                 title: None,
                 url: None,
@@ -555,8 +558,17 @@ impl Automation {
         directory: &std::path::Path,
         timeout: Duration,
     ) -> Result<Self> {
+        Self::embedded_with_files(binary, directory, None, timeout).await
+    }
+    pub async fn embedded_with_files(
+        binary: &std::path::Path,
+        directory: &std::path::Path,
+        files: Option<&std::path::Path>,
+        timeout: Duration,
+    ) -> Result<Self> {
         Ok(Self(Backend::Native(
-            crate::native::NativeClient::start(binary, directory, timeout).await?,
+            crate::native::NativeClient::start_with_files(binary, directory, files, timeout)
+                .await?,
         )))
     }
     pub fn is_embedded(&self) -> bool {
@@ -614,6 +626,27 @@ impl Automation {
             }
         }
     }
+    /// Managed file operations are available only with the embedded engine.
+    pub async fn file_action(&self, op: &str, tab: Option<&str>, args: Value) -> Result<Value> {
+        if !matches!(
+            op,
+            "files"
+                | "read_file"
+                | "stage_file"
+                | "delete_file"
+                | "upload"
+                | "download"
+                | "choose_files"
+        ) {
+            return Err(Error::Invalid("Unknown file action".into()));
+        }
+        match &self.0 {
+            Backend::Native(browser) => browser.request(op, tab, args, false).await,
+            Backend::WebDriver(_) => Err(Error::Invalid(
+                "Local file operations require the embedded engine".into(),
+            )),
+        }
+    }
     pub async fn human_action(&self, op: &str, tab: Option<&str>, args: Value) -> Result<Value> {
         if !matches!(
             op,
@@ -628,6 +661,12 @@ impl Automation {
                 | "input"
                 | "scroll"
                 | "health"
+                | "files"
+                | "read_file"
+                | "stage_file"
+                | "delete_file"
+                | "choose_files"
+                | "download"
         ) {
             return Err(Error::Invalid("Unknown host action".into()));
         }

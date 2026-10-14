@@ -14,6 +14,9 @@ use rmcp::ServiceExt;
     about = "Experimental Servo automation MCP over stdio; no Docker or CDP"
 )]
 struct Args {
+    /// Local file workspace root; each embedded profile gets its own subdirectory.
+    #[arg(long, env = "SERVO_FILES_ROOT")]
+    files_root: Option<PathBuf>,
     /// Existing local Servo WebDriver origin. The browser process is externally managed.
     #[arg(
         long,
@@ -68,7 +71,7 @@ pub fn main(embedded_binary: Option<PathBuf>) {
 }
 
 async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
-    let (config, catalog) = if let Some(root) = args.profile_root {
+    let (mut config, catalog) = if let Some(root) = args.profile_root {
         let binary = embedded_binary.ok_or_else(|| {
             Error::Invalid(
                 "--profile-root requires the executable with the embedded Servo engine".into(),
@@ -93,6 +96,7 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
                 default_profile_id: "default".into(),
                 engine_binary: Some(binary.clone()),
                 data_root: Some(root.join("profiles")),
+                files_root: None,
                 profiles: vec![ProfileDefinition {
                     id: "default".into(),
                     name: "Default".into(),
@@ -118,6 +122,7 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
                 default_profile_id: "default".into(),
                 engine_binary: None,
                 data_root: None,
+                files_root: None,
                 profiles: vec![ProfileDefinition {
                     id: "default".into(),
                     name: "Default".into(),
@@ -129,6 +134,10 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
             None,
         )
     };
+    if let Some(root) = args.files_root {
+        std::fs::create_dir_all(&root)?;
+        config.files_root = Some(std::fs::canonicalize(root)?);
+    }
     let profiles =
         Profiles::with_catalog(config, Duration::from_secs(args.timeout_seconds), catalog)?;
     // Preserve the original startup handshake and fail early if the default browser is unavailable.

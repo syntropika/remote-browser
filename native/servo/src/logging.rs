@@ -238,6 +238,16 @@ pub fn fault(
 }
 fn operation(value: &str) -> &'static str {
     match value {
+        "browser_files" => "browser_files",
+        "browser_upload" => "browser_upload",
+        "browser_download" => "browser_download",
+        "read_file" => "read_file",
+        "files" => "files",
+        "stage_file" => "stage_file",
+        "delete_file" => "delete_file",
+        "upload" => "upload",
+        "download" => "download",
+        "choose_files" => "choose_files",
         "browser_profiles" => "browser_profiles",
         "browser_tabs" => "browser_tabs",
         "browser_status" => "browser_status",
@@ -296,6 +306,12 @@ fn normal_level(op: &str) -> Level {
             | "browser_click"
             | "browser_fill"
             | "browser_press"
+            | "upload"
+            | "download"
+            | "delete_file"
+            | "choose_files"
+            | "browser_download"
+            | "browser_upload"
     ) {
         Level::Info
     } else {

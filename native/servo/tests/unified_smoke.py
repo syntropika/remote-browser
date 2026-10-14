@@ -74,7 +74,7 @@ def exercise(binary,hold):
     with tempfile.TemporaryDirectory(prefix='servo-unified-') as directory:
         runtime=Runtime(binary,pathlib.Path(directory));client=runtime.client;dashboard=runtime.dashboard
         try:
-            assert len(client.request('tools/list',{})['tools'])==12
+            assert len(client.request('tools/list',{})['tools'])==15
             dashboard.api('/api/profiles',token=False,expected=401)
             dashboard.api('/api/profiles',origin='https://foreign.example',expected=403)
             a=client.call('browser_tabs',{'action':'open'})['tabId']

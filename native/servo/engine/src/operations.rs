@@ -12,6 +12,9 @@ use servo::{
 use std::time::{SystemTime, UNIX_EPOCH};
 impl Engine {
     pub(super) fn execute(self: &Rc<Self>, request: &Request) -> Result<(), String> {
+        if self.file_request(request)? {
+            return Ok(());
+        }
         let id = request.id;
         let tab_id = request.tab_id.as_deref().unwrap_or("");
         match request.op.as_str() {
@@ -35,6 +38,7 @@ impl Engine {
                             "url": tab.view.url().map(|url| metadata::bounded(url.as_str(), metadata::URL_BYTES)),
                             "owner": if tab.human { "human" } else { "agent" },
                             "busy": tab.busy,
+                            "filePicker": tab.file_picker.is_some(),
                             "uncertain": tab.uncertain,
                             "reservation": self.reservations.borrow_mut().info(id, Instant::now()),
                         })
@@ -150,6 +154,9 @@ impl Engine {
         }
         let view = self.begin(request)?;
         match request.op.as_str() {
+            "upload" => self.upload(request)?,
+            "choose_files" => self.choose_files(request)?,
+            "download" => self.download(request)?,
             "select" => self.complete(id, Ok(json!({"ok":true}))),
             "close" => {
                 if !self.tabs.borrow()[tab_id].owned {

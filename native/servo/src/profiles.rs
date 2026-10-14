@@ -15,6 +15,8 @@ pub struct ProfileConfig {
     pub profiles: Vec<ProfileDefinition>,
     pub engine_binary: Option<PathBuf>,
     pub data_root: Option<PathBuf>,
+    #[serde(default)]
+    pub files_root: Option<PathBuf>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,6 +37,7 @@ pub struct ProfileInfo {
     pub is_default: bool,
     pub background_tabs: bool,
     pub concurrent_tabs: bool,
+    pub local_files: bool,
 }
 struct Entry {
     definition: ProfileDefinition,
@@ -147,7 +150,10 @@ impl Profiles {
         let entry = self.entries.read().await.get(id).cloned().ok_or_else(|| {
             Error::Invalid("Unknown profileId; list browser_profiles first".into())
         })?;
-        let binary = self.config.lock().await.engine_binary.clone();
+        let config = self.config.lock().await;
+        let binary = config.engine_binary.clone();
+        let files = config.files_root.as_ref().map(|root| root.join(id));
+        drop(config);
         let browser = entry
             .browser
             .get_or_try_init(|| {
@@ -163,11 +169,12 @@ impl Profiles {
                                 Automation::connect(endpoint, self.timeout).await
                             }
                             (None, Some(directory)) => {
-                                Automation::embedded(
+                                Automation::embedded_with_files(
                                     binary.as_deref().ok_or_else(|| {
                                         Error::Invalid("Engine binary unavailable".into())
                                     })?,
                                     directory,
+                                    files.as_deref(),
                                     self.timeout,
                                 )
                                 .await
@@ -198,6 +205,7 @@ impl Profiles {
                     is_default: id == &self.default_id,
                     background_tabs: native,
                     concurrent_tabs: native,
+                    local_files: native,
                 }
             })
             .collect();
@@ -258,6 +266,7 @@ impl Profiles {
             is_default: false,
             background_tabs: true,
             concurrent_tabs: true,
+            local_files: true,
         })
     }
     pub async fn policies(&self, id: &str) -> Result<Vec<crate::health::HealthPolicy>> {
@@ -384,6 +393,7 @@ mod tests {
             default_profile_id: "personal".into(),
             engine_binary: None,
             data_root: None,
+            files_root: None,
             profiles: vec![
                 ProfileDefinition {
                     id: "personal".into(),

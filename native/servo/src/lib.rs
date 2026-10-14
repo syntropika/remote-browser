@@ -2,6 +2,7 @@
 pub mod automation;
 pub mod cli;
 pub mod dashboard;
+pub mod files;
 pub mod health;
 pub mod logging;
 pub mod mcp;

@@ -187,6 +187,7 @@ mod tests {
                 default_profile_id: "default".into(),
                 engine_binary: None,
                 data_root: None,
+                files_root: None,
                 profiles: vec![crate::profiles::ProfileDefinition {
                     id: "default".into(),
                     name: "Default".into(),
