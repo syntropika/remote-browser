@@ -2,8 +2,10 @@
 use crate::{Result, health::HealthPolicy, profiles::Profiles};
 use axum::{
     Json, Router,
+    extract::Request,
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -16,6 +18,28 @@ struct Host {
     origin: String,
 }
 type Reply = std::result::Result<Json<Value>, DashboardError>;
+async fn observe(request: Request, next: Next) -> Response {
+    let op = match (request.method().as_str(), request.uri().path()) {
+        ("POST", "/api/profiles") => "create_profile",
+        (_, "/api/profiles") => "profiles",
+        (_, "/api/action") => "action",
+        (_, "/api/policies") => "policies",
+        _ => "unknown",
+    };
+    let mut log = crate::logging::Operation::begin(
+        crate::logging::Context::current(),
+        "dashboard",
+        op,
+        None,
+        None,
+    );
+    let mut response = log.context.clone().scope(next.run(request)).await;
+    log.finish_http(response.status().as_u16());
+    response
+        .headers_mut()
+        .insert("x-request-id", log.context.trace_id.parse().unwrap());
+    response
+}
 #[derive(Debug)]
 struct DashboardError(StatusCode, String);
 impl IntoResponse for DashboardError {
@@ -146,6 +170,7 @@ pub async fn start(profiles: Profiles, port: u16) -> Result<tokio::task::JoinHan
         .route("/api/action", post(action))
         .route("/api/policies", post(policies))
         .layer(DefaultBodyLimit::max(65536))
+        .layer(middleware::from_fn(observe))
         .with_state(host);
     Ok(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;

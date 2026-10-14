@@ -191,14 +191,48 @@ block the whole profile. Restart after inspecting the outcome. Mutations are not
 automatically retried. A definitive element error allows fresh observation and
 recovery. `--timeout-seconds` defaults to 15; engine actions have a 12-second
 limit. Choosing a shorter transport deadline can leave actions uncertain sooner.
-Standard error emits structured `Servo diagnostic` events when completion becomes
-uncertain. Events distinguish operation timeouts, closed script channels, tab
-crashes, malformed responses, and response-size violations. They contain process,
-request, operation, and tab identifiers, never page URLs, titles, arguments, or
-lease tokens. A tab timeout can require recovery while the engine process and
-other tabs remain usable; it does not by itself mean the MCP server crashed.
+A tab timeout can require recovery while the engine process and other tabs remain
+usable; it does not by itself mean the MCP server crashed.
 The stdio reader rejects frames over 8 MiB while reading, including frames with
 no newline, rather than first allocating an unbounded response.
+
+## Diagnostic logs
+
+Diagnostics use versioned JSON Lines on standard error. Standard output remains
+reserved for MCP or native IPC. Set `--log-level debug` or `SERVO_LOG_LEVEL=debug`
+to include observation operations; `info` is the default, with `warn` and `error`
+available for quieter output. The configured level propagates to engine workers.
+
+Each operation records a start, completion, monotonic elapsed milliseconds, and a
+fixed outcome category. The normal level includes navigation and ownership changes,
+lifecycle events, failures, and operations taking at least one second. Frequent
+listings, evaluation, screenshots, and input appear at `debug`. Fault events
+distinguish engine deadlines, transport deadlines, cancelled requests, closed script
+channels, crashed tabs, invalid replies, and oversized responses.
+
+One `traceId` follows a request through MCP or the dashboard, native transport, and
+the engine. MCP results expose it in `_meta.traceId`; dashboard responses include
+`X-Request-Id`, including validation and authorization failures. Native request IDs
+identify the matching worker operation. UTC timestamps, process IDs, worker startup
+events, and opaque profile/tab keys let a collector group concurrent operations.
+Keys are diagnostic hashes, not credentials or authenticated agent identities.
+
+Records contain fixed operation/error names, never raw errors, page URLs or titles,
+JavaScript, typed text, request arguments, cookies, profile names, or lease tokens.
+The initial dashboard access URL is a private startup message, not a diagnostic
+record; a supervisor should intercept it separately rather than retain it in logs.
+Treat any unrelated upstream stderr output as untrusted rather than forwarding it
+into a diagnostic archive.
+
+A bounded queue decouples log writes from browser operations. When the sink is
+blocked, logs can be dropped instead of blocking automation; the next drained
+record reports `droppedEvents`. Shutdown makes a bounded attempt to flush. Use a
+supervisor to collect stderr into protected files with bounded rotation or a system
+journal. For a collected JSONL file, filter a reported trace without loading page data:
+
+```sh
+jq --arg trace 'your-trace-id' 'select(.traceId == $trace)' /path/to/private/browser.jsonl
+```
 
 The public Rust `Automation` interface supports `embedded(binary, directory,
 timeout)` and `connect(webdriver_url, timeout)`. Cloned embedded handles retain
@@ -258,6 +292,7 @@ python3 ../tests/embedded_smoke.py --engine-binary target/debug/remote-browser-s
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/failure_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/logging_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 ```
 
 Real-engine tests exercise native input, rendered PNGs, independent tab references,

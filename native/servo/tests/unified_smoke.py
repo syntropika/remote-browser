@@ -49,8 +49,8 @@ class Dashboard:
         return self.api('/api/action',{'profileId':profile,'op':op,'tabId':tab,'args':args or {}},expected)
 
 class Runtime:
-    def __init__(self,binary,root):
-        self.process=subprocess.Popen([str(binary),'--profile-root',str(root),'--dashboard-port','0'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    def __init__(self,binary,root,env=None):
+        self.process=subprocess.Popen([str(binary),'--profile-root',str(root),'--dashboard-port','0'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env)
         self.logs=[]; urls=queue.Queue()
         def read():
             for line in self.process.stderr:

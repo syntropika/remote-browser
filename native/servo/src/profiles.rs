@@ -150,24 +150,35 @@ impl Profiles {
         let binary = self.config.lock().await.engine_binary.clone();
         let browser = entry
             .browser
-            .get_or_try_init(|| async {
-                match (
-                    &entry.definition.webdriver_url,
-                    &entry.definition.data_directory,
-                ) {
-                    (Some(endpoint), None) => Automation::connect(endpoint, self.timeout).await,
-                    (None, Some(directory)) => {
-                        Automation::embedded(
-                            binary.as_deref().ok_or_else(|| {
-                                Error::Invalid("Engine binary unavailable".into())
-                            })?,
-                            directory,
-                            self.timeout,
-                        )
-                        .await
-                    }
-                    _ => Err(Error::Invalid("Invalid profile backend".into())),
-                }
+            .get_or_try_init(|| {
+                crate::logging::Context::current()
+                    .for_profile(id)
+                    .scope(async {
+                        crate::logging::lifecycle("profiles", "profile_starting", None);
+                        let result = match (
+                            &entry.definition.webdriver_url,
+                            &entry.definition.data_directory,
+                        ) {
+                            (Some(endpoint), None) => {
+                                Automation::connect(endpoint, self.timeout).await
+                            }
+                            (None, Some(directory)) => {
+                                Automation::embedded(
+                                    binary.as_deref().ok_or_else(|| {
+                                        Error::Invalid("Engine binary unavailable".into())
+                                    })?,
+                                    directory,
+                                    self.timeout,
+                                )
+                                .await
+                            }
+                            _ => Err(Error::Invalid("Invalid profile backend".into())),
+                        };
+                        if result.is_ok() {
+                            crate::logging::lifecycle("profiles", "profile_ready", None);
+                        }
+                        result
+                    })
             })
             .await?;
         Ok(browser.clone())
@@ -234,6 +245,12 @@ impl Profiles {
             }),
         );
         *config = updated;
+        crate::logging::Context::current()
+            .for_profile(&id)
+            .scope(async {
+                crate::logging::lifecycle("profiles", "profile_created", None);
+            })
+            .await;
         Ok(ProfileInfo {
             id,
             name: definition.name,

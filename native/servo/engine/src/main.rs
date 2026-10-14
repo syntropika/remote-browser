@@ -36,6 +36,8 @@ struct Request {
     human: bool,
     #[serde(default)]
     args: Value,
+    trace_id: Option<String>,
+    profile_key: Option<String>,
 }
 struct Tab {
     view: WebView,
@@ -63,6 +65,7 @@ struct Engine {
     reservations: RefCell<Reservations>,
     visible: RefCell<String>,
     pending: RefCell<HashMap<u64, Pending>>,
+    operation_logs: RefCell<HashMap<u64, remote_browser_servo::logging::Operation>>,
     pollers: RefCell<Vec<Poller>>,
     inputs: RefCell<HashMap<InputEventId, u64>>,
     output: mpsc::Sender<Value>,
@@ -123,12 +126,38 @@ impl WebViewDelegate for Delegate {
                 .find(|t| t.view.id() == view.id())
         {
             tab.uncertain = true;
-            remote_browser_servo::native::diagnostic(
-                "tab_crashed",
-                None,
-                None,
-                Some(&view.id().to_string()),
-            );
+            let tab_id = view.id().to_string();
+            let request = engine
+                .pending
+                .borrow()
+                .iter()
+                .find(|(_, pending)| pending.tab == tab_id)
+                .map(|(id, _)| *id);
+            if let Some(log) = request.and_then(|id| {
+                engine
+                    .operation_logs
+                    .borrow()
+                    .get(&id)
+                    .map(|log| log.context.clone())
+            }) {
+                remote_browser_servo::logging::fault(
+                    &log,
+                    "engine",
+                    "tab_crashed",
+                    request,
+                    None,
+                    Some(&tab_id),
+                );
+            } else {
+                remote_browser_servo::logging::fault(
+                    &remote_browser_servo::logging::Context::current(),
+                    "engine",
+                    "tab_crashed",
+                    None,
+                    None,
+                    Some(&tab_id),
+                );
+            }
         }
     }
 }
@@ -165,6 +194,11 @@ impl Engine {
         id
     }
     fn reply(&self, id: u64, result: Result<Value, String>) {
+        if let Some(mut log) = self.operation_logs.borrow_mut().remove(&id) {
+            log.finish(remote_browser_servo::logging::engine_outcome(
+                result.as_ref().err().map(String::as_str),
+            ));
+        }
         let message = match result {
             Ok(value) => json!({"id":id,"value":value}),
             Err(error) => json!({"id":id,"error":error}),
@@ -353,12 +387,16 @@ impl Engine {
     }
     fn poison(&self, id: u64, reason: &str) {
         if let Some(pending) = self.pending.borrow().get(&id) {
-            remote_browser_servo::native::diagnostic(
-                reason,
-                Some(id),
-                Some(&pending.operation),
-                Some(&pending.tab),
-            );
+            if let Some(log) = self.operation_logs.borrow().get(&id) {
+                log.fault(reason);
+            } else {
+                remote_browser_servo::native::diagnostic(
+                    reason,
+                    Some(id),
+                    Some(&pending.operation),
+                    Some(&pending.tab),
+                );
+            }
         }
         let takeover = self.pending.borrow().get(&id).and_then(|p| {
             self.tabs.borrow_mut().get_mut(&p.tab).and_then(|t| {
@@ -391,6 +429,20 @@ impl Engine {
         }
     }
     fn dispatch(self: &Rc<Self>, request: Request) {
+        let context = remote_browser_servo::logging::Context::incoming(
+            request.trace_id.as_deref(),
+            request.profile_key.as_deref(),
+        );
+        self.operation_logs.borrow_mut().insert(
+            request.id,
+            remote_browser_servo::logging::Operation::begin(
+                context,
+                "engine",
+                &request.op,
+                Some(request.id),
+                request.tab_id.as_deref(),
+            ),
+        );
         if let Err(error) = self.execute(&request) {
             if self.pending.borrow().contains_key(&request.id) {
                 self.complete(request.id, Err(error));
@@ -468,6 +520,7 @@ fn run_engine(directory: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         reservations: RefCell::new(Reservations::default()),
         visible: RefCell::new(String::new()),
         pending: RefCell::new(HashMap::new()),
+        operation_logs: RefCell::new(HashMap::new()),
         pollers: RefCell::new(Vec::new()),
         inputs: RefCell::new(HashMap::new()),
         output: output_tx,
@@ -494,11 +547,15 @@ fn run_engine(directory: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().nth(1).as_deref() == Some("--engine-profile") {
-        run_engine(PathBuf::from(
+        remote_browser_servo::logging::lifecycle("engine", "worker_started", None);
+        let result = run_engine(PathBuf::from(
             std::env::args()
                 .nth(2)
                 .ok_or("Pass the persistent profile directory")?,
-        ))
+        ));
+        remote_browser_servo::logging::lifecycle("engine", "worker_stopped", None);
+        remote_browser_servo::logging::flush();
+        result
     } else {
         remote_browser_servo::cli::main(Some(std::env::current_exe()?));
         Ok(())

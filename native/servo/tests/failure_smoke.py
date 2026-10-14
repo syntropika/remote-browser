@@ -49,13 +49,14 @@ def exercise(binary):
                 assert not next(tab for tab in tabs if tab['id'] == healthy)['uncertain']
                 assert client.call('browser_evaluate', {'tabId': healthy, 'script': 'return 42;'})['value'] == 42
                 for _ in range(20):
-                    events = [json.loads(line.removeprefix('Servo diagnostic: ')) for line in runtime.logs if line.startswith('Servo diagnostic: ')]
-                    if any(event['event'] == 'operation_timeout' for event in events):
+                    events = [json.loads(line) for line in runtime.logs if line.startswith('{') and json.loads(line).get('schemaVersion') == 1]
+                    if any(event.get('reason') == 'operation_timeout' for event in events):
                         break
                     time.sleep(.05)
-                event = next(event for event in events if event['event'] == 'operation_timeout')
-                assert event['operation'] == 'navigate' and event['tabId'] == failed
-                assert all(set(event) == {'event', 'processId', 'requestId', 'operation', 'tabId'} for event in events)
+                event = next(event for event in events if event.get('reason') == 'operation_timeout')
+                assert event['operation'] == 'navigate' and event['tabKey'].startswith('t-')
+                assert event['traceId'] == result['_meta']['traceId']
+                assert all('timestamp' in event and 'level' in event for event in events)
                 assert origin not in json.dumps(events)
                 print('PASS: exact completion-unknown message, per-tab containment, working peer tab and redacted timeout diagnostic')
             finally:

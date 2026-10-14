@@ -19,16 +19,13 @@ pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Diagnostic fields deliberately omit page data, request arguments, and lease tokens.
 pub fn diagnostic(event: &str, request_id: Option<u64>, op: Option<&str>, tab: Option<&str>) {
-    let short = |value: &str| value.chars().take(128).collect::<String>();
-    eprintln!(
-        "Servo diagnostic: {}",
-        json!({
-            "event": event,
-            "processId": std::process::id(),
-            "requestId": request_id,
-            "operation": op.map(short),
-            "tabId": tab.map(short),
-        })
+    crate::logging::fault(
+        &crate::logging::Context::current(),
+        "native",
+        event,
+        request_id,
+        op,
+        tab,
     );
 }
 
@@ -70,12 +67,19 @@ async fn response_line(
 struct State {
     child: Mutex<Child>,
     input: Mutex<ChildStdin>,
-    pending: SyncMutex<HashMap<u64, oneshot::Sender<Value>>>,
+    pending: SyncMutex<HashMap<u64, PendingReply>>,
     unknown: SyncMutex<HashSet<String>>,
     failed: AtomicBool,
     closing: AtomicBool,
+    profile_key: Option<String>,
     next: AtomicU64,
     timeout: Duration,
+}
+struct PendingReply {
+    sender: oneshot::Sender<Value>,
+    context: crate::logging::Context,
+    operation: String,
+    tab: Option<String>,
 }
 #[derive(Clone)]
 pub struct NativeClient {
@@ -131,11 +135,19 @@ impl NativeClient {
         let mut child = Command::new(binary)
             .arg("--engine-profile")
             .arg(directory)
+            .env("SERVO_LOG_LEVEL", crate::logging::level().name())
+            .env(
+                "SERVO_LOG_PROFILE_KEY",
+                crate::logging::Context::current()
+                    .profile_key
+                    .unwrap_or_default(),
+            )
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true)
             .spawn()?;
+        crate::logging::lifecycle("native", "engine_started", child.id());
         let input = child
             .stdin
             .take()
@@ -151,10 +163,12 @@ impl NativeClient {
             unknown: SyncMutex::new(HashSet::new()),
             failed: AtomicBool::new(false),
             closing: AtomicBool::new(false),
+            profile_key: crate::logging::Context::current().profile_key,
             next: AtomicU64::new(1),
             timeout,
         });
         let weak = Arc::downgrade(&state);
+        let reader_context = crate::logging::Context::current();
         tokio::spawn(async move {
             let mut reader = BufReader::new(output);
             let reason = loop {
@@ -173,7 +187,7 @@ impl NativeClient {
                 if let Some(id) = value["id"].as_u64() {
                     let sender = state.pending.lock().unwrap().remove(&id);
                     if let Some(sender) = sender {
-                        let _ = sender.send(value);
+                        let _ = sender.sender.send(value);
                     }
                 } else {
                     break "invalid_response_id";
@@ -183,7 +197,21 @@ impl NativeClient {
                 if !state.failed.swap(true, Ordering::SeqCst)
                     && !(reason == "engine_eof" && state.closing.load(Ordering::SeqCst))
                 {
-                    diagnostic(reason, None, None, None);
+                    let pending = state.pending.lock().unwrap();
+                    if pending.is_empty() {
+                        crate::logging::fault(&reader_context, "native", reason, None, None, None);
+                    } else {
+                        for (id, reply) in pending.iter() {
+                            crate::logging::fault(
+                                &reply.context,
+                                "native",
+                                reason,
+                                Some(*id),
+                                Some(&reply.operation),
+                                reply.tab.as_deref(),
+                            );
+                        }
+                    }
                 }
                 state.pending.lock().unwrap().clear();
             }
@@ -208,15 +236,42 @@ impl NativeClient {
         args: Value,
         human: bool,
     ) -> Result<Value> {
+        let id = self.state.next.fetch_add(1, Ordering::SeqCst);
+        let mut context = crate::logging::Context::current();
+        context.profile_key = self.state.profile_key.clone();
+        let mut operation = crate::logging::Operation::begin(context, "native", op, Some(id), tab);
+        let result = operation
+            .context
+            .clone()
+            .scope(self.request_inner(id, op, tab, args, human))
+            .await;
+        operation.finish(crate::logging::outcome(result.as_ref().err()));
+        result
+    }
+    async fn request_inner(
+        &self,
+        id: u64,
+        op: &str,
+        tab: Option<&str>,
+        args: Value,
+        human: bool,
+    ) -> Result<Value> {
         if op != "shutdown"
             && (self.state.failed.load(Ordering::SeqCst)
                 || tab.is_some_and(|tab| self.state.unknown.lock().unwrap().contains(tab)))
         {
             return Err(Error::Uncertain);
         }
-        let id = self.state.next.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = oneshot::channel();
-        self.state.pending.lock().unwrap().insert(id, sender);
+        self.state.pending.lock().unwrap().insert(
+            id,
+            PendingReply {
+                sender,
+                context: crate::logging::Context::current(),
+                operation: op.into(),
+                tab: tab.map(str::to_owned),
+            },
+        );
         let mut guard = CompletionGuard {
             state: self.state.clone(),
             tab: tab.map(str::to_owned),
@@ -227,7 +282,7 @@ impl NativeClient {
             reason: "request_cancelled",
         };
         let bytes = serde_json::to_vec(
-            &json!({"id":id,"op":op,"tabId":tab,"leaseId":self.lease_id,"human":human,"args":args}),
+            &json!({"id":id,"op":op,"tabId":tab,"leaseId":self.lease_id,"human":human,"args":args,"traceId":crate::logging::Context::current().trace_id,"profileKey":self.state.profile_key}),
         )?;
         if bytes.len() > 65536 {
             self.state.pending.lock().unwrap().remove(&id);
@@ -284,6 +339,11 @@ impl NativeClient {
         })
     }
     pub async fn close(&self) -> Result<()> {
+        crate::logging::lifecycle(
+            "native",
+            "engine_stopping",
+            self.state.child.lock().await.id(),
+        );
         self.state.closing.store(true, Ordering::SeqCst);
         let _ = tokio::time::timeout(
             Duration::from_secs(1),

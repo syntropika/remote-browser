@@ -369,14 +369,54 @@ impl ServerHandler for ServoMcp {
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
+        let logged_operation = match request.name.as_ref() {
+            "browser_tabs" => request
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("action"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            "browser_profiles"
+                if request
+                    .arguments
+                    .as_ref()
+                    .and_then(|args| args.get("action"))
+                    .and_then(Value::as_str)
+                    == Some("create") =>
+            {
+                "create_profile"
+            }
+            _ => request.name.as_ref(),
+        };
+        let mut operation = crate::logging::Operation::begin(
+            crate::logging::Context::current(),
+            "mcp",
+            logged_operation,
+            None,
+            None,
+        );
         if self.get_tool(&request.name).is_none() {
-            return Err(ErrorData::invalid_params("Unknown tool", None));
+            operation.finish("invalid_request");
+            return Err(ErrorData::invalid_params(
+                "Unknown tool",
+                Some(json!({"traceId":operation.context.trace_id})),
+            ));
         }
         let arguments = Value::Object(request.arguments.unwrap_or_default());
-        let result = match self.execute(&request.name, arguments).await {
+        let response = operation
+            .context
+            .clone()
+            .scope(self.execute(&request.name, arguments))
+            .await;
+        operation.finish(crate::logging::outcome(response.as_ref().err()));
+        let mut result = match response {
             Ok(result) => result,
             Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
         };
+        result
+            .meta
+            .get_or_insert_with(Default::default)
+            .insert("traceId".into(), json!(operation.context.trace_id));
         Ok(result.into())
     }
 }

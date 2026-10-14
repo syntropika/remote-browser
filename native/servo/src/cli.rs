@@ -33,17 +33,23 @@ struct Args {
     /// Open a loopback dashboard for the embedded profiles. Zero chooses a free port.
     #[arg(long)]
     dashboard_port: Option<u16>,
+    /// Structured diagnostics on stderr. Debug includes frequent observation operations.
+    #[arg(long, env = "SERVO_LOG_LEVEL", value_enum, default_value = "info")]
+    log_level: crate::logging::Level,
 }
 
 pub fn main(embedded_binary: Option<PathBuf>) {
     let args = Args::parse();
+    crate::logging::configure(args.log_level);
+    crate::logging::lifecycle("runtime", "service_started", None);
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("Servo MCP runtime: {error}");
+            crate::logging::service_error(&Error::Io(error));
+            crate::logging::flush();
             std::process::exit(1);
         }
     };
@@ -51,8 +57,12 @@ pub fn main(embedded_binary: Option<PathBuf>) {
     // Tokio's stdin reader uses blocking I/O and cannot be cancelled while stdin stays open.
     // Session cleanup completes in run(); bound runtime teardown so SIGTERM still exits.
     runtime.shutdown_timeout(Duration::from_millis(100));
-    if let Err(error) = result {
-        eprintln!("Servo MCP: {error}");
+    if let Err(error) = &result {
+        crate::logging::service_error(error);
+    }
+    crate::logging::lifecycle("runtime", "service_stopped", None);
+    crate::logging::flush();
+    if result.is_err() {
         std::process::exit(1);
     }
 }
