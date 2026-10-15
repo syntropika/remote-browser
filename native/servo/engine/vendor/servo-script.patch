@@ -30,3 +30,76 @@
                              None,
                              ports,
                          );
+--- a/dom/document/document_event_handler.rs
++++ b/dom/document/document_event_handler.rs
+@@ -540,18 +540,19 @@
+             FireMouseEventType::Enter | FireMouseEventType::Leave
+         ));
+ 
+-        let common_ancestor = match related_target.as_ref() {
+-            Some(related_target) => event_target
+-                .common_ancestor_in_flat_tree(cx.no_gc(), related_target)
+-                .unwrap_or_else(|| DomRoot::from_ref(event_target)),
+-            None => DomRoot::from_ref(event_target),
+-        };
++        let common_ancestor = related_target.as_ref().and_then(|related_target| {
++            event_target.common_ancestor_in_flat_tree(cx.no_gc(), related_target)
++        });
+ 
+         // We need to create a target chain in case the event target shares
+         // its boundaries with its ancestors.
+         let mut targets: Vec<_> = event_target
+             .inclusive_ancestors_in_flat_tree_unrooted(cx.no_gc())
+-            .take_while(|node| *node != *common_ancestor)
++            .take_while(|node| {
++                common_ancestor
++                    .as_ref()
++                    .is_none_or(|ancestor| *node != **ancestor)
++            })
+             .map(|node| node.as_rooted())
+             .collect();
+ 
+@@ -1213,6 +1214,7 @@
+             input_event.active_keyboard_modifiers,
+             click_count,
+         )
++        .to_pointer_event(cx, atom!("click"))
+         .upcast::<Event>()
+         .dispatch(cx, element.upcast(), false);
+         element.set_click_in_progress(false);
+--- a/dom/event/mouseevent.rs
++++ b/dom/event/mouseevent.rs
+@@ -329,6 +329,7 @@
+         let is_pointer_down = &*event_type == "pointerdown";
+         let is_pointer_move = &*event_type == "pointermove";
+         let is_pointer_up = &*event_type == "pointerup";
++        let is_activation = matches!(&*event_type, "click" | "auxclick" | "contextmenu");
+ 
+         // Pressure is 0.5 when button is down, 0.0 when up
+         let pressure = if is_pointer_down || (is_pointer_move && !self.buttons.get().is_empty()) {
+@@ -337,7 +338,7 @@
+             0.0
+         };
+ 
+-        let button = if is_pointer_down || is_pointer_up {
++        let button = if is_pointer_down || is_pointer_up || is_activation {
+             self.button.get()
+         } else {
+             MouseButton::None
+@@ -378,12 +379,15 @@
+             PI / 2.0, // altitude_angle (perpendicular to surface)
+             0.0,      // azimuth_angle
+             DOMString::from_static("mouse"),
+-            true,   // is_primary (mouse is always primary)
++            !is_activation, // activation events retain the default is_primary
+             vec![], // coalesced_events
+             vec![], // predicted_events
+         );
+ 
+         pointer_event.upcast::<Event>().set_composed(composed);
++        pointer_event
++            .upcast::<Event>()
++            .set_trusted(self.upcast::<Event>().IsTrusted());
+ 
+         pointer_event
+     }

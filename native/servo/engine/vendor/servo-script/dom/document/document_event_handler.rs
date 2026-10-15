@@ -540,18 +540,19 @@ impl DocumentEventHandler {
             FireMouseEventType::Enter | FireMouseEventType::Leave
         ));
 
-        let common_ancestor = match related_target.as_ref() {
-            Some(related_target) => event_target
-                .common_ancestor_in_flat_tree(cx.no_gc(), related_target)
-                .unwrap_or_else(|| DomRoot::from_ref(event_target)),
-            None => DomRoot::from_ref(event_target),
-        };
+        let common_ancestor = related_target.as_ref().and_then(|related_target| {
+            event_target.common_ancestor_in_flat_tree(cx.no_gc(), related_target)
+        });
 
         // We need to create a target chain in case the event target shares
         // its boundaries with its ancestors.
         let mut targets: Vec<_> = event_target
             .inclusive_ancestors_in_flat_tree_unrooted(cx.no_gc())
-            .take_while(|node| *node != *common_ancestor)
+            .take_while(|node| {
+                common_ancestor
+                    .as_ref()
+                    .is_none_or(|ancestor| *node != **ancestor)
+            })
             .map(|node| node.as_rooted())
             .collect();
 
@@ -1213,6 +1214,7 @@ impl DocumentEventHandler {
             input_event.active_keyboard_modifiers,
             click_count,
         )
+        .to_pointer_event(cx, atom!("click"))
         .upcast::<Event>()
         .dispatch(cx, element.upcast(), false);
         element.set_click_in_progress(false);

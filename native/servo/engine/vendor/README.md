@@ -33,3 +33,20 @@ The offline `worker_messages_smoke.py` regression checks both directions, immedi
 blob URL revocation, transferred ports, nested workers and window origin isolation.
 The complete local delta is recorded in [`servo-script.patch`](servo-script.patch).
 Keep the local patch explicit when upgrading Servo.
+
+## Native pointer boundaries and click interfaces
+
+The `servo-script` delta also changes `dom/document/document_event_handler.rs`
+and `dom/event/mouseevent.rs`. With no previous hover target, boundary dispatch
+must include the target's ancestor chain. Treating that target itself as a common
+ancestor suppressed its initial `pointerenter` and `mouseenter` events.
+
+Native primary-button clicks now use `PointerEvent`, retaining the native event's
+trust, mouse fields and activation behavior. Pointer identity/type follow the
+causing pointer; activation-specific pointer attributes retain their defaults.
+Double clicks keep their `MouseEvent` interface. This follows
+[Pointer Events Level 3](https://www.w3.org/TR/pointerevents3/#the-click-auxclick-and-contextmenu-events).
+The offline `pointer_events_smoke.py` regression covers initial and sibling
+boundaries, click properties, double clicks, checkbox activation and cancelation.
+These corrections establish browser API behavior; website acceptance remains
+independent of the regression result.

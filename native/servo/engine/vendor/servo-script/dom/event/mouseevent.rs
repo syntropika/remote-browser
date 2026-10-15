@@ -329,6 +329,7 @@ impl MouseEvent {
         let is_pointer_down = &*event_type == "pointerdown";
         let is_pointer_move = &*event_type == "pointermove";
         let is_pointer_up = &*event_type == "pointerup";
+        let is_activation = matches!(&*event_type, "click" | "auxclick" | "contextmenu");
 
         // Pressure is 0.5 when button is down, 0.0 when up
         let pressure = if is_pointer_down || (is_pointer_move && !self.buttons.get().is_empty()) {
@@ -337,7 +338,7 @@ impl MouseEvent {
             0.0
         };
 
-        let button = if is_pointer_down || is_pointer_up {
+        let button = if is_pointer_down || is_pointer_up || is_activation {
             self.button.get()
         } else {
             MouseButton::None
@@ -378,12 +379,15 @@ impl MouseEvent {
             PI / 2.0, // altitude_angle (perpendicular to surface)
             0.0,      // azimuth_angle
             DOMString::from_static("mouse"),
-            true,   // is_primary (mouse is always primary)
+            !is_activation, // activation events retain the default is_primary
             vec![], // coalesced_events
             vec![], // predicted_events
         );
 
         pointer_event.upcast::<Event>().set_composed(composed);
+        pointer_event
+            .upcast::<Event>()
+            .set_trusted(self.upcast::<Event>().IsTrusted());
 
         pointer_event
     }

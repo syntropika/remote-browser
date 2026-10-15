@@ -299,6 +299,7 @@ python3 ../tests/embedded_smoke.py --engine-binary target/debug/remote-browser-s
 python3 ../tests/surface_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/webgl_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/worker_messages_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/pointer_events_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/failure_smoke.py --engine-binary target/debug/remote-browser-servo-engine
