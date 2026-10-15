@@ -227,6 +227,22 @@ impl MouseEvent {
         self.uievent.set_which((i16::from(button) + 1) as u32);
     }
 
+    /// Keep screen coordinates independent of the hit-tested frame viewport.
+    /// Positionless leave notifications retain their existing fallback.
+    fn platform_screen_point(
+        window: &Window,
+        point: Option<embedder_traits::WebViewPoint>,
+        fallback: Point2D<i32, CSSPixel>,
+    ) -> Point2D<i32, CSSPixel> {
+        let Some(point) = point else { return fallback };
+        let scale = window.device_pixel_ratio();
+        let point = (point.as_device_point(scale) / scale).to_i32();
+        Point2D::new(
+            point.x.saturating_add(window.ScreenX()),
+            point.y.saturating_add(window.ScreenY()),
+        )
+    }
+
     pub(crate) fn new_for_platform_motion_event(
         cx: &mut JSContext,
         window: &Window,
@@ -255,7 +271,11 @@ impl MouseEvent {
             cancelable,
             Some(window),
             0i32,
-            hit_test_result.point_in_frame.to_i32(),
+            Self::platform_screen_point(
+                window,
+                input_event.event.event.point(),
+                hit_test_result.point_in_frame.to_i32(),
+            ),
             hit_test_result.point_in_frame.to_i32(),
             hit_test_result
                 .point_relative_to_initial_containing_block
@@ -301,7 +321,7 @@ impl MouseEvent {
             EventCancelable::Cancelable,
             Some(window),
             click_count as i32,
-            client_point, // TODO: Get real screen coordinates?
+            Self::platform_screen_point(window, Some(event.point), client_point),
             client_point,
             page_point,
             modifiers,

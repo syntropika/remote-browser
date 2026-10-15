@@ -1121,10 +1121,11 @@ impl DocumentEventHandler {
                 let released_disconnected =
                     self.release_disconnected_pointer_capture(cx, pointer_id, "mouse", true);
 
-                // Get the current capture target (before any state changes)
-                let pointer_target = self
-                    .get_pointer_capture_target(pointer_id)
-                    .map(DomRoot::upcast::<EventTarget>)
+                // Preserve the target that received pointerup even if its handler releases capture.
+                let captured_click_target = self.get_pointer_capture_target(pointer_id);
+                let pointer_target = captured_click_target
+                    .as_ref()
+                    .map(|target| DomRoot::from_ref(target.upcast::<EventTarget>()))
                     .unwrap_or_else(|| DomRoot::from_ref(node.upcast::<EventTarget>()));
 
                 pointer_event.upcast::<Event>().fire(cx, &pointer_target);
@@ -1146,10 +1147,10 @@ impl DocumentEventHandler {
                     self.implicit_release_pointer_capture(cx, pointer_id, "mouse", true);
                 }
 
-                // Step 7. dispatch event at target.
+                // Compatibility mouseup follows the pointerup target, including capture.
                 mouse_event
                     .upcast::<Event>()
-                    .dispatch(cx, node.upcast(), false);
+                    .dispatch(cx, &pointer_target, false);
 
                 // Click counts should still work for other buttons even though they
                 // do not trigger "click" and "dblclick" events, so we increment
@@ -1167,6 +1168,7 @@ impl DocumentEventHandler {
                     input_event,
                     &hit_test_result,
                     &element,
+                    captured_click_target.as_deref(),
                 );
             },
         }
@@ -1181,6 +1183,7 @@ impl DocumentEventHandler {
         input_event: &ConstellationInputEvent,
         hit_test_result: &HitTestResult,
         element: &Element,
+        captured_click_target: Option<&Element>,
     ) {
         if event.button != MouseButton::Primary {
             return;
@@ -1192,9 +1195,12 @@ impl DocumentEventHandler {
 
         let distance = last_mouse_button_down_point.distance_to(hit_test_result.point_in_frame);
         let maximum_click_distance = 10.0 * self.window.device_pixel_ratio().get();
-        if distance > maximum_click_distance {
+        if captured_click_target.is_none() && distance > maximum_click_distance {
             return;
         }
+
+        // Pointer Events 3 selects the pointerup capture target for click, even after capture release.
+        let element = captured_click_target.unwrap_or(element);
 
         // From <https://w3c.github.io/pointerevents/#click>
         // > The click event type MUST be dispatched on the topmost event target indicated by the

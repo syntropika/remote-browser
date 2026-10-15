@@ -300,6 +300,8 @@ python3 ../tests/surface_smoke.py --engine-binary target/debug/remote-browser-se
 python3 ../tests/webgl_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/worker_messages_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/pointer_events_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/pointer_screen_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/pointer_capture_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/failure_smoke.py --engine-binary target/debug/remote-browser-servo-engine
@@ -307,7 +309,8 @@ python3 ../tests/logging_smoke.py --engine-binary target/debug/remote-browser-se
 ```
 
 Real-engine tests exercise native input, rendered PNGs, WebGL shader rendering,
-virtual screen geometry, live captures during frame loading, independent tab references,
+virtual screen geometry, iframe pointer coordinates and capture targeting,
+live captures during frame loading, independent tab references,
 background selection, concurrent actions, reservation enforcement, human takeover,
 profile isolation, HTTP-only credential metadata, cookies and local storage across
 restart, MCP negotiation, dashboard authorization, and persistent catalogs/policies.

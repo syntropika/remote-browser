@@ -51,6 +51,18 @@ boundaries, click properties, double clicks, checkbox activation and cancelation
 These corrections establish browser API behavior; website acceptance remains
 independent of the regression result.
 
+Native mouse and pointer screen coordinates use the input position in the WebView
+and its screen origin, independent of the hit-tested frame's local viewport.
+The `pointer_screen_smoke.py` regression checks nested, transformed and scrolled
+frames while retaining frame-local client coordinates and synthetic event fields.
+
+When `pointerup` is captured, compatibility `mouseup` and the following `click`
+retain that capture target, including when the handler releases capture or the
+control moves. Captured release bypasses the ordinary click-distance cutoff.
+The `pointer_capture_smoke.py` regression checks implicit release, explicit release
+inside `pointerup`, and the uncaptured control case. This follows the
+[Pointer Events click target algorithm](https://www.w3.org/TR/pointerevents3/#event-dispatch).
+
 ## Experimental Private State Tokens
 
 The opt-in native PST integration additionally vendors the unmodified published

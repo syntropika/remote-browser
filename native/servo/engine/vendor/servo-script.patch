@@ -122,7 +122,66 @@
              .map(|node| node.as_rooted())
              .collect();
  
-@@ -1213,6 +1214,7 @@
+@@ -1120,10 +1121,11 @@
+                 let released_disconnected =
+                     self.release_disconnected_pointer_capture(cx, pointer_id, "mouse", true);
+ 
+-                // Get the current capture target (before any state changes)
+-                let pointer_target = self
+-                    .get_pointer_capture_target(pointer_id)
+-                    .map(DomRoot::upcast::<EventTarget>)
++                // Preserve the target that received pointerup even if its handler releases capture.
++                let captured_click_target = self.get_pointer_capture_target(pointer_id);
++                let pointer_target = captured_click_target
++                    .as_ref()
++                    .map(|target| DomRoot::from_ref(target.upcast::<EventTarget>()))
+                     .unwrap_or_else(|| DomRoot::from_ref(node.upcast::<EventTarget>()));
+ 
+                 pointer_event.upcast::<Event>().fire(cx, &pointer_target);
+@@ -1145,10 +1147,10 @@
+                     self.implicit_release_pointer_capture(cx, pointer_id, "mouse", true);
+                 }
+ 
+-                // Step 7. dispatch event at target.
++                // Compatibility mouseup follows the pointerup target, including capture.
+                 mouse_event
+                     .upcast::<Event>()
+-                    .dispatch(cx, node.upcast(), false);
++                    .dispatch(cx, &pointer_target, false);
+ 
+                 // Click counts should still work for other buttons even though they
+                 // do not trigger "click" and "dblclick" events, so we increment
+@@ -1166,6 +1168,7 @@
+                     input_event,
+                     &hit_test_result,
+                     &element,
++                    captured_click_target.as_deref(),
+                 );
+             },
+         }
+@@ -1180,6 +1183,7 @@
+         input_event: &ConstellationInputEvent,
+         hit_test_result: &HitTestResult,
+         element: &Element,
++        captured_click_target: Option<&Element>,
+     ) {
+         if event.button != MouseButton::Primary {
+             return;
+@@ -1191,9 +1195,12 @@
+ 
+         let distance = last_mouse_button_down_point.distance_to(hit_test_result.point_in_frame);
+         let maximum_click_distance = 10.0 * self.window.device_pixel_ratio().get();
+-        if distance > maximum_click_distance {
++        if captured_click_target.is_none() && distance > maximum_click_distance {
+             return;
+         }
++
++        // Pointer Events 3 selects the pointerup capture target for click, even after capture release.
++        let element = captured_click_target.unwrap_or(element);
+ 
+         // From <https://w3c.github.io/pointerevents/#click>
+         // > The click event type MUST be dispatched on the topmost event target indicated by the
+@@ -1213,6 +1220,7 @@
              input_event.active_keyboard_modifiers,
              click_count,
          )
@@ -132,7 +191,52 @@
          element.set_click_in_progress(false);
 --- a/dom/event/mouseevent.rs
 +++ b/dom/event/mouseevent.rs
-@@ -329,6 +329,7 @@
+@@ -227,6 +227,22 @@
+         self.uievent.set_which((i16::from(button) + 1) as u32);
+     }
+ 
++    /// Keep screen coordinates independent of the hit-tested frame viewport.
++    /// Positionless leave notifications retain their existing fallback.
++    fn platform_screen_point(
++        window: &Window,
++        point: Option<embedder_traits::WebViewPoint>,
++        fallback: Point2D<i32, CSSPixel>,
++    ) -> Point2D<i32, CSSPixel> {
++        let Some(point) = point else { return fallback };
++        let scale = window.device_pixel_ratio();
++        let point = (point.as_device_point(scale) / scale).to_i32();
++        Point2D::new(
++            point.x.saturating_add(window.ScreenX()),
++            point.y.saturating_add(window.ScreenY()),
++        )
++    }
++
+     pub(crate) fn new_for_platform_motion_event(
+         cx: &mut JSContext,
+         window: &Window,
+@@ -255,7 +271,11 @@
+             cancelable,
+             Some(window),
+             0i32,
+-            hit_test_result.point_in_frame.to_i32(),
++            Self::platform_screen_point(
++                window,
++                input_event.event.event.point(),
++                hit_test_result.point_in_frame.to_i32(),
++            ),
+             hit_test_result.point_in_frame.to_i32(),
+             hit_test_result
+                 .point_relative_to_initial_containing_block
+@@ -301,7 +321,7 @@
+             EventCancelable::Cancelable,
+             Some(window),
+             click_count as i32,
+-            client_point, // TODO: Get real screen coordinates?
++            Self::platform_screen_point(window, Some(event.point), client_point),
+             client_point,
+             page_point,
+             modifiers,
+@@ -329,6 +349,7 @@
          let is_pointer_down = &*event_type == "pointerdown";
          let is_pointer_move = &*event_type == "pointermove";
          let is_pointer_up = &*event_type == "pointerup";
@@ -140,7 +244,7 @@
  
          // Pressure is 0.5 when button is down, 0.0 when up
          let pressure = if is_pointer_down || (is_pointer_move && !self.buttons.get().is_empty()) {
-@@ -337,7 +338,7 @@
+@@ -337,7 +358,7 @@
              0.0
          };
  
@@ -149,7 +253,7 @@
              self.button.get()
          } else {
              MouseButton::None
-@@ -378,12 +379,15 @@
+@@ -378,12 +399,15 @@
              PI / 2.0, // altitude_angle (perpendicular to surface)
              0.0,      // azimuth_angle
              DOMString::from_static("mouse"),
