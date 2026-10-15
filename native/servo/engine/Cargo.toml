@@ -35,3 +35,6 @@ servo-net = { path = "vendor/servo-net" }
 servo-script = { path = "vendor/servo-script" }
 servo-script-bindings = { path = "vendor/servo-script-bindings" }
 servo-net-traits = { path = "vendor/servo-net-traits" }
+servo-constellation = { path = "vendor/servo-constellation" }
+servo-constellation-traits = { path = "vendor/servo-constellation-traits" }
+servo-script-traits = { path = "vendor/servo-script-traits" }

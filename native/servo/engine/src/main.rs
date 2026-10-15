@@ -648,10 +648,21 @@ fn run_engine(
         temporary_storage: false,
         ..Opts::default()
     };
+    // Servo's IntersectionObserver remains experimental and disabled by default.
+    let preferences = servo::Preferences {
+        dom_intersection_observer_enabled: std::env::var_os(
+            "SERVO_EXPERIMENTAL_INTERSECTION_OBSERVER",
+        )
+        .is_some_and(|value| value == "1"),
+        ..servo::Preferences::default()
+    };
     let engine = Rc::new(Engine {
         files,
         clipboard: Rc::new(clipboard::Clipboard::default()),
-        servo: ServoBuilder::default().opts(opts).build(),
+        servo: ServoBuilder::default()
+            .opts(opts)
+            .preferences(preferences)
+            .build(),
         tabs: RefCell::new(HashMap::new()),
         reservations: RefCell::new(Reservations::default()),
         visible: RefCell::new(String::new()),

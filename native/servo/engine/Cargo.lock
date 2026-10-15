@@ -5971,8 +5971,6 @@ dependencies = [
 [[package]]
 name = "servo-constellation"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95d8c63ec95a7b90bc599007547ed5fe0e96be64f036fec9c100079e06eb2aad"
 dependencies = [
  "accesskit",
  "backtrace",
@@ -6016,8 +6014,6 @@ dependencies = [
 [[package]]
 name = "servo-constellation-traits"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b0d7d314268935ee4bcd68e8846f74cf55b2baa06a1c7001a6c8b06cf8a8880"
 dependencies = [
  "accesskit",
  "base64 0.23.1",
@@ -7066,8 +7062,6 @@ dependencies = [
 [[package]]
 name = "servo-script-traits"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b9ec4ad62d951a36af1ba07fc49e8e9df4ac6b47b5f60dd7443f21e56434656"
 dependencies = [
  "accesskit",
  "bitflags 2.13.2",

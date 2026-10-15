@@ -1,6 +1,16 @@
 --- a/dom/document/document.rs
 +++ b/dom/document/document.rs
-@@ -514,6 +514,8 @@
+@@ -371,6 +371,9 @@
+         /// one more rendering update possibility after this happens, so that any potential screenshot
+         /// reflects the up-to-date contents.
+         const FontReadyPromiseFulfilled = 1 << 2;
++        /// The embedding document in another event loop reported a new visible area of this
++        /// document's viewport, which affects intersection observations and nested viewports.
++        const ViewportIntersectionChanged = 1 << 3;
+     }
+ }
+ 
+@@ -514,6 +517,8 @@
      /// <https://html.spec.whatwg.org/multipage/#concept-document-policy-container>
      #[no_trace]
      policy_container: DomRefCell<PolicyContainer>,
@@ -9,7 +19,7 @@
      /// <https://html.spec.whatwg.org/multipage/#map-of-preloaded-resources>
      #[no_trace]
      preloaded_resources: DomRefCell<PreloadedResources>,
-@@ -3473,6 +3475,49 @@
+@@ -3473,6 +3478,49 @@
      }
  
      /// <https://html.spec.whatwg.org/multipage/#allowed-to-use>
@@ -59,7 +69,52 @@
      pub(crate) fn allowed_to_use_feature(&self, _feature: PermissionName) -> bool {
          // Step 1. If document's browsing context is null, then return false.
          if !self.has_browsing_context {
-@@ -4110,6 +4155,7 @@
+@@ -3540,12 +3588,42 @@
+     ) {
+         // Step 1
+         // > Let rootBounds be observer’s root intersection rectangle.
+-        let root_bounds = intersection_observer.root_intersection_rectangle();
++        // The root intersection rectangle depends on whether each target is same-origin-domain
++        // with the root, so it is computed per target.
+ 
+         // Step 2
+         // > For each target in observer’s internal [[ObservationTargets]] slot,
+         // > processed in the same order that observe() was called on each target:
+-        intersection_observer.update_intersection_observations_steps(cx, self, time, root_bounds);
++        intersection_observer.update_intersection_observations_steps(cx, self, time);
++    }
++
++    /// Report the visible part of each nested viewport whose `<iframe>` is in this document
++    /// to the constellation, which forwards it to the nested document, possibly in another
++    /// event loop. Only values that changed since the last report are sent, and nothing is
++    /// sent while an ancestor's own visible area is still unknown.
++    pub(crate) fn update_nested_viewport_intersections(&self, cx: &mut JSContext) {
++        let iframes: Vec<_> = self.iframes.iter().collect();
++        if iframes.is_empty() {
++            return;
++        }
++        self.window()
++            .reflow_for_non_flushing_update_the_rendering_queries(cx);
++
++        let intersections: Vec<_> = iframes
++            .iter()
++            .filter_map(|iframe| {
++                let browsing_context_id = iframe.browsing_context_id()?;
++                let intersection = IntersectionObserver::nested_viewport_intersection(iframe)?;
++                iframe
++                    .replace_reported_viewport_intersection(browsing_context_id, intersection)
++                    .then_some((browsing_context_id, intersection))
++            })
++            .collect();
++        if !intersections.is_empty() {
++            self.window().send_to_constellation(
++                ScriptToConstellationMessage::UpdateViewportIntersections(intersections),
++            );
++        }
+     }
+ 
+     /// <https://w3c.github.io/IntersectionObserver/#notify-intersection-observers-algo>
+@@ -4110,6 +4188,7 @@
              referrer,
              target_element: MutNullableDom::new(None),
              policy_container: DomRefCell::new(PolicyContainer::default()),
@@ -67,7 +122,7 @@
              preloaded_resources: Default::default(),
              ignore_destructive_writes_counter: Default::default(),
              ignore_opens_during_unload_counter: Default::default(),
-@@ -5368,6 +5414,15 @@
+@@ -5368,6 +5447,15 @@
  }
  
  impl DocumentMethods<crate::DomTypeHolder> for Document {
@@ -83,7 +138,7 @@
      /// <https://dom.spec.whatwg.org/#dom-document-document>
      fn Constructor(
          cx: &mut JSContext,
-@@ -7322,6 +7377,9 @@
+@@ -7322,6 +7410,9 @@
  }
  
  impl DocumentHelpers for Document {
@@ -378,6 +433,956 @@
                              None,
                              ports,
                          );
+--- a/dom/html/embedded_content/htmliframeelement.rs
++++ b/dom/html/embedded_content/htmliframeelement.rs
+@@ -23,7 +23,7 @@
+ use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
+ use servo_constellation_traits::{
+     IFrameLoadInfo, IFrameLoadInfoWithData, LoadData, LoadOrigin, NavigationHistoryBehavior,
+-    ScriptToConstellationMessage, TargetSnapshotParams,
++    ScriptToConstellationMessage, TargetSnapshotParams, ViewportIntersection,
+ };
+ use servo_url::ServoUrl;
+ use style::attr::{AttrValue, LengthOrPercentageOrAuto};
+@@ -114,9 +114,25 @@
+     /// on the initial creation of the iframe contents. If the iframe
+     /// itself changes the `window.name`, that takes precedence.
+     frozen_name: DomRefCell<Option<String>>,
++    /// The visible area of the nested viewport last reported to the constellation, and
++    /// the browsing context it was reported for.
++    #[no_trace]
++    #[ignore_malloc_size_of = "Plain geometry"]
++    reported_viewport_intersection: Cell<Option<(BrowsingContextId, ViewportIntersection)>>,
+ }
+ 
+ impl HTMLIFrameElement {
++    /// Record the visible area of the nested viewport that is about to be reported for
++    /// `browsing_context_id`. Returns false if that value was already reported.
++    pub(crate) fn replace_reported_viewport_intersection(
++        &self,
++        browsing_context_id: BrowsingContextId,
++        intersection: ViewportIntersection,
++    ) -> bool {
++        let report = Some((browsing_context_id, intersection));
++        self.reported_viewport_intersection.replace(report) != report
++    }
++
+     /// <https://html.spec.whatwg.org/multipage/#shared-attribute-processing-steps-for-iframe-and-frame-elements>,
+     fn shared_attribute_processing_steps_for_iframe_and_frame_elements(
+         &self,
+@@ -677,6 +693,7 @@
+             lazy_load_resumption_steps: Default::default(),
+             pending_navigation: Default::default(),
+             frozen_name: Default::default(),
++            reported_viewport_intersection: Default::default(),
+         }
+     }
+ 
+--- a/dom/intersectionobserver/intersectionobserver.rs
++++ b/dom/intersectionobserver/intersectionobserver.rs
+@@ -8,13 +8,14 @@
+ use app_units::Au;
+ use cssparser::Parser;
+ use dom_struct::dom_struct;
+-use euclid::{Rect, SideOffsets2D, Size2D, Vector2D};
++use euclid::{Point2D, Rect, SideOffsets2D, Size2D, Vector2D};
+ use js::context::{JSContext, NoGC};
+ use js::rust::{HandleObject, MutableHandleValue};
+ use script_bindings::callback::{RootedCallback, TracedCallback};
+ use script_bindings::cell::DomRefCell;
+ use script_bindings::reflector::{Reflector, reflect_dom_object_with_proto};
+ use servo_base::cross_process_instant::CrossProcessInstant;
++use servo_constellation_traits::ViewportIntersection;
+ use servo_geometry::f32_rect_to_au_rect;
+ use style::parser::Parse;
+ use style::stylesheets::CssRuleType;
+@@ -38,6 +39,7 @@
+ use crate::dom::document::{Document, RenderingUpdateReason};
+ use crate::dom::domrectreadonly::DOMRectReadOnly;
+ use crate::dom::element::Element;
++use crate::dom::html::htmliframeelement::HTMLIFrameElement;
+ use crate::dom::intersectionobserverentry::IntersectionObserverEntry;
+ use crate::dom::node::{Node, NodeTraits};
+ use crate::dom::window::Window;
+@@ -343,7 +345,7 @@
+         cx: &mut JSContext,
+         document: &Document,
+         time: CrossProcessInstant,
+-        root_bounds: Rect<Au, CSSPixel>,
++        root_bounds: Option<Rect<Au, CSSPixel>>,
+         bounding_client_rect: Rect<Au, CSSPixel>,
+         intersection_rect: Rect<Au, CSSPixel>,
+         is_intersecting: bool,
+@@ -363,7 +365,7 @@
+             )
+         };
+ 
+-        let root_bounds = rect_to_domrectreadonly(root_bounds);
++        let root_bounds = root_bounds.map(&mut rect_to_domrectreadonly);
+         let bounding_client_rect = rect_to_domrectreadonly(bounding_client_rect);
+         let intersection_rect = rect_to_domrectreadonly(intersection_rect);
+ 
+@@ -378,7 +380,7 @@
+             self.owner_doc.window(),
+             None,
+             time,
+-            Some(&root_bounds),
++            root_bounds.as_deref(),
+             &bounding_client_rect,
+             &intersection_rect,
+             is_intersecting,
+@@ -453,32 +455,12 @@
+     /// > the rectangle we’ll use to check against the targets.
+     ///
+     /// <https://w3c.github.io/IntersectionObserver/#intersectionobserver-root-intersection-rectangle>
+-    pub(crate) fn root_intersection_rectangle(&self) -> Option<Rect<Au, CSSPixel>> {
+-        let intersection_rectangle = match self.concrete_root() {
+-            // Handle if root is an element.
+-            Some(ElementOrDocument::Element(element)) => {
+-                // TODO: recheck scrollbar approach and clip-path clipping from Chromium implementation.
+-                if IntersectionObserver::has_content_clip(&element) {
+-                    // > Otherwise, if the intersection root has a content clip, it’s the element’s padding area.
+-                    element.upcast::<Node>().padding_box_without_reflow()
+-                } else {
+-                    // > Otherwise, it’s the result of getting the bounding box for the intersection root.
+-                    element.upcast::<Node>().border_box_without_reflow()
+-                }
+-            },
+-            // Handle if root is a Document, which includes implicit root and explicit Document root.
+-            Some(ElementOrDocument::Document(document)) => {
+-                // > If the intersection root is a document, it’s the size of the document's viewport
+-                // > (note that this processing step can only be reached if the document is fully active).
+-                // TODO: viewport should consider native scrollbar if exist. Recheck Servo's scrollbar approach.
+-                let viewport = document.window().viewport_details().size;
+-                Some(Rect::from_size(Size2D::new(
+-                    Au::from_f32_px(viewport.width),
+-                    Au::from_f32_px(viewport.height),
+-                )))
+-            },
+-            None => None,
+-        };
++    fn root_intersection_rectangle(
++        &self,
++        root: &ElementOrDocument,
++        same_origin_domain_target: bool,
++    ) -> Option<Rect<Au, CSSPixel>> {
++        let intersection_rectangle = unexpanded_root_intersection_rectangle(root)?;
+ 
+         // > When calculating the root intersection rectangle for a same-origin-domain target,
+         // > the rectangle is then expanded according to the offsets in the IntersectionObserver’s
+@@ -486,28 +468,80 @@
+         // > indicating the amount the top, right, bottom, and left edges, respectively, are offset by,
+         // > with positive lengths indicating an outward offset. Percentages are resolved relative to
+         // > the width of the undilated rectangle.
+-        // TODO(stevennovaryo): add check for same-origin-domain
+-        intersection_rectangle.map(|intersection_rectangle| {
+-            let margin = Self::resolve_percentages_with_basis(
+-                &self.root_margin.borrow(),
+-                intersection_rectangle,
+-            );
+-            intersection_rectangle.outer_rect(margin)
+-        })
+-    }
+-
+-    /// Return root or try to get the top-level browsing context document in case if this is a implicit root.
++        if !same_origin_domain_target {
++            return Some(intersection_rectangle);
++        }
++        let margin = Self::resolve_percentages_with_basis(
++            &self.root_margin.borrow(),
++            intersection_rectangle,
++        );
++        Some(intersection_rectangle.outer_rect(margin))
++    }
++
++    /// Return the intersection root for `target`, and whether `target` is same-origin-domain
++    /// with it. For the implicit root, this is the top-level browsing context's document,
++    /// which is `None` if that document is in another `ScriptThread`.
+     /// <https://w3c.github.io/IntersectionObserver/#intersectionobserver-intersection-root>
+-    // TODO: Currently we are unable to get the cross `ScriptThread` document.
+-    fn concrete_root(&self) -> Option<ElementOrDocument> {
+-        match &self.root {
+-            Some(root) => Some(root.into()),
+-            None => self
+-                .owner_doc
+-                .window()
+-                .top_level_document_if_local()
+-                .map(ElementOrDocument::Document),
+-        }
++    fn intersection_root_for_target(&self, target: &Element) -> (Option<ElementOrDocument>, bool) {
++        if let Some(root) = &self.root {
++            // An explicit root is in the same document as any target that is not skipped.
++            return (Some(root.into()), true);
++        }
++        let Some(top_level_document) = target.owner_window().top_level_document_if_local() else {
++            // Servo assigns documents that can become same-origin-domain to the same
++            // `ScriptThread`, so a target is never same-origin-domain with a remote root.
++            return (None, false);
++        };
++        let same_origin_domain = target
++            .owner_document()
++            .origin()
++            .same_origin_domain(&top_level_document.origin());
++        (
++            Some(ElementOrDocument::Document(top_level_document)),
++            same_origin_domain,
++        )
++    }
++
++    /// Compute the visible part of the viewport nested in `iframe`, as fractions of the
++    /// iframe's content box, for intersection observations in the nested document. This
++    /// applies the clipping of an implicit-root observation but neither root nor scroll
++    /// margins, since the nested document may be cross-origin-domain. Returns `None` while
++    /// the visible area of an ancestor viewport in another `ScriptThread` is unknown.
++    pub(crate) fn nested_viewport_intersection(
++        iframe: &HTMLIFrameElement,
++    ) -> Option<ViewportIntersection> {
++        let element = iframe.upcast::<Element>();
++        let Some(content_box) = element.upcast::<Node>().content_box_without_reflow() else {
++            return Some(ViewportIntersection::NotVisible);
++        };
++        if content_box.size.width.0 <= 0 || content_box.size.height.0 <= 0 {
++            return Some(ViewportIntersection::NotVisible);
++        }
++        let root = element
++            .owner_window()
++            .top_level_document_if_local()
++            .map(ElementOrDocument::Document);
++        let root = root.as_ref().and_then(|root| {
++            unexpanded_root_intersection_rectangle(root).map(|rectangle| (root, rectangle))
++        });
++        let visible = match compute_the_intersection(element, root, content_box, None) {
++            ComputedIntersection::Unknown => return None,
++            ComputedIntersection::NotIntersecting => return Some(ViewportIntersection::NotVisible),
++            ComputedIntersection::Intersecting(visible) => visible,
++        };
++
++        let content_box = au_rect_to_f32_rect(content_box);
++        let visible = au_rect_to_f32_rect(visible);
++        let fraction =
++            |value: f32, start: f32, length: f32| ((value - start) / length).clamp(0., 1.);
++        let left = fraction(visible.min_x(), content_box.min_x(), content_box.width());
++        let right = fraction(visible.max_x(), content_box.min_x(), content_box.width());
++        let top = fraction(visible.min_y(), content_box.min_y(), content_box.height());
++        let bottom = fraction(visible.max_y(), content_box.min_y(), content_box.height());
++        Some(ViewportIntersection::Visible(euclid::default::Rect::new(
++            euclid::default::Point2D::new(left, top),
++            euclid::default::Size2D::new(right - left, bottom - top),
++        )))
+     }
+ 
+     /// Step 2.2.4-2.2.21 of <https://w3c.github.io/IntersectionObserver/#update-intersection-observations-algo>
+@@ -518,28 +552,31 @@
+     /// Note that current draft specs skipped wrong steps, as it should skip computing fields that
+     /// would result in different intersection entry other than the default entry per published spec.
+     /// <https://www.w3.org/TR/intersection-observer/>
++    ///
++    /// Returns `None` if the target's intersection depends on the visible area of an ancestor
++    /// viewport in another `ScriptThread` that has not been reported yet.
+     fn maybe_compute_intersection_output(
+         &self,
+         target: &Element,
+-        maybe_root_bounds: Option<Rect<Au, CSSPixel>>,
+-    ) -> IntersectionObservationOutput {
++    ) -> Option<IntersectionObservationOutput> {
+         // Step 5
+         // > If the intersection root is not the implicit root, and target is not in
+         // > the same document as the intersection root, skip to step 11.
+         // Step 6
+         // > If the intersection root is an Element, and target is not a descendant of
+         // > the intersection root in the containing block chain, skip to step 11.
++        let skipped = IntersectionObservationOutput::default_skipped(Some(Rect::zero()));
+         match &self.root {
+             Some(UnrootedElementOrDocument::Document(document))
+                 if document.as_rooted() != target.owner_document() =>
+             {
+-                return IntersectionObservationOutput::default_skipped();
++                return Some(skipped);
+             },
+             Some(UnrootedElementOrDocument::Element(element)) => {
+                 // To ensure consistency, we also check for elements right now, but we can depend on the
+                 // layout query later.
+                 if element.owner_document() != target.owner_document() {
+-                    return IntersectionObservationOutput::default_skipped();
++                    return Some(skipped);
+                 }
+                 if !element
+                     .owner_window()
+@@ -548,22 +585,43 @@
+                         target.upcast(),
+                     )
+                 {
+-                    return IntersectionObservationOutput::default_skipped();
++                    return Some(skipped);
+                 }
+             },
+             _ => {},
+         }
+ 
++        // > rootBounds: For a same-origin-domain target, this will be the root intersection
++        // > rectangle. Otherwise, this will be null.
++        // <https://w3c.github.io/IntersectionObserver/#dom-intersectionobserverentry-rootbounds>
++        let (root, same_origin_domain) = self.intersection_root_for_target(target);
++        let maybe_root_bounds = root
++            .as_ref()
++            .and_then(|root| self.root_intersection_rectangle(root, same_origin_domain));
++        let reported_root_bounds =
++            same_origin_domain.then(|| maybe_root_bounds.unwrap_or_default());
++
+         // Step 7
+         // > Set targetRect to the DOMRectReadOnly obtained by getting the bounding box for target.
+         let maybe_target_rect = target.upcast::<Node>().border_box_without_reflow();
+ 
+         // Following the implementation of Gecko, we will skip further processing if these
+         // information not available. This would also handle display none element.
+-        let (Some(root_bounds), Some(target_rect), Some(root_intersection)) =
+-            (maybe_root_bounds, maybe_target_rect, self.concrete_root())
+-        else {
+-            return IntersectionObservationOutput::default_skipped();
++        let Some(target_rect) = maybe_target_rect else {
++            return Some(IntersectionObservationOutput::default_skipped(
++                reported_root_bounds,
++            ));
++        };
++        let root = match (root.as_ref(), maybe_root_bounds) {
++            (Some(root), Some(root_bounds)) => Some((root, root_bounds)),
++            (Some(_), None) => {
++                return Some(IntersectionObservationOutput::default_skipped(
++                    reported_root_bounds,
++                ));
++            },
++            // The implicit root is in another `ScriptThread`. The visible area of the
++            // viewport where the walk leaves this `ScriptThread` is used instead.
++            (None, _) => None,
+         };
+ 
+         // TODO(stevennovaryo): we should probably also consider adding visibity check, ideally
+@@ -572,13 +630,17 @@
+         // Step 8
+         // > Let intersectionRect be the result of running the compute the intersection algorithm on
+         // > target and observer’s intersection root.
+-        let maybe_intersection_rect = compute_the_intersection(
++        let scroll_margin = self.scroll_margin.borrow();
++        let maybe_intersection_rect = match compute_the_intersection(
+             target,
+-            &root_intersection,
+-            root_bounds,
++            root,
+             target_rect,
+-            &self.scroll_margin.borrow(),
+-        );
++            same_origin_domain.then_some(&*scroll_margin),
++        ) {
++            ComputedIntersection::Unknown => return None,
++            ComputedIntersection::NotIntersecting => None,
++            ComputedIntersection::Intersecting(intersection_rect) => Some(intersection_rect),
++        };
+         let intersection_rect = maybe_intersection_rect.unwrap_or_default();
+ 
+         // Step 9
+@@ -637,15 +699,15 @@
+         // See https://github.com/w3c/IntersectionObserver/issues/432 for background.
+         let is_intersecting = matches!(threshold_index, ThresholdIndex::Matching(..));
+ 
+-        IntersectionObservationOutput::new_computed(
++        Some(IntersectionObservationOutput::new_computed(
+             threshold_index,
+             is_intersecting,
+             target_rect,
+             intersection_rect,
+             intersection_ratio,
+             is_visible,
+-            root_bounds,
+-        )
++            reported_root_bounds,
++        ))
+     }
+ 
+     /// Step 2.2.1-2.2.21 of <https://w3c.github.io/IntersectionObserver/#update-intersection-observations-algo>
+@@ -654,7 +716,6 @@
+         cx: &mut JSContext,
+         document: &Document,
+         time: CrossProcessInstant,
+-        root_bounds: Option<Rect<Au, CSSPixel>>,
+     ) {
+         for target in &*self.observation_targets.borrow() {
+             // Step 1
+@@ -667,15 +728,19 @@
+             if time - registration.last_update_time.get() <
+                 Duration::from_millis(self.delay.get().max(0) as u64)
+             {
+-                return;
++                continue;
+             }
++
++            // step 4-14
++            // A target whose ancestor viewport area is not known yet keeps its registration
++            // unchanged, so that its initial observation happens once that area is reported.
++            let Some(intersection_output) = self.maybe_compute_intersection_output(target) else {
++                continue;
++            };
+ 
+             // Step 3
+             // > Set registration.lastUpdateTime to time.
+             registration.last_update_time.set(time);
+-
+-            // step 4-14
+-            let intersection_output = self.maybe_compute_intersection_output(target, root_bounds);
+ 
+             // Step 15-17
+             // > 15. Let previousThresholdIndex be the registration’s previousThresholdIndex property.
+@@ -695,8 +760,6 @@
+                 intersection_output.is_intersecting != previous_is_intersecting ||
+                 intersection_output.is_visible != previous_is_visible
+             {
+-                // TODO(stevennovaryo): Per IntersectionObserverEntry interface, the rootBounds
+-                //                      should be null for cross-origin-domain target.
+                 self.queue_an_intersectionobserverentry(
+                     cx,
+                     document,
+@@ -916,18 +979,138 @@
+     }
+ }
+ 
++/// The intersection root rectangle without any root margin.
++/// <https://w3c.github.io/IntersectionObserver/#intersectionobserver-root-intersection-rectangle>
++fn unexpanded_root_intersection_rectangle(root: &ElementOrDocument) -> Option<Rect<Au, CSSPixel>> {
++    match root {
++        // Handle if root is an element.
++        ElementOrDocument::Element(element) => {
++            // TODO: recheck scrollbar approach and clip-path clipping from Chromium implementation.
++            if IntersectionObserver::has_content_clip(element) {
++                // > Otherwise, if the intersection root has a content clip, it’s the element’s padding area.
++                element.upcast::<Node>().padding_box_without_reflow()
++            } else {
++                // > Otherwise, it’s the result of getting the bounding box for the intersection root.
++                element.upcast::<Node>().border_box_without_reflow()
++            }
++        },
++        // Handle if root is a Document, which includes implicit root and explicit Document root.
++        ElementOrDocument::Document(document) => {
++            // > If the intersection root is a document, it’s the size of the document's viewport
++            // > (note that this processing step can only be reached if the document is fully active).
++            // TODO: viewport should consider native scrollbar if exist. Recheck Servo's scrollbar approach.
++            let viewport = document.window().viewport_details().size;
++            Some(Rect::from_size(Size2D::new(
++                Au::from_f32_px(viewport.width),
++                Au::from_f32_px(viewport.height),
++            )))
++        },
++    }
++}
++
++fn au_rect_to_f32_rect(rect: Rect<Au, CSSPixel>) -> Rect<f32, CSSPixel> {
++    Rect::new(
++        Point2D::new(rect.origin.x.to_f32_px(), rect.origin.y.to_f32_px()),
++        Size2D::new(rect.size.width.to_f32_px(), rect.size.height.to_f32_px()),
++    )
++}
++
++/// Maps rectangles from the viewport of a nested document into the viewport of an ancestor
++/// document, with a scale for each axis followed by a translation. Layout reports the
++/// bounding box of a transformed `<iframe>`, so this is exact for translations and scales
++/// and approximates the bounding box of other transforms, such as rotations.
++#[derive(Clone, Copy)]
++struct ViewportMapping {
++    scale: Vector2D<f32, CSSPixel>,
++    offset: Vector2D<f32, CSSPixel>,
++}
++
++impl ViewportMapping {
++    fn identity() -> Self {
++        Self {
++            scale: Vector2D::new(1., 1.),
++            offset: Vector2D::zero(),
++        }
++    }
++
++    /// The mapping of a nested viewport of `viewport_size` that is displayed in
++    /// `content_box` of its container, in the parent viewport's coordinates.
++    fn for_container(
++        content_box: Rect<Au, CSSPixel>,
++        viewport_size: Size2D<f32, CSSPixel>,
++    ) -> Self {
++        let content_box = au_rect_to_f32_rect(content_box);
++        let scale = |displayed: f32, nested: f32| if nested > 0. { displayed / nested } else { 1. };
++        Self {
++            scale: Vector2D::new(
++                scale(content_box.width(), viewport_size.width),
++                scale(content_box.height(), viewport_size.height),
++            ),
++            offset: content_box.origin.to_vector(),
++        }
++    }
++
++    /// The mapping that applies `self` and then `outer`.
++    fn then(self, outer: Self) -> Self {
++        Self {
++            scale: self.scale.component_mul(outer.scale),
++            offset: self.offset.component_mul(outer.scale) + outer.offset,
++        }
++    }
++
++    fn map(&self, rect: Rect<Au, CSSPixel>) -> Rect<Au, CSSPixel> {
++        let rect = au_rect_to_f32_rect(rect);
++        f32_rect_to_au_rect(Rect::new(
++            (rect.origin.to_vector().component_mul(self.scale) + self.offset).to_point(),
++            Size2D::new(rect.width() * self.scale.x, rect.height() * self.scale.y),
++        ))
++    }
++
++    fn unmap(&self, rect: Rect<Au, CSSPixel>) -> Rect<Au, CSSPixel> {
++        let rect = au_rect_to_f32_rect(rect);
++        let divide = |value: f32, scale: f32| if scale > 0. { value / scale } else { 0. };
++        let origin = rect.origin - self.offset;
++        f32_rect_to_au_rect(Rect::new(
++            Point2D::new(
++                divide(origin.x, self.scale.x),
++                divide(origin.y, self.scale.y),
++            ),
++            Size2D::new(
++                divide(rect.width(), self.scale.x),
++                divide(rect.height(), self.scale.y),
++            ),
++        ))
++    }
++}
++
++/// The result of [`compute_the_intersection`].
++enum ComputedIntersection {
++    /// The intersection rectangle, in the coordinate space of the target document's viewport.
++    Intersecting(Rect<Au, CSSPixel>),
++    NotIntersecting,
++    /// The intersection depends on the visible area of an ancestor viewport whose embedding
++    /// document is in another `ScriptThread`, which has not reported it yet.
++    Unknown,
++}
++
+ /// Compute the intersection rectangle of the target [`Element`] returning the results of intersection in the coordinate
+ /// space of the target's owning [`Document`]. Additionally, we assume that both the target and the root is connected.
+ /// <https://w3c.github.io/IntersectionObserver/#compute-the-intersection>
++///
++/// `root` is the intersection root and its root intersection rectangle. It is `None` if the
++/// implicit root is in another `ScriptThread`. When the walk reaches a document whose parent is
++/// in another `ScriptThread`, the visible area of that document's viewport reported by its
++/// parent replaces the remaining ancestors and the root intersection rectangle. That area is
++/// clipped by all ancestors and the top-level viewport, without any root or scroll margins.
+ fn compute_the_intersection(
+     target: &Element,
+-    root: &ElementOrDocument,
+-    root_bounds: Rect<Au, CSSPixel>,
+-    mut intersection_rect: Rect<Au, CSSPixel>,
+-    scroll_margin: &IntersectionObserverMargin,
+-) -> Option<Rect<Au, CSSPixel>> {
++    root: Option<(&ElementOrDocument, Rect<Au, CSSPixel>)>,
++    target_rect: Rect<Au, CSSPixel>,
++    scroll_margin: Option<&IntersectionObserverMargin>,
++) -> ComputedIntersection {
+     // > 1. Let intersectionRect be the result of getting the bounding box for target.
+     // We had delegated the computation of this to the caller of the function.
++    let mut intersection_rect = target_rect;
+ 
+     // > 2. Let container be the containing block of target.
+     let mut container = match target
+@@ -938,41 +1121,67 @@
+         None => ElementOrDocument::Document(target.owner_document()),
+     };
+ 
+-    // Total offsets gained from traversing through multiple navigables. We use this to map the coordinate space.
+-    // TODO: We should store the product sum of transformation matrices instead. But this should be enough to handle
+-    // scrolling, simple translation, and offset from containing block.
+-    let mut total_inter_document_offset = Vector2D::zero();
++    // The mapping from the target document's viewport to the viewport of the document
++    // currently traversed, gained from traversing through multiple navigables.
++    let mut total_mapping = ViewportMapping::identity();
+ 
+     // > 3. While container is not root:
+-    while container != *root {
++    while root.is_none_or(|(root, _)| container != *root) {
+         let containing_element = match container {
+             ElementOrDocument::Document(ref containing_document) => {
+                 // > 3.1. If container is the document of a nested browsing context, update intersectionRect by clipping
+                 // >      to the viewport of the document, and update container to be the browsing context container of container.
++                let window = containing_document.window();
++                let viewport_size = window.viewport_details().size;
++                let viewport_rect = f32_rect_to_au_rect(Rect::from_size(viewport_size));
++                let Some(clipped_rect) = intersect_rectangle(&intersection_rect, &viewport_rect)
++                else {
++                    return ComputedIntersection::NotIntersecting;
++                };
++
+                 if let Some(frame_container) = containing_document
+                     .browsing_context()
+                     .and_then(|window| window.frame_element().map(DomRoot::from_ref))
+                 {
+-                    let viewport_rect = f32_rect_to_au_rect(Rect::from_size(
+-                        containing_document.window().viewport_details().size,
++                    // The nested viewport starts at the content edge of its container.
++                    let Some(content_box) = frame_container
++                        .upcast::<Node>()
++                        .content_box_without_reflow()
++                    else {
++                        return ComputedIntersection::NotIntersecting;
++                    };
++                    let mapping = ViewportMapping::for_container(content_box, viewport_size);
++                    intersection_rect = mapping.map(clipped_rect);
++                    total_mapping = total_mapping.then(mapping);
++
++                    frame_container
++                } else if !window.is_top_level() {
++                    // The container is in another `ScriptThread`, which reports the visible part
++                    // of this viewport after clipping by every ancestor.
++                    let visible_fraction = match window.viewport_intersection() {
++                        None => return ComputedIntersection::Unknown,
++                        Some(ViewportIntersection::NotVisible) => {
++                            return ComputedIntersection::NotIntersecting;
++                        },
++                        Some(ViewportIntersection::Visible(visible_fraction)) => visible_fraction,
++                    };
++                    let visible_rect = f32_rect_to_au_rect(Rect::new(
++                        Point2D::new(
++                            visible_fraction.origin.x * viewport_size.width,
++                            visible_fraction.origin.y * viewport_size.height,
++                        ),
++                        Size2D::new(
++                            visible_fraction.size.width * viewport_size.width,
++                            visible_fraction.size.height * viewport_size.height,
++                        ),
+                     ));
+-
+-                    intersection_rect = intersect_rectangle(&intersection_rect, &viewport_rect)?;
+-
+-                    let current_offset = frame_container
+-                        .upcast::<Node>()
+-                        .padding_box()
+-                        .unwrap()
+-                        .origin
+-                        .to_vector();
+-                    intersection_rect.origin += current_offset;
+-                    total_inter_document_offset += current_offset;
+-
+-                    frame_container
++                    return match intersect_rectangle(&clipped_rect, &visible_rect) {
++                        Some(rect) => ComputedIntersection::Intersecting(total_mapping.unmap(rect)),
++                        None => ComputedIntersection::NotIntersecting,
++                    };
+                 } else {
+-                    // TODO: Theoritically, this shouldn't be reachable as we have ensured that the root is reachable
+-                    // in the previous steps. But we are still unable to iterate through cross-origin ancestor iframes,
+-                    // and we will need to stop the iteration for that case.
++                    // This top-level document is not the intersection root, which can only happen
++                    // if the root is not an ancestor of the target.
+                     break;
+                 }
+             },
+@@ -995,18 +1204,25 @@
+                 .upcast::<Node>()
+                 .padding_box_without_reflow()
+         {
+-            let container_padding_box =
+-                if containing_element.establishes_scroll_container_without_reflow() {
++            let container_padding_box = match scroll_margin {
++                Some(scroll_margin)
++                    if containing_element.establishes_scroll_container_without_reflow() =>
++                {
+                     let margin = IntersectionObserver::resolve_percentages_with_basis(
+                         scroll_margin,
+                         container_padding_box,
+                     );
+                     container_padding_box.outer_rect(margin)
+-                } else {
+-                    container_padding_box
+-                };
+-
+-            intersection_rect = intersect_rectangle(&intersection_rect, &container_padding_box)?;
++                },
++                _ => container_padding_box,
++            };
++
++            let Some(clipped_rect) =
++                intersect_rectangle(&intersection_rect, &container_padding_box)
++            else {
++                return ComputedIntersection::NotIntersecting;
++            };
++            intersection_rect = clipped_rect;
+         }
+ 
+         // > 3.5. If container is the root element of a browsing context, update container to be the
+@@ -1031,16 +1247,19 @@
+ 
+     // Step 5
+     // > Update intersectionRect by intersecting it with the root intersection rectangle.
+-    intersection_rect = intersect_rectangle(&intersection_rect, &root_bounds)?;
++    let Some((_, root_bounds)) = root else {
++        return ComputedIntersection::NotIntersecting;
++    };
++    let Some(intersection_rect) = intersect_rectangle(&intersection_rect, &root_bounds) else {
++        return ComputedIntersection::NotIntersecting;
++    };
+ 
+     // Step 6
+     // > Map intersectionRect to the coordinate space of the viewport of the document containing target.
+-    // Offset the intersectionRect back to the coordinate space of target's document.
+-    intersection_rect.origin -= total_inter_document_offset;
+-
++    // Map the intersectionRect back to the coordinate space of target's document.
+     // Step 7
+     // > Return intersectionRect.
+-    Some(intersection_rect)
++    ComputedIntersection::Intersecting(total_mapping.unmap(intersection_rect))
+ }
+ 
+ /// The values from computing step 2.2.4-2.2.14 in
+@@ -1054,9 +1273,10 @@
+     pub(crate) intersection_ratio: f64,
+     pub(crate) is_visible: bool,
+ 
+-    /// The root intersection rectangle [`IntersectionObserver::root_intersection_rectangle`].
++    /// The root intersection rectangle [`IntersectionObserver::root_intersection_rectangle`],
++    /// which is `None` for a target that is not same-origin-domain with the intersection root.
+     /// If the processing is skipped, computation should report the default zero value.
+-    pub(crate) root_bounds: Rect<Au, CSSPixel>,
++    pub(crate) root_bounds: Option<Rect<Au, CSSPixel>>,
+ }
+ 
+ impl IntersectionObservationOutput {
+@@ -1071,7 +1291,7 @@
+     ///
+     /// For fields that the default values is not directly mentioned, the values conformant
+     /// to current browser implementation or WPT test is used instead.
+-    fn default_skipped() -> Self {
++    fn default_skipped(root_bounds: Option<Rect<Au, CSSPixel>>) -> Self {
+         Self {
+             threshold_index: ThresholdIndex::NotMatching,
+             is_intersecting: false,
+@@ -1079,7 +1299,7 @@
+             intersection_rect: Rect::zero(),
+             intersection_ratio: 0.,
+             is_visible: false,
+-            root_bounds: Rect::zero(),
++            root_bounds,
+         }
+     }
+ 
+@@ -1090,7 +1310,7 @@
+         intersection_rect: Rect<Au, CSSPixel>,
+         intersection_ratio: f64,
+         is_visible: bool,
+-        root_bounds: Rect<Au, CSSPixel>,
++        root_bounds: Option<Rect<Au, CSSPixel>>,
+     ) -> Self {
+         Self {
+             threshold_index,
+--- a/dom/node/node.rs
++++ b/dom/node/node.rs
+@@ -1153,6 +1153,11 @@
+     pub(crate) fn content_box(&self) -> Option<Rect<Au, CSSPixel>> {
+         self.owner_window()
+             .box_area_query(self, BoxAreaType::Content, false)
++    }
++
++    pub(crate) fn content_box_without_reflow(&self) -> Option<Rect<Au, CSSPixel>> {
++        self.owner_window()
++            .box_area_query_without_reflow(self, BoxAreaType::Content, false)
+     }
+ 
+     pub(crate) fn border_box(&self) -> Option<Rect<Au, CSSPixel>> {
+--- a/dom/window/useractivation.rs
++++ b/dom/window/useractivation.rs
+@@ -9,6 +9,7 @@
+ use script_bindings::codegen::GenericBindings::UserActivationBinding::UserActivationMethods;
+ use script_bindings::reflector::{Reflector, reflect_dom_object_with_cx};
+ use servo_base::cross_process_instant::CrossProcessInstant;
++use servo_constellation_traits::ScriptToConstellationMessage;
+ use time::Duration;
+ 
+ use crate::dom::bindings::reflector::DomGlobal;
+@@ -51,7 +52,8 @@
+ 
+         // Step 3.
+         // > Extend windows with the active window of each of document's ancestor navigables.
+-        // TODO: this would not work for disimilar origin ancestor, since we don't store the document in this script thread.
++        // This iterator stops at the first ancestor in another event loop. The constellation
++        // notifies the remaining ancestors below.
+         for document in SameoriginAncestorNavigablesIterator::new(DomRoot::from_ref(document)) {
+             windows.push(Dom::from_ref(document.window()));
+         }
+@@ -59,8 +61,11 @@
+         // Step 4.
+         // > Extend windows with the active window of each of document's descendant navigables, filtered to include only
+         // > those navigables whose active document's origin is same origin with document's origin.
+-        for document in SameOriginDescendantNavigablesIterator::new(document) {
+-            windows.push(Dom::from_ref(document.window()));
++        // The iterator visits every descendant in this event loop, irrespective of origin.
++        for descendant in SameOriginDescendantNavigablesIterator::new(document) {
++            if descendant.origin().same_origin(&document.origin()) {
++                windows.push(Dom::from_ref(descendant.window()));
++            }
+         }
+ 
+         // Step 5.
+@@ -76,6 +81,17 @@
+             // Step 5.2.
+             // > Notify the close watcher manager about user activation given window.
+             // TODO: impl close watcher
++        }
++
++        // Ancestors and same-origin descendants in other event loops, or behind a document in
++        // another event loop, are notified through the constellation with the same timestamp.
++        if !owner_window.is_top_level() || document.iframes().iter().next().is_some() {
++            owner_window.send_to_constellation(
++                ScriptToConstellationMessage::UserActivationNotification(
++                    current_timestamp,
++                    document.origin().immutable().clone(),
++                ),
++            );
+         }
+     }
+ }
+--- a/dom/window/window.rs
++++ b/dom/window/window.rs
+@@ -90,7 +90,7 @@
+ use servo_config::pref;
+ use servo_constellation_traits::{
+     LoadData, LoadOrigin, ScreenshotReadinessResponse, ScriptToConstellationMessage,
+-    ScriptToConstellationSender, StructuredSerializedData, WindowSizeType,
++    ScriptToConstellationSender, StructuredSerializedData, ViewportIntersection, WindowSizeType,
+ };
+ use servo_geometry::DeviceIndependentIntRect;
+ use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
+@@ -155,6 +155,7 @@
+ use crate::dom::document::focus::FocusableArea;
+ use crate::dom::document::{
+     AnimationFrameCallback, Document, SameOriginDescendantNavigablesIterator,
++    SameoriginAncestorNavigablesIterator,
+ };
+ use crate::dom::element::Element;
+ use crate::dom::event::{Event, EventBubbles, EventCancelable};
+@@ -492,6 +493,18 @@
+     #[no_trace]
+     last_activation_timestamp: Cell<UserActivationTimestamp>,
+ 
++    /// The time at which the activation was last consumed. Notifications of activations
++    /// that are not newer, which can arrive late from other event loops, are ignored.
++    #[no_trace]
++    last_activation_consumption: Cell<Option<CrossProcessInstant>>,
++
++    /// The visible part of this window's viewport, as reported by the document that
++    /// embeds it. This is only used when that document is in another event loop, and is
++    /// `None` until the first report arrives.
++    #[no_trace]
++    #[ignore_malloc_size_of = "Plain geometry"]
++    viewport_intersection: Cell<Option<ViewportIntersection>>,
++
+     /// A flag to indicate whether the developer tools has requested
+     /// live updates from the window.
+     devtools_wants_updates: Cell<bool>,
+@@ -3862,9 +3875,43 @@
+     }
+ 
+     pub(crate) fn consume_last_activation_timestamp(&self) {
+-        if self.last_activation_timestamp.get() != UserActivationTimestamp::PositiveInfinity {
+-            self.set_last_activation_timestamp(UserActivationTimestamp::NegativeInfinity);
+-        }
++        self.consume_activation_not_after(CrossProcessInstant::now());
++    }
++
++    /// Consume this window's activation if it started no later than `time`. A later
++    /// activation comes from newer input than the consumption, and remains.
++    pub(crate) fn consume_activation_not_after(&self, time: CrossProcessInstant) {
++        match self.last_activation_timestamp.get() {
++            UserActivationTimestamp::PositiveInfinity => return,
++            UserActivationTimestamp::TimeStamp(activation) if activation > time => return,
++            _ => {},
++        }
++        self.set_last_activation_timestamp(UserActivationTimestamp::NegativeInfinity);
++        if self
++            .last_activation_consumption
++            .get()
++            .is_none_or(|consumption| consumption < time)
++        {
++            self.last_activation_consumption.set(Some(time));
++        }
++    }
++
++    /// Step 5.1 of <https://html.spec.whatwg.org/multipage/#activation-notification> for a
++    /// window whose related document received the input event in another event loop.
++    pub(crate) fn notify_activation_at(&self, time: CrossProcessInstant) {
++        if self
++            .last_activation_consumption
++            .get()
++            .is_some_and(|consumption| consumption >= time)
++        {
++            return;
++        }
++        if let UserActivationTimestamp::TimeStamp(activation) = self.last_activation_timestamp.get() &&
++            activation >= time
++        {
++            return;
++        }
++        self.set_last_activation_timestamp(UserActivationTimestamp::TimeStamp(time));
+     }
+ 
+     /// <https://html.spec.whatwg.org/multipage/#consume-user-activation>
+@@ -3877,10 +3924,14 @@
+ 
+         // Step 2.
+         // > Let top be W's navigable's top-level traversable.
+-        // TODO: This wouldn't work if top level document is in another ScriptThread.
+-        let Some(top_level_document) = self.top_level_document_if_local() else {
+-            return;
+-        };
++        // The navigables of other event loops are consumed by their event loops below. Here,
++        // start at the top-level document if it is local, or at the highest local ancestor.
++        let document = self.Document();
++        let top_level_document = self.top_level_document_if_local().unwrap_or_else(|| {
++            SameoriginAncestorNavigablesIterator::new(document.clone())
++                .last()
++                .unwrap_or(document)
++        });
+ 
+         // Step 3.
+         // > Let navigables be the inclusive descendant navigables of top's active document.
+@@ -3888,13 +3939,26 @@
+         // > Let windows be the list of Window objects constructed by taking the active window of each item in navigables.
+         // Step 5.
+         // > For each window in windows, if window's last activation timestamp is not positive infinity, then set window's last activation timestamp to negative infinity.
+-        // TODO: this would not work for disimilar origin descendant, since we doesn't store the document in this script thread.
++        // The descendant iterator visits every local descendant, irrespective of origin.
++        let time = CrossProcessInstant::now();
+         top_level_document
+             .window()
+-            .consume_last_activation_timestamp();
++            .consume_activation_not_after(time);
+         for document in SameOriginDescendantNavigablesIterator::new(&top_level_document) {
+-            document.window().consume_last_activation_timestamp();
+-        }
++            document.window().consume_activation_not_after(time);
++        }
++        self.send_to_constellation(ScriptToConstellationMessage::ConsumeUserActivation(time));
++    }
++
++    /// The visible part of this window's viewport, as reported by its embedding document.
++    pub(crate) fn viewport_intersection(&self) -> Option<ViewportIntersection> {
++        self.viewport_intersection.get()
++    }
++
++    /// Store the visible part of this window's viewport reported by its embedding document.
++    /// Returns true if the value changed.
++    pub(crate) fn set_viewport_intersection(&self, intersection: ViewportIntersection) -> bool {
++        self.viewport_intersection.replace(Some(intersection)) != Some(intersection)
+     }
+ 
+     #[allow(clippy::too_many_arguments)]
+@@ -4025,6 +4089,8 @@
+             has_changed_visual_viewport_dimension: Default::default(),
+             pending_media_query_evaluation: Default::default(),
+             last_activation_timestamp: Cell::new(UserActivationTimestamp::PositiveInfinity),
++            last_activation_consumption: Default::default(),
++            viewport_intersection: Default::default(),
+             devtools_wants_updates: Default::default(),
+             has_dispatched_scroll_event: Cell::new(false),
+             has_dispatched_input_event: Cell::new(false),
 --- a/dom/workers/dedicatedworkerglobalscope.rs
 +++ b/dom/workers/dedicatedworkerglobalscope.rs
 @@ -934,7 +934,8 @@
@@ -392,7 +1397,108 @@
              );
 --- a/event_loop/script_thread.rs
 +++ b/event_loop/script_thread.rs
-@@ -3647,6 +3647,7 @@
+@@ -97,7 +97,8 @@
+     HistoryTraversalSource, LoadData, LoadOrigin, NavigationHistoryBehavior, PaintMetricEvent,
+     RemoteFocusOperation, ScreenshotReadinessResponse, ScriptToConstellationChan,
+     ScriptToConstellationMessage, ScrollStateUpdate, SessionHistoryTraversalRequest,
+-    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, WindowSizeType,
++    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, ViewportIntersection,
++    WindowSizeType,
+ };
+ use servo_url::{ImmutableOrigin, MutableOrigin, OriginSnapshot, ServoUrl};
+ use smallvec::SmallVec;
+@@ -1249,6 +1250,20 @@
+ 
+             // TODO: Process top layer removals according to
+             // https://drafts.csswg.org/css-position-4/#process-top-layer-removals.
++        }
++
++        // Unspecified, but necessary for nested documents in other event loops: once every
++        // document here has updated its layout, report the visible parts of the nested
++        // viewports, which may depend on the layout of several local ancestors.
++        if pref!(dom_intersection_observer_enabled) {
++            for pipeline_id in documents_in_order.iter() {
++                let Some(document) = self.documents.borrow().find_document(*pipeline_id) else {
++                    continue;
++                };
++                if document.is_fully_active() && !document.is_render_blocked() {
++                    document.update_nested_viewport_intersections(cx);
++                }
++            }
+         }
+ 
+         let should_generate_frame = !painters_generating_frames.is_empty();
+@@ -1772,6 +1787,17 @@
+             ScriptThreadMessage::SetThrottled(pipeline_id, throttled) => {
+                 self.handle_set_throttled_msg(pipeline_id, throttled)
+             },
++            ScriptThreadMessage::UpdateViewportIntersection(pipeline_id, intersection) => {
++                self.handle_update_viewport_intersection(pipeline_id, intersection)
++            },
++            ScriptThreadMessage::NotifyUserActivation(pipeline_id, time, origin) => {
++                self.handle_notify_user_activation(pipeline_id, time, origin)
++            },
++            ScriptThreadMessage::ConsumeUserActivation(pipeline_id, time) => {
++                if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
++                    window.consume_activation_not_after(time);
++                }
++            },
+             ScriptThreadMessage::PostMessage {
+                 target: target_pipeline_id,
+                 source_webview,
+@@ -2838,6 +2864,51 @@
+         warn!("SetThrottled sent to nonexistent pipeline");
+     }
+ 
++    /// Store the visible part of a document's viewport reported by its embedding document,
++    /// and update the document's intersection observations and nested viewports if it
++    /// changed. A report for a load in progress is applied when its `Window` is created.
++    fn handle_update_viewport_intersection(
++        &self,
++        pipeline_id: PipelineId,
++        intersection: ViewportIntersection,
++    ) {
++        if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
++            if window.set_viewport_intersection(intersection) {
++                window.Document().add_rendering_update_reason(
++                    RenderingUpdateReason::ViewportIntersectionChanged,
++                );
++            }
++            return;
++        }
++        if let Some(load) = self
++            .incomplete_loads
++            .borrow_mut()
++            .iter_mut()
++            .find(|load| load.pipeline_id == pipeline_id)
++        {
++            load.viewport_intersection = Some(intersection);
++        }
++    }
++
++    /// Apply a trusted activation notification from a related document in another event
++    /// loop. If an origin is given, only a document with that origin is activated.
++    fn handle_notify_user_activation(
++        &self,
++        pipeline_id: PipelineId,
++        time: CrossProcessInstant,
++        origin: Option<ImmutableOrigin>,
++    ) {
++        let Some(document) = self.documents.borrow().find_document(pipeline_id) else {
++            return;
++        };
++        if !document.is_fully_active() ||
++            origin.is_some_and(|origin| *document.origin().immutable() != origin)
++        {
++            return;
++        }
++        document.window().notify_activation_at(time);
++    }
++
+     /// Handles activity change message
+     fn handle_set_document_activity_msg(
+         &self,
+@@ -3647,6 +3718,7 @@
          // Step 8. Let loadTimingInfo be a new document load timing info with its
          //   navigation start time set to navigationParams's response's timing
          //   info's start time.
@@ -400,6 +1506,17 @@
          document.set_navigation_start(incomplete.navigation_start);
  
          let referrer_policy = metadata
+@@ -3816,6 +3888,10 @@
+             window.set_throttled(true);
+         }
+ 
++        if let Some(intersection) = incomplete.viewport_intersection {
++            window.set_viewport_intersection(intersection);
++        }
++
+         document
+     }
+ 
 --- a/fetch/fetch.rs
 +++ b/fetch/fetch.rs
 @@ -325,6 +325,7 @@
@@ -410,3 +1527,44 @@
      builder.id = request.id;
      builder.reload_navigation = request.reload_navigation;
      builder.history_navigation = request.history_navigation;
+--- a/messaging.rs
++++ b/messaging.rs
+@@ -74,6 +74,9 @@
+                 ScriptThreadMessage::GetDocumentOriginDetails(id, _) => Some(*id),
+                 ScriptThreadMessage::SetDocumentActivity(id, ..) => Some(*id),
+                 ScriptThreadMessage::SetThrottled(id, ..) => Some(*id),
++                ScriptThreadMessage::UpdateViewportIntersection(id, ..) => Some(*id),
++                ScriptThreadMessage::NotifyUserActivation(id, ..) => Some(*id),
++                ScriptThreadMessage::ConsumeUserActivation(id, ..) => Some(*id),
+                 ScriptThreadMessage::NavigateIframe(id, ..) => Some(*id),
+                 ScriptThreadMessage::PostMessage { target: id, .. } => Some(*id),
+                 ScriptThreadMessage::UpdatePipelineId(_, _, _, id, _) => Some(*id),
+--- a/navigation.rs
++++ b/navigation.rs
+@@ -31,7 +31,7 @@
+ use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
+ use servo_constellation_traits::{
+     LoadData, LoadOrigin, NavigationHistoryBehavior, ScriptToConstellationMessage,
+-    TargetSnapshotParams,
++    TargetSnapshotParams, ViewportIntersection,
+ };
+ use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
+ use url::Position;
+@@ -164,6 +164,9 @@
+     pub(crate) activity: DocumentActivity,
+     /// Window is throttled, running timers at a heavily limited rate.
+     pub(crate) throttled: bool,
++    /// The visible part of the viewport reported by the embedding document, if any.
++    #[no_trace]
++    pub(crate) viewport_intersection: Option<ViewportIntersection>,
+     /// Timestamp reporting the time when the browser started this load.
+     #[no_trace]
+     pub(crate) navigation_start: CrossProcessInstant,
+@@ -203,6 +206,7 @@
+             viewport_details: new_pipeline_info.viewport_details,
+             activity: DocumentActivity::FullyActive,
+             throttled: false,
++            viewport_intersection: None,
+             navigation_start: CrossProcessInstant::now(),
+             canceller: Default::default(),
+             load_data: new_pipeline_info.load_data,

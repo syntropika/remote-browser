@@ -97,7 +97,8 @@ use servo_constellation_traits::{
     HistoryTraversalSource, LoadData, LoadOrigin, NavigationHistoryBehavior, PaintMetricEvent,
     RemoteFocusOperation, ScreenshotReadinessResponse, ScriptToConstellationChan,
     ScriptToConstellationMessage, ScrollStateUpdate, SessionHistoryTraversalRequest,
-    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, WindowSizeType,
+    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, ViewportIntersection,
+    WindowSizeType,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, OriginSnapshot, ServoUrl};
 use smallvec::SmallVec;
@@ -1251,6 +1252,20 @@ impl ScriptThread {
             // https://drafts.csswg.org/css-position-4/#process-top-layer-removals.
         }
 
+        // Unspecified, but necessary for nested documents in other event loops: once every
+        // document here has updated its layout, report the visible parts of the nested
+        // viewports, which may depend on the layout of several local ancestors.
+        if pref!(dom_intersection_observer_enabled) {
+            for pipeline_id in documents_in_order.iter() {
+                let Some(document) = self.documents.borrow().find_document(*pipeline_id) else {
+                    continue;
+                };
+                if document.is_fully_active() && !document.is_render_blocked() {
+                    document.update_nested_viewport_intersections(cx);
+                }
+            }
+        }
+
         let should_generate_frame = !painters_generating_frames.is_empty();
         if should_generate_frame {
             self.paint_api
@@ -1771,6 +1786,17 @@ impl ScriptThread {
             },
             ScriptThreadMessage::SetThrottled(pipeline_id, throttled) => {
                 self.handle_set_throttled_msg(pipeline_id, throttled)
+            },
+            ScriptThreadMessage::UpdateViewportIntersection(pipeline_id, intersection) => {
+                self.handle_update_viewport_intersection(pipeline_id, intersection)
+            },
+            ScriptThreadMessage::NotifyUserActivation(pipeline_id, time, origin) => {
+                self.handle_notify_user_activation(pipeline_id, time, origin)
+            },
+            ScriptThreadMessage::ConsumeUserActivation(pipeline_id, time) => {
+                if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
+                    window.consume_activation_not_after(time);
+                }
             },
             ScriptThreadMessage::PostMessage {
                 target: target_pipeline_id,
@@ -2838,6 +2864,51 @@ impl ScriptThread {
         warn!("SetThrottled sent to nonexistent pipeline");
     }
 
+    /// Store the visible part of a document's viewport reported by its embedding document,
+    /// and update the document's intersection observations and nested viewports if it
+    /// changed. A report for a load in progress is applied when its `Window` is created.
+    fn handle_update_viewport_intersection(
+        &self,
+        pipeline_id: PipelineId,
+        intersection: ViewportIntersection,
+    ) {
+        if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
+            if window.set_viewport_intersection(intersection) {
+                window.Document().add_rendering_update_reason(
+                    RenderingUpdateReason::ViewportIntersectionChanged,
+                );
+            }
+            return;
+        }
+        if let Some(load) = self
+            .incomplete_loads
+            .borrow_mut()
+            .iter_mut()
+            .find(|load| load.pipeline_id == pipeline_id)
+        {
+            load.viewport_intersection = Some(intersection);
+        }
+    }
+
+    /// Apply a trusted activation notification from a related document in another event
+    /// loop. If an origin is given, only a document with that origin is activated.
+    fn handle_notify_user_activation(
+        &self,
+        pipeline_id: PipelineId,
+        time: CrossProcessInstant,
+        origin: Option<ImmutableOrigin>,
+    ) {
+        let Some(document) = self.documents.borrow().find_document(pipeline_id) else {
+            return;
+        };
+        if !document.is_fully_active() ||
+            origin.is_some_and(|origin| *document.origin().immutable() != origin)
+        {
+            return;
+        }
+        document.window().notify_activation_at(time);
+    }
+
     /// Handles activity change message
     fn handle_set_document_activity_msg(
         &self,
@@ -3815,6 +3886,10 @@ impl ScriptThread {
 
         if incomplete.throttled {
             window.set_throttled(true);
+        }
+
+        if let Some(intersection) = incomplete.viewport_intersection {
+            window.set_viewport_intersection(intersection);
         }
 
         document

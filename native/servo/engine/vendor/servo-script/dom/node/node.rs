@@ -1155,6 +1155,11 @@ impl Node {
             .box_area_query(self, BoxAreaType::Content, false)
     }
 
+    pub(crate) fn content_box_without_reflow(&self) -> Option<Rect<Au, CSSPixel>> {
+        self.owner_window()
+            .box_area_query_without_reflow(self, BoxAreaType::Content, false)
+    }
+
     pub(crate) fn border_box(&self) -> Option<Rect<Au, CSSPixel>> {
         self.owner_window()
             .box_area_query(self, BoxAreaType::Border, false)

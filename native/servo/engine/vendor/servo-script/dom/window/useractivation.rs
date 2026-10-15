@@ -9,6 +9,7 @@ use js::context::JSContext;
 use script_bindings::codegen::GenericBindings::UserActivationBinding::UserActivationMethods;
 use script_bindings::reflector::{Reflector, reflect_dom_object_with_cx};
 use servo_base::cross_process_instant::CrossProcessInstant;
+use servo_constellation_traits::ScriptToConstellationMessage;
 use time::Duration;
 
 use crate::dom::bindings::reflector::DomGlobal;
@@ -51,7 +52,8 @@ impl UserActivation {
 
         // Step 3.
         // > Extend windows with the active window of each of document's ancestor navigables.
-        // TODO: this would not work for disimilar origin ancestor, since we don't store the document in this script thread.
+        // This iterator stops at the first ancestor in another event loop. The constellation
+        // notifies the remaining ancestors below.
         for document in SameoriginAncestorNavigablesIterator::new(DomRoot::from_ref(document)) {
             windows.push(Dom::from_ref(document.window()));
         }
@@ -59,8 +61,11 @@ impl UserActivation {
         // Step 4.
         // > Extend windows with the active window of each of document's descendant navigables, filtered to include only
         // > those navigables whose active document's origin is same origin with document's origin.
-        for document in SameOriginDescendantNavigablesIterator::new(document) {
-            windows.push(Dom::from_ref(document.window()));
+        // The iterator visits every descendant in this event loop, irrespective of origin.
+        for descendant in SameOriginDescendantNavigablesIterator::new(document) {
+            if descendant.origin().same_origin(&document.origin()) {
+                windows.push(Dom::from_ref(descendant.window()));
+            }
         }
 
         // Step 5.
@@ -76,6 +81,17 @@ impl UserActivation {
             // Step 5.2.
             // > Notify the close watcher manager about user activation given window.
             // TODO: impl close watcher
+        }
+
+        // Ancestors and same-origin descendants in other event loops, or behind a document in
+        // another event loop, are notified through the constellation with the same timestamp.
+        if !owner_window.is_top_level() || document.iframes().iter().next().is_some() {
+            owner_window.send_to_constellation(
+                ScriptToConstellationMessage::UserActivationNotification(
+                    current_timestamp,
+                    document.origin().immutable().clone(),
+                ),
+            );
         }
     }
 }

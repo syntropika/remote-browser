@@ -302,6 +302,9 @@ python3 ../tests/worker_messages_smoke.py --engine-binary target/debug/remote-br
 python3 ../tests/pointer_events_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/pointer_screen_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/pointer_capture_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/user_activation_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/intersection_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/intersection_frames_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/failure_smoke.py --engine-binary target/debug/remote-browser-servo-engine
@@ -314,8 +317,18 @@ live captures during frame loading, independent tab references,
 background selection, concurrent actions, reservation enforcement, human takeover,
 profile isolation, HTTP-only credential metadata, cookies and local storage across
 restart, MCP negotiation, dashboard authorization, and persistent catalogs/policies.
-`unified_smoke.py --hold-ui` pauses for manual dashboard inspection. The optional
-external-backend smoke test is:
+`unified_smoke.py --hold-ui` pauses for manual dashboard inspection.
+
+Servo's IntersectionObserver is experimental and stays disabled by default. Setting
+`SERVO_EXPERIMENTAL_INTERSECTION_OBSERVER=1` in the engine environment enables it
+for reproducible testing; both intersection suites set it for their own engines and
+check that it is absent otherwise. They cover same-document roots and margins, and
+frames in the same or another script thread, including privacy rules, nested sites,
+hidden, navigated and replaced frames and scaled containers. The activation suite
+uses native clicks on ordinary buttons across same- and cross-origin frames. See
+[`engine/vendor/README.md`](engine/vendor/README.md) for the behavior and limits.
+
+The optional external-backend smoke test is:
 
 ```sh
 python3 native/servo/tests/smoke.py \

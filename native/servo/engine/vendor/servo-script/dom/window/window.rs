@@ -90,7 +90,7 @@ use servo_canvas_traits::webgl::WebGLChan;
 use servo_config::pref;
 use servo_constellation_traits::{
     LoadData, LoadOrigin, ScreenshotReadinessResponse, ScriptToConstellationMessage,
-    ScriptToConstellationSender, StructuredSerializedData, WindowSizeType,
+    ScriptToConstellationSender, StructuredSerializedData, ViewportIntersection, WindowSizeType,
 };
 use servo_geometry::DeviceIndependentIntRect;
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
@@ -155,6 +155,7 @@ use crate::dom::customelementregistry::CustomElementRegistry;
 use crate::dom::document::focus::FocusableArea;
 use crate::dom::document::{
     AnimationFrameCallback, Document, SameOriginDescendantNavigablesIterator,
+    SameoriginAncestorNavigablesIterator,
 };
 use crate::dom::element::Element;
 use crate::dom::event::{Event, EventBubbles, EventCancelable};
@@ -491,6 +492,18 @@ pub(crate) struct Window {
     /// <https://html.spec.whatwg.org/multipage/#last-activation-timestamp>
     #[no_trace]
     last_activation_timestamp: Cell<UserActivationTimestamp>,
+
+    /// The time at which the activation was last consumed. Notifications of activations
+    /// that are not newer, which can arrive late from other event loops, are ignored.
+    #[no_trace]
+    last_activation_consumption: Cell<Option<CrossProcessInstant>>,
+
+    /// The visible part of this window's viewport, as reported by the document that
+    /// embeds it. This is only used when that document is in another event loop, and is
+    /// `None` until the first report arrives.
+    #[no_trace]
+    #[ignore_malloc_size_of = "Plain geometry"]
+    viewport_intersection: Cell<Option<ViewportIntersection>>,
 
     /// A flag to indicate whether the developer tools has requested
     /// live updates from the window.
@@ -3862,9 +3875,43 @@ impl Window {
     }
 
     pub(crate) fn consume_last_activation_timestamp(&self) {
-        if self.last_activation_timestamp.get() != UserActivationTimestamp::PositiveInfinity {
-            self.set_last_activation_timestamp(UserActivationTimestamp::NegativeInfinity);
+        self.consume_activation_not_after(CrossProcessInstant::now());
+    }
+
+    /// Consume this window's activation if it started no later than `time`. A later
+    /// activation comes from newer input than the consumption, and remains.
+    pub(crate) fn consume_activation_not_after(&self, time: CrossProcessInstant) {
+        match self.last_activation_timestamp.get() {
+            UserActivationTimestamp::PositiveInfinity => return,
+            UserActivationTimestamp::TimeStamp(activation) if activation > time => return,
+            _ => {},
         }
+        self.set_last_activation_timestamp(UserActivationTimestamp::NegativeInfinity);
+        if self
+            .last_activation_consumption
+            .get()
+            .is_none_or(|consumption| consumption < time)
+        {
+            self.last_activation_consumption.set(Some(time));
+        }
+    }
+
+    /// Step 5.1 of <https://html.spec.whatwg.org/multipage/#activation-notification> for a
+    /// window whose related document received the input event in another event loop.
+    pub(crate) fn notify_activation_at(&self, time: CrossProcessInstant) {
+        if self
+            .last_activation_consumption
+            .get()
+            .is_some_and(|consumption| consumption >= time)
+        {
+            return;
+        }
+        if let UserActivationTimestamp::TimeStamp(activation) = self.last_activation_timestamp.get() &&
+            activation >= time
+        {
+            return;
+        }
+        self.set_last_activation_timestamp(UserActivationTimestamp::TimeStamp(time));
     }
 
     /// <https://html.spec.whatwg.org/multipage/#consume-user-activation>
@@ -3877,10 +3924,14 @@ impl Window {
 
         // Step 2.
         // > Let top be W's navigable's top-level traversable.
-        // TODO: This wouldn't work if top level document is in another ScriptThread.
-        let Some(top_level_document) = self.top_level_document_if_local() else {
-            return;
-        };
+        // The navigables of other event loops are consumed by their event loops below. Here,
+        // start at the top-level document if it is local, or at the highest local ancestor.
+        let document = self.Document();
+        let top_level_document = self.top_level_document_if_local().unwrap_or_else(|| {
+            SameoriginAncestorNavigablesIterator::new(document.clone())
+                .last()
+                .unwrap_or(document)
+        });
 
         // Step 3.
         // > Let navigables be the inclusive descendant navigables of top's active document.
@@ -3888,13 +3939,26 @@ impl Window {
         // > Let windows be the list of Window objects constructed by taking the active window of each item in navigables.
         // Step 5.
         // > For each window in windows, if window's last activation timestamp is not positive infinity, then set window's last activation timestamp to negative infinity.
-        // TODO: this would not work for disimilar origin descendant, since we doesn't store the document in this script thread.
+        // The descendant iterator visits every local descendant, irrespective of origin.
+        let time = CrossProcessInstant::now();
         top_level_document
             .window()
-            .consume_last_activation_timestamp();
+            .consume_activation_not_after(time);
         for document in SameOriginDescendantNavigablesIterator::new(&top_level_document) {
-            document.window().consume_last_activation_timestamp();
+            document.window().consume_activation_not_after(time);
         }
+        self.send_to_constellation(ScriptToConstellationMessage::ConsumeUserActivation(time));
+    }
+
+    /// The visible part of this window's viewport, as reported by its embedding document.
+    pub(crate) fn viewport_intersection(&self) -> Option<ViewportIntersection> {
+        self.viewport_intersection.get()
+    }
+
+    /// Store the visible part of this window's viewport reported by its embedding document.
+    /// Returns true if the value changed.
+    pub(crate) fn set_viewport_intersection(&self, intersection: ViewportIntersection) -> bool {
+        self.viewport_intersection.replace(Some(intersection)) != Some(intersection)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4025,6 +4089,8 @@ impl Window {
             has_changed_visual_viewport_dimension: Default::default(),
             pending_media_query_evaluation: Default::default(),
             last_activation_timestamp: Cell::new(UserActivationTimestamp::PositiveInfinity),
+            last_activation_consumption: Default::default(),
+            viewport_intersection: Default::default(),
             devtools_wants_updates: Default::default(),
             has_dispatched_scroll_event: Cell::new(false),
             has_dispatched_input_event: Cell::new(false),

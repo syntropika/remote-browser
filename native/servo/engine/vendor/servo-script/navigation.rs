@@ -31,7 +31,7 @@ use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_constellation_traits::{
     LoadData, LoadOrigin, NavigationHistoryBehavior, ScriptToConstellationMessage,
-    TargetSnapshotParams,
+    TargetSnapshotParams, ViewportIntersection,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
 use url::Position;
@@ -164,6 +164,9 @@ pub(crate) struct InProgressLoad {
     pub(crate) activity: DocumentActivity,
     /// Window is throttled, running timers at a heavily limited rate.
     pub(crate) throttled: bool,
+    /// The visible part of the viewport reported by the embedding document, if any.
+    #[no_trace]
+    pub(crate) viewport_intersection: Option<ViewportIntersection>,
     /// Timestamp reporting the time when the browser started this load.
     #[no_trace]
     pub(crate) navigation_start: CrossProcessInstant,
@@ -203,6 +206,7 @@ impl InProgressLoad {
             viewport_details: new_pipeline_info.viewport_details,
             activity: DocumentActivity::FullyActive,
             throttled: false,
+            viewport_intersection: None,
             navigation_start: CrossProcessInstant::now(),
             canceller: Default::default(),
             load_data: new_pipeline_info.load_data,

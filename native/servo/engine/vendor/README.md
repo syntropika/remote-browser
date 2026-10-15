@@ -63,6 +63,72 @@ The `pointer_capture_smoke.py` regression checks implicit release, explicit rele
 inside `pointerup`, and the uncaptured control case. This follows the
 [Pointer Events click target algorithm](https://www.w3.org/TR/pointerevents3/#event-dispatch).
 
+## Cross-origin frame visibility and user activation
+
+Servo runs documents of different sites in different script threads, so a frame
+cannot read its embedder's layout or windows directly. This delta additionally
+vendors the published Servo 0.7.0 `servo-constellation`, `servo-constellation-traits`
+and `servo-script-traits` crates, excluding registry metadata and lockfiles. MPL-2.0
+headers are retained and the license file is included. The narrow deltas are
+recorded in [`servo-constellation.patch`](servo-constellation.patch),
+[`servo-constellation-traits.patch`](servo-constellation-traits.patch),
+[`servo-script-traits.patch`](servo-script-traits.patch) and
+[`servo-script.patch`](servo-script.patch).
+
+Asynchronous messages through the constellation carry three kinds of information:
+
+- **Visible frame area.** After each rendering update, a document computes the visible
+  part of each `<iframe>` content box. That part is clipped by the document's
+  overflow clips and viewports, and then by its ancestors: directly when they are in
+  the same thread, or through their own report when they are not. It is sent as
+  fractions of the nested viewport. The constellation accepts a value only from the
+  frame's parent pipeline, including for a frame whose first document is still loading.
+  It forwards the value to every pipeline of that browsing context and replays it to
+  documents created later by navigation. The value is dropped when the browsing context
+  closes, so a replaced `<iframe>` never inherits the old geometry. Nothing is sent
+  while an ancestor's area is unknown, and observations that depend on it wait instead
+  of reporting a guess.
+- **User activation.** A trusted activation-triggering input event still updates the
+  windows reachable in its thread, and only same-origin descendants are activated.
+  It then notifies the constellation with the event time. The constellation forwards
+  that time to every ancestor, and to descendants that have the sender's origin. It
+  ignores inactive senders and clamps the time to the present.
+- **Activation consumption.** Consumption is forwarded to every fully active document
+  of the top-level traversable with its time. A late activation notice cannot restore
+  a consumed activation, and a consumption cannot remove a newer activation.
+
+The IntersectionObserver changes follow the
+[specification](https://w3c.github.io/IntersectionObserver/):
+
+- `rootBounds` is `null` and `rootMargin` and `scrollMargin` are ignored for targets that are not
+  same-origin-domain with the implicit root, including cross-origin frames in the same
+  thread.
+- Frame offsets use the container's content box, and scaled containers map rectangles
+  into frame coordinates.
+- A `delay` skips only the affected target.
+- A frame whose container is not rendered reports a non-intersecting entry. For a
+  same-thread frame, this previously panicked the script thread.
+
+The observer remains disabled unless the engine runs with
+`SERVO_EXPERIMENTAL_INTERSECTION_OBSERVER=1`; frame reports are only computed then.
+User activation propagation is always enabled.
+
+Known limits:
+
+- Layout reports bounding boxes of transformed containers, so rotation and skew are
+  approximated by those boxes.
+- `clip-path` and per-axis `overflow: clip` remain upstream TODOs.
+- Root margins cannot extend clipping performed in another thread. A same-origin-domain
+  target below a cross-origin ancestor, such as A inside B inside A, reports the
+  expanded `rootBounds`, but its intersection uses the ancestor's unexpanded report.
+- The constellation trusts the script thread's trusted-input decision, as it does for
+  other script messages in Servo 0.7.0. It does not cross-check its own input routing.
+
+The `intersection_frames_smoke.py`, `intersection_smoke.py` and
+`user_activation_smoke.py` regressions use loopback addresses, `localhost` and
+separate ports, so that frames run both in other threads and as cross-origin documents
+in the same thread.
+
 ## Experimental Private State Tokens
 
 The opt-in native PST integration additionally vendors the unmodified published

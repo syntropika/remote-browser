@@ -23,7 +23,7 @@ use script_traits::{NewPipelineInfo, UpdatePipelineIdReason};
 use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_constellation_traits::{
     IFrameLoadInfo, IFrameLoadInfoWithData, LoadData, LoadOrigin, NavigationHistoryBehavior,
-    ScriptToConstellationMessage, TargetSnapshotParams,
+    ScriptToConstellationMessage, TargetSnapshotParams, ViewportIntersection,
 };
 use servo_url::ServoUrl;
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
@@ -114,9 +114,25 @@ pub(crate) struct HTMLIFrameElement {
     /// on the initial creation of the iframe contents. If the iframe
     /// itself changes the `window.name`, that takes precedence.
     frozen_name: DomRefCell<Option<String>>,
+    /// The visible area of the nested viewport last reported to the constellation, and
+    /// the browsing context it was reported for.
+    #[no_trace]
+    #[ignore_malloc_size_of = "Plain geometry"]
+    reported_viewport_intersection: Cell<Option<(BrowsingContextId, ViewportIntersection)>>,
 }
 
 impl HTMLIFrameElement {
+    /// Record the visible area of the nested viewport that is about to be reported for
+    /// `browsing_context_id`. Returns false if that value was already reported.
+    pub(crate) fn replace_reported_viewport_intersection(
+        &self,
+        browsing_context_id: BrowsingContextId,
+        intersection: ViewportIntersection,
+    ) -> bool {
+        let report = Some((browsing_context_id, intersection));
+        self.reported_viewport_intersection.replace(report) != report
+    }
+
     /// <https://html.spec.whatwg.org/multipage/#shared-attribute-processing-steps-for-iframe-and-frame-elements>,
     fn shared_attribute_processing_steps_for_iframe_and_frame_elements(
         &self,
@@ -677,6 +693,7 @@ impl HTMLIFrameElement {
             lazy_load_resumption_steps: Default::default(),
             pending_navigation: Default::default(),
             frozen_name: Default::default(),
+            reported_viewport_intersection: Default::default(),
         }
     }
 

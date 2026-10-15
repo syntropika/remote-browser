@@ -1,0 +1,249 @@
+--- a/constellation.rs
++++ b/constellation.rs
+@@ -140,6 +140,7 @@
+     NewPipelineInfo, ScriptThreadMessage, UpdatePipelineIdReason,
+ };
+ use servo_background_hang_monitor::HangMonitorRegister;
++use servo_base::cross_process_instant::CrossProcessInstant;
+ use servo_base::generic_channel;
+ use servo_base::generic_channel::{
+     GenericCallback, GenericSend, GenericSender, RoutedReceiver, SendError,
+@@ -165,7 +166,8 @@
+     ScreenshotReadinessResponse, ScriptToConstellationMessage, ScrollStateUpdate,
+     ServiceWorkerAlgorithm, ServiceWorkerManagerFactory, ServiceWorkerMsg,
+     SessionHistoryTraversalRequest, StructuredSerializedData, TargetSnapshotParams,
+-    TraversalDirection, UserContentManagerAction, WindowSizeType, WorkerAnimationFrameTick,
++    TraversalDirection, UserContentManagerAction, ViewportIntersection, WindowSizeType,
++    WorkerAnimationFrameTick,
+ };
+ use servo_url::{Host, ImmutableOrigin, ServoUrl};
+ use storage_traits::StorageThreads;
+@@ -421,6 +423,11 @@
+ 
+     /// The set of all the browsing contexts in the browser.
+     browsing_contexts: FxHashMap<BrowsingContextId, BrowsingContext>,
++
++    /// The last visible area of each nested browsing context's viewport reported by
++    /// its parent pipeline. It is replayed to pipelines that are created later for the
++    /// same browsing context, such as after a navigation of the nested document.
++    viewport_intersections: FxHashMap<BrowsingContextId, ViewportIntersection>,
+ 
+     /// A user agent holds a a set of browsing context groups.
+     ///
+@@ -698,6 +705,7 @@
+                     pipelines: Default::default(),
+                     worker_animation_frame_providers: Default::default(),
+                     browsing_contexts: Default::default(),
++                    viewport_intersections: Default::default(),
+                     next_pipeline_namespace_id: Cell::new(FIRST_CONTENT_PIPELINE_NAMESPACE_ID),
+                     time_profiler_chan: state.time_profiler_chan,
+                     mem_profiler_chan: state.mem_profiler_chan.clone(),
+@@ -1057,6 +1065,17 @@
+             Err(error) => return self.handle_send_error(new_pipeline_id, error),
+         };
+ 
++        // A new document in an existing nested browsing context starts with the visible
++        // area last reported by its parent, which need not change for this navigation.
++        if let Some(intersection) = self.viewport_intersections.get(&browsing_context_id) {
++            let _ = pipeline
++                .event_loop
++                .send(ScriptThreadMessage::UpdateViewportIntersection(
++                    new_pipeline_id,
++                    *intersection,
++                ));
++        }
++
+         assert!(!self.pipelines.contains_key(&new_pipeline_id));
+         self.pipelines.insert(new_pipeline_id, pipeline);
+     }
+@@ -2018,6 +2037,18 @@
+             },
+             ScriptToConstellationMessage::IFrameSizes(iframe_sizes) => {
+                 self.handle_iframe_size_msg(webview_id, iframe_sizes)
++            },
++            ScriptToConstellationMessage::UpdateViewportIntersections(intersections) => self
++                .handle_update_viewport_intersections(
++                    webview_id,
++                    source_pipeline_id,
++                    intersections,
++                ),
++            ScriptToConstellationMessage::UserActivationNotification(time, origin) => {
++                self.handle_user_activation_notification(source_pipeline_id, time, origin)
++            },
++            ScriptToConstellationMessage::ConsumeUserActivation(time) => {
++                self.handle_consume_user_activation(webview_id, source_pipeline_id, time)
+             },
+             ScriptToConstellationMessage::ReportMemory(sender) => {
+                 // get memory report and send it back.
+@@ -3464,6 +3495,130 @@
+         } in iframe_sizes
+         {
+             self.resize_browsing_context(webview_id, size, type_, browsing_context_id);
++        }
++    }
++
++    /// Forward the visible parts of nested viewports reported by the document that
++    /// contains their `<iframe>`s. A value is only accepted from the parent pipeline of
++    /// the nested browsing context, including one whose first document is still loading.
++    /// It reaches every pipeline of that browsing context and is replayed to pipelines
++    /// that are created for it later.
++    #[servo_tracing::instrument(skip_all)]
++    fn handle_update_viewport_intersections(
++        &mut self,
++        webview_id: WebViewId,
++        source_pipeline_id: PipelineId,
++        intersections: Vec<(BrowsingContextId, ViewportIntersection)>,
++    ) {
++        let Some(webview) = self.webviews.get(&webview_id) else {
++            return warn!("{source_pipeline_id}: Viewport intersections for unknown WebView");
++        };
++        for (browsing_context_id, intersection) in intersections {
++            let browsing_context = self.browsing_contexts.get(&browsing_context_id);
++            let pending_changes = webview
++                .pending_changes
++                .iter()
++                .filter(|change| change.browsing_context_id == browsing_context_id);
++            let parent_pipeline_id = match browsing_context {
++                Some(browsing_context) => browsing_context.parent_pipeline_id,
++                None => pending_changes
++                    .clone()
++                    .find_map(|change| change.new_browsing_context_info.as_ref())
++                    .and_then(|info| info.parent_pipeline_id),
++            };
++            if parent_pipeline_id != Some(source_pipeline_id) {
++                warn!(
++                    "{source_pipeline_id}: Ignoring viewport intersection for \
++                    {browsing_context_id}, which it does not contain"
++                );
++                continue;
++            }
++
++            self.viewport_intersections
++                .insert(browsing_context_id, intersection);
++            let pipeline_ids = browsing_context
++                .into_iter()
++                .flat_map(|browsing_context| browsing_context.pipelines.iter().copied())
++                .chain(pending_changes.map(|change| change.new_pipeline_id));
++            for pipeline_id in pipeline_ids {
++                let message =
++                    ScriptThreadMessage::UpdateViewportIntersection(pipeline_id, intersection);
++                if let Some(pipeline) = self.pipelines.get(&pipeline_id) {
++                    let _ = pipeline.event_loop.send(message);
++                }
++            }
++        }
++    }
++
++    /// <https://html.spec.whatwg.org/multipage/#activation-notification>
++    ///
++    /// Notify the ancestors of a fully active document that received a trusted
++    /// activation-triggering input event, and its descendants with the same origin.
++    /// The sending event loop has already updated the documents it can reach locally,
++    /// for which these notifications have no further effect.
++    #[servo_tracing::instrument(skip_all)]
++    fn handle_user_activation_notification(
++        &mut self,
++        source_pipeline_id: PipelineId,
++        time: CrossProcessInstant,
++        origin: ImmutableOrigin,
++    ) {
++        if self.get_activity(source_pipeline_id) != DocumentActivity::FullyActive {
++            return debug!("{source_pipeline_id}: Ignoring activation of an inactive document");
++        }
++        let Some(source) = self.pipelines.get(&source_pipeline_id) else {
++            return;
++        };
++        // An activation cannot start after the notification of its input event.
++        let time = time.min(CrossProcessInstant::now());
++        let browsing_context_id = source.browsing_context_id;
++
++        let ancestors = self
++            .ancestor_pipelines_of_browsing_context_iter(browsing_context_id)
++            .map(|pipeline| (pipeline.id, None));
++        // The originating script thread supplies the document's actual origin, which
++        // can differ from the URL origin for inherited or opaque-origin documents.
++        // Each receiving script thread checks its own document against this origin.
++        let descendants = self
++            .fully_active_descendant_browsing_contexts_iter(browsing_context_id)
++            .filter(move |browsing_context| browsing_context.id != browsing_context_id)
++            .map(move |browsing_context| (browsing_context.pipeline_id, Some(origin.clone())));
++        for (pipeline_id, origin) in ancestors.chain(descendants) {
++            let message = ScriptThreadMessage::NotifyUserActivation(pipeline_id, time, origin);
++            if let Some(pipeline) = self.pipelines.get(&pipeline_id) {
++                let _ = pipeline.event_loop.send(message);
++            }
++        }
++    }
++
++    /// <https://html.spec.whatwg.org/multipage/#consume-user-activation>
++    ///
++    /// Consume the activation of every fully active document in the sender's top-level
++    /// traversable. The sender has already consumed the activation it can reach locally.
++    #[servo_tracing::instrument(skip_all)]
++    fn handle_consume_user_activation(
++        &mut self,
++        webview_id: WebViewId,
++        source_pipeline_id: PipelineId,
++        time: CrossProcessInstant,
++    ) {
++        if self.get_activity(source_pipeline_id) != DocumentActivity::FullyActive ||
++            self.pipelines
++                .get(&source_pipeline_id)
++                .is_none_or(|pipeline| pipeline.webview_id != webview_id)
++        {
++            return debug!("{source_pipeline_id}: Ignoring activation consumption");
++        }
++        let time = time.min(CrossProcessInstant::now());
++        for browsing_context in self.fully_active_browsing_contexts_iter(webview_id) {
++            let pipeline_id = browsing_context.pipeline_id;
++            if pipeline_id == source_pipeline_id {
++                continue;
++            }
++            let message = ScriptThreadMessage::ConsumeUserActivation(pipeline_id, time);
++            if let Some(pipeline) = self.pipelines.get(&pipeline_id) {
++                let _ = pipeline.event_loop.send(message);
++            }
+         }
+     }
+ 
+@@ -5954,6 +6109,7 @@
+         exit_mode: ExitPipelineMode,
+     ) -> Option<BrowsingContext> {
+         debug!("{}: Closing", browsing_context_id);
++        self.viewport_intersections.remove(&browsing_context_id);
+ 
+         self.close_browsing_context_children(
+             webview_id,
+@@ -6105,6 +6261,20 @@
+ 
+         if let Some(browsing_context) = self.browsing_contexts.get_mut(&browsing_context_id) {
+             browsing_context.pipelines.remove(&pipeline_id);
++        }
++
++        // A nested context whose first document is pending is not yet in the parent's
++        // children list. Discard its cached geometry when that parent closes as well.
++        if let Some(webview) = self.webviews.get(&webview_id) {
++            for change in &webview.pending_changes {
++                if change
++                    .new_browsing_context_info
++                    .as_ref()
++                    .is_some_and(|info| info.parent_pipeline_id == Some(pipeline_id))
++                {
++                    self.viewport_intersections.remove(&change.browsing_context_id);
++                }
++            }
+         }
+ 
+         // Store information about the browsing contexts to be closed. Then close the
+--- a/tracing.rs
++++ b/tracing.rs
+@@ -195,6 +195,9 @@
+                 Self::GetWebGPUChan(..) => target!("GetWebGPUChan"),
+                 Self::TitleChanged(..) => target!("TitleChanged"),
+                 Self::IFrameSizes(..) => target!("IFrameSizes"),
++                Self::UpdateViewportIntersections(..) => target!("UpdateViewportIntersections"),
++                Self::UserActivationNotification(..) => target!("UserActivationNotification"),
++                Self::ConsumeUserActivation(..) => target!("ConsumeUserActivation"),
+                 Self::ReportMemory(..) => target!("ReportMemory"),
+                 Self::FinishJavaScriptEvaluation(..) => target!("FinishJavaScriptEvaluation"),
+                 Self::ForwardKeyboardScroll(..) => target!("ForwardKeyboardScroll"),

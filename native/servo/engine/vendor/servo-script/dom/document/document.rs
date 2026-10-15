@@ -371,6 +371,9 @@ bitflags! {
         /// one more rendering update possibility after this happens, so that any potential screenshot
         /// reflects the up-to-date contents.
         const FontReadyPromiseFulfilled = 1 << 2;
+        /// The embedding document in another event loop reported a new visible area of this
+        /// document's viewport, which affects intersection observations and nested viewports.
+        const ViewportIntersectionChanged = 1 << 3;
     }
 }
 
@@ -3585,12 +3588,42 @@ impl Document {
     ) {
         // Step 1
         // > Let rootBounds be observer’s root intersection rectangle.
-        let root_bounds = intersection_observer.root_intersection_rectangle();
+        // The root intersection rectangle depends on whether each target is same-origin-domain
+        // with the root, so it is computed per target.
 
         // Step 2
         // > For each target in observer’s internal [[ObservationTargets]] slot,
         // > processed in the same order that observe() was called on each target:
-        intersection_observer.update_intersection_observations_steps(cx, self, time, root_bounds);
+        intersection_observer.update_intersection_observations_steps(cx, self, time);
+    }
+
+    /// Report the visible part of each nested viewport whose `<iframe>` is in this document
+    /// to the constellation, which forwards it to the nested document, possibly in another
+    /// event loop. Only values that changed since the last report are sent, and nothing is
+    /// sent while an ancestor's own visible area is still unknown.
+    pub(crate) fn update_nested_viewport_intersections(&self, cx: &mut JSContext) {
+        let iframes: Vec<_> = self.iframes.iter().collect();
+        if iframes.is_empty() {
+            return;
+        }
+        self.window()
+            .reflow_for_non_flushing_update_the_rendering_queries(cx);
+
+        let intersections: Vec<_> = iframes
+            .iter()
+            .filter_map(|iframe| {
+                let browsing_context_id = iframe.browsing_context_id()?;
+                let intersection = IntersectionObserver::nested_viewport_intersection(iframe)?;
+                iframe
+                    .replace_reported_viewport_intersection(browsing_context_id, intersection)
+                    .then_some((browsing_context_id, intersection))
+            })
+            .collect();
+        if !intersections.is_empty() {
+            self.window().send_to_constellation(
+                ScriptToConstellationMessage::UpdateViewportIntersections(intersections),
+            );
+        }
     }
 
     /// <https://w3c.github.io/IntersectionObserver/#notify-intersection-observers-algo>
