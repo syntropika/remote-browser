@@ -4,10 +4,17 @@ import { uiFailure } from "./api.js";
 import type { ApiKeyMetadata, UiOptions } from "./contracts.js";
 import { element as domElement } from "./dom.js";
 
-export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
+export function createApiKeys({
+  api,
+  onOpen,
+  onUnauthorized,
+  keyProfiles,
+  workspace: suppliedWorkspace,
+  backgroundSelector = ".toolbar, .browser-shell, .bottom-stack, .tabs-panel, .notice, .session-footer, .recording-indicator",
+}: UiOptions & { workspace?: HTMLElement; backgroundSelector?: string }) {
   const byId = domElement;
   const panel = byId("api-keys-panel");
-  const workspace = byId("workspace");
+  const workspace = suppliedWorkspace || byId("workspace");
   const form = byId("api-key-form");
   const nameInput = byId("api-key-name");
   const createButton = byId("api-key-create");
@@ -24,6 +31,39 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
   let createdId: string | null = null;
   let keys: ApiKeyMetadata[] = [];
 
+  function profilePicker(ids: string[] | null = null) {
+    const fieldset = document.createElement("fieldset");
+    fieldset.className = "key-profile-permissions";
+    const legend = document.createElement("legend");
+    legend.textContent = "Profile access";
+    const label = document.createElement("label");
+    const all = document.createElement("input");
+    all.type = "checkbox";
+    all.checked = ids === null;
+    label.append(all, " All profiles, including future profiles");
+    const select = document.createElement("select");
+    select.multiple = true;
+    select.size = 3;
+    select.setAttribute("aria-label", "Allowed profiles");
+    for (const profile of keyProfiles?.() || []) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.name;
+      option.selected = ids?.includes(profile.id) || false;
+      select.append(option);
+    }
+    select.hidden = all.checked;
+    all.addEventListener("change", () => {
+      select.hidden = all.checked;
+    });
+    fieldset.append(legend, label, select);
+    return {
+      element: fieldset,
+      value: () =>
+        all.checked ? null : Array.from(select.selectedOptions, (option) => option.value),
+    };
+  }
+  let creationScope: ReturnType<typeof profilePicker> | undefined;
   function message(element: HTMLElement, value = "") {
     element.textContent = value;
     element.hidden = !value;
@@ -57,9 +97,7 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
 
   // Keep the display's geometry intact while removing browser controls from focus.
   function setBackgroundInactive(value: boolean) {
-    for (const element of workspace.querySelectorAll<HTMLElement>(
-      ".toolbar, .browser-shell, .bottom-stack, .tabs-panel, .notice, .session-footer, .recording-indicator",
-    )) {
+    for (const element of workspace.querySelectorAll<HTMLElement>(backgroundSelector)) {
       element.inert = value;
     }
   }
@@ -70,6 +108,8 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     delete workspace.dataset.settings;
     setBackgroundInactive(false);
     clearSecret();
+    creationScope?.element.remove();
+    creationScope = undefined;
     nameInput.value = "";
     nameInput.setCustomValidity("");
     keys = [];
@@ -103,53 +143,101 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     byId("api-keys-count").textContent = String(keys.length);
     byId("api-keys-empty").hidden = keys.length !== 0;
     for (const key of keys) {
-      const row = document.createElement("li");
-      row.className = "api-key-row";
-      row.dataset.keyId = key.id;
-      const info = document.createElement("div");
-      info.className = "api-key-info";
-      const name = document.createElement("h3");
-      name.textContent = key.name;
-      const prefix = document.createElement("code");
-      prefix.textContent = `${key.prefix}…`;
-      const meta = document.createElement("p");
-      meta.className = "api-key-meta";
-      const added = document.createElement("span");
-      added.textContent = `Created ${dateLabel(key.createdAt)}`;
-      const used = document.createElement("span");
-      used.textContent = `Last used: ${key.lastUsedAt ? dateLabel(key.lastUsedAt) : "Never"}`;
-      meta.append(added, used);
-      info.append(name, prefix, meta);
-      const actions = document.createElement("div");
-      actions.className = "api-key-actions";
-      const confirmation = document.createElement("div");
-      confirmation.className = "key-revoke-confirm";
-      confirmation.hidden = true;
-      const prompt = document.createElement("p");
-      prompt.textContent = `Revoke “${key.name}”? This client will lose access.`;
-      const confirmActions = document.createElement("div");
-      const cancel = makeButton("Cancel", "button-secondary", () => {
-        confirmation.hidden = true;
-        revokeButton.hidden = false;
-        revokeButton.focus();
-      });
-      const confirm = makeButton(
-        "Revoke key",
-        "button-destructive button-secondary",
-        asyncHandler(() => revoke(key)),
-      );
-      confirmActions.append(cancel, confirm);
-      confirmation.append(prompt, confirmActions);
-      const revokeButton = makeButton("Revoke", "button-quiet button-destructive", () => {
-        confirmation.hidden = false;
-        revokeButton.hidden = true;
-        cancel.focus();
-      });
-      revokeButton.setAttribute("aria-label", `Revoke ${key.name}`);
-      actions.append(revokeButton);
-      row.append(info, actions, confirmation);
-      list.append(row);
+      renderKey(key);
     }
+  }
+  function renderKey(key: ApiKeyMetadata) {
+    const row = document.createElement("li");
+    row.className = "api-key-row";
+    row.dataset.keyId = key.id;
+    const info = document.createElement("div");
+    info.className = "api-key-info";
+    const name = document.createElement("h3");
+    name.textContent = key.name;
+    const prefix = document.createElement("code");
+    prefix.textContent = `${key.prefix}…`;
+    const meta = document.createElement("p");
+    meta.className = "api-key-meta";
+    const added = document.createElement("span");
+    added.textContent = `Created ${dateLabel(key.createdAt)}`;
+    const used = document.createElement("span");
+    used.textContent = `Last used: ${key.lastUsedAt ? dateLabel(key.lastUsedAt) : "Never"}`;
+    meta.append(added, used);
+    if (keyProfiles) {
+      const access = document.createElement("span");
+      access.textContent = key.profileIds
+        ? `Profiles: ${key.profileIds.map((id) => keyProfiles().find((profile) => profile.id === id)?.name || id).join(", ")}`
+        : "All profiles";
+      meta.append(access);
+    }
+    info.append(name, prefix, meta);
+    const actions = document.createElement("div");
+    actions.className = "api-key-actions";
+    const confirmation = document.createElement("div");
+    confirmation.className = "key-revoke-confirm";
+    confirmation.hidden = true;
+    const prompt = document.createElement("p");
+    prompt.textContent = `Revoke “${key.name}”? This client will lose access.`;
+    const confirmActions = document.createElement("div");
+    const cancel = makeButton("Cancel", "button-secondary", () => {
+      confirmation.hidden = true;
+      revokeButton.hidden = false;
+      revokeButton.focus();
+    });
+    const confirm = makeButton(
+      "Revoke key",
+      "button-destructive button-secondary",
+      asyncHandler(() => revoke(key)),
+    );
+    confirmActions.append(cancel, confirm);
+    confirmation.append(prompt, confirmActions);
+    const revokeButton = makeButton("Revoke", "button-quiet button-destructive", () => {
+      confirmation.hidden = false;
+      revokeButton.hidden = true;
+      cancel.focus();
+    });
+    revokeButton.setAttribute("aria-label", `Revoke ${key.name}`);
+    actions.append(revokeButton);
+    row.append(info, actions, confirmation);
+    if (keyProfiles) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Edit profile access";
+      const picker = profilePicker(key.profileIds || null);
+      const save = makeButton(
+        "Save access",
+        "button-secondary",
+        asyncHandler(async () => {
+          const profileIds = picker.value();
+          if (profileIds?.length === 0) {
+            message(errorText, "Select at least one profile.");
+            return;
+          }
+          const current = generation;
+          setBusy(true);
+          try {
+            await api("/api/keys/permissions", { id: key.id, profileIds });
+            if (current !== generation) {
+              return;
+            }
+            key.profileIds = profileIds;
+            renderKeys();
+            message(feedback, `Profile access updated for “${key.name}”.`);
+          } catch (cause) {
+            if (current === generation) {
+              handleError(cause, "Could not update profile access.");
+            }
+          } finally {
+            if (current === generation) {
+              setBusy(false);
+            }
+          }
+        }),
+      );
+      details.append(summary, picker.element, save);
+      row.append(details);
+    }
+    list.append(row);
   }
 
   async function refresh() {
@@ -160,6 +248,10 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
     setBusy(true);
     message(errorText);
     byId("api-keys-loading").hidden = false;
+    if (keyProfiles && !creationScope) {
+      creationScope = profilePicker();
+      form.append(creationScope.element);
+    }
     try {
       const response = await api("/api/keys");
       if (current !== generation) {
@@ -232,7 +324,12 @@ export function createApiKeys({ api, onOpen, onUnauthorized }: UiOptions) {
       message(errorText);
       message(feedback);
       try {
-        const result = await api("/api/keys", { name });
+        const profileIds = creationScope?.value();
+        if (profileIds?.length === 0) {
+          message(errorText, "Select at least one profile.");
+          return;
+        }
+        const result = await api("/api/keys", { name, ...(keyProfiles ? { profileIds } : {}) });
         if (current !== generation) {
           return;
         }

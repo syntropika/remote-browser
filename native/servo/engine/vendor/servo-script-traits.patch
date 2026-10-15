@@ -1,0 +1,36 @@
+--- a/lib.rs
++++ b/lib.rs
+@@ -35,6 +35,7 @@
+ use rustc_hash::FxHashMap;
+ use serde::{Deserialize, Serialize};
+ use servo_base::Epoch;
++use servo_base::cross_process_instant::CrossProcessInstant;
+ use servo_base::generic_channel::{GenericCallback, GenericReceiver, GenericSender};
+ use servo_base::id::{
+     BrowsingContextId, HistoryStateId, LCPCandidateID, PipelineId, PipelineNamespaceId,
+@@ -48,7 +49,7 @@
+ use servo_constellation_traits::{
+     KeyboardScroll, LoadData, NavigationHistoryBehavior, PaintMetricEvent, RemoteFocusOperation,
+     ScriptToConstellationSender, ScrollStateUpdate, StructuredSerializedData, TargetSnapshotParams,
+-    WindowSizeType,
++    ViewportIntersection, WindowSizeType,
+ };
+ use servo_url::{ImmutableOrigin, OriginSnapshot, ServoUrl};
+ use storage_traits::StorageThreads;
+@@ -199,6 +200,16 @@
+     SetDocumentActivity(PipelineId, DocumentActivity),
+     /// Set whether to use less resources by running timers at a heavily limited rate.
+     SetThrottled(PipelineId, bool),
++    /// Update the visible part of a nested document's viewport, as computed by the
++    /// document that embeds it, which may be in another event loop.
++    UpdateViewportIntersection(PipelineId, ViewportIntersection),
++    /// Notify a document that a related document received a trusted activation-triggering
++    /// input event at the given time. If an origin is given, the notification only applies
++    /// to a document with that origin.
++    NotifyUserActivation(PipelineId, CrossProcessInstant, Option<ImmutableOrigin>),
++    /// Consume the user activation of a document if it was activated no later than the
++    /// given time.
++    ConsumeUserActivation(PipelineId, CrossProcessInstant),
+     /// Notifies script thread that a url should be loaded in this iframe.
+     /// PipelineId is for the parent, BrowsingContextId is for the nested browsing context
+     NavigateIframe(

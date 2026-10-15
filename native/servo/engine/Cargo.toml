@@ -1,0 +1,40 @@
+[package]
+name = "remote-browser-servo-engine"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.88"
+[features]
+private-state-tokens = ["servo-private-state-tokens/boringssl"]
+
+[dependencies]
+servo-private-state-tokens = { path = "../private-state-tokens" }
+remote-browser-servo = { path = ".." }
+servo = { version = "=0.7.0", default-features = false, features = ["bundled", "js_jit", "webcrypto", "webgl"] }
+servo-net = "=0.7.0"
+servo-net-traits = "=0.7.0"
+http = "1"
+percent-encoding = "2"
+servo-base = "=0.7.0"
+dpi = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.23.1"
+fs2 = "0.4"
+webdriver = "=0.54.0"
+[profile.dev]
+debug = 0
+[lints.rust]
+unsafe_code = "forbid"
+
+[patch.crates-io]
+servo-net = { path = "vendor/servo-net" }
+servo-script = { path = "vendor/servo-script" }
+servo-script-bindings = { path = "vendor/servo-script-bindings" }
+servo-net-traits = { path = "vendor/servo-net-traits" }
+servo-constellation = { path = "vendor/servo-constellation" }
+servo-constellation-traits = { path = "vendor/servo-constellation-traits" }
+servo-script-traits = { path = "vendor/servo-script-traits" }

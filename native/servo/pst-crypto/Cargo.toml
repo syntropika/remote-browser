@@ -1,0 +1,10 @@
+[package]
+name = "servo-pst-crypto"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+
+[build-dependencies]
+cc = "1"
+cmake = "0.1"

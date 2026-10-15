@@ -1,0 +1,136 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+use std::ops::Add;
+
+use dom_struct::dom_struct;
+use js::context::JSContext;
+use script_bindings::codegen::GenericBindings::UserActivationBinding::UserActivationMethods;
+use script_bindings::reflector::{Reflector, reflect_dom_object_with_cx};
+use servo_base::cross_process_instant::CrossProcessInstant;
+use servo_constellation_traits::ScriptToConstellationMessage;
+use time::Duration;
+
+use crate::dom::bindings::reflector::DomGlobal;
+use crate::dom::bindings::root::{Dom, DomRoot};
+use crate::dom::document::{
+    Document, SameOriginDescendantNavigablesIterator, SameoriginAncestorNavigablesIterator,
+};
+use crate::dom::globalscope::GlobalScope;
+
+/// <https://html.spec.whatwg.org/multipage/#the-useractivation-interface>
+#[dom_struct]
+pub(crate) struct UserActivation {
+    reflector_: Reflector,
+}
+
+impl UserActivation {
+    fn new_inherited() -> UserActivation {
+        UserActivation {
+            reflector_: Reflector::new(),
+        }
+    }
+
+    pub(crate) fn new(cx: &mut JSContext, global: &GlobalScope) -> DomRoot<UserActivation> {
+        reflect_dom_object_with_cx(Box::new(UserActivation::new_inherited()), global, cx)
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#activation-notification>
+    pub(crate) fn handle_user_activation_notification(document: &Document) {
+        // Step 1.
+        // > Assert: document is fully active.
+        debug_assert!(
+            document.is_fully_active(),
+            "Document should be fully active at this moment"
+        );
+
+        // Step 2.
+        // > Let windows be « document's relevant global object ».
+        let owner_window = document.window();
+        rooted_vec!(let mut windows <- vec![Dom::from_ref(owner_window)].into_iter());
+
+        // Step 3.
+        // > Extend windows with the active window of each of document's ancestor navigables.
+        // This iterator stops at the first ancestor in another event loop. The constellation
+        // notifies the remaining ancestors below.
+        for document in SameoriginAncestorNavigablesIterator::new(DomRoot::from_ref(document)) {
+            windows.push(Dom::from_ref(document.window()));
+        }
+
+        // Step 4.
+        // > Extend windows with the active window of each of document's descendant navigables, filtered to include only
+        // > those navigables whose active document's origin is same origin with document's origin.
+        // The iterator visits every descendant in this event loop, irrespective of origin.
+        for descendant in SameOriginDescendantNavigablesIterator::new(document) {
+            if descendant.origin().same_origin(&document.origin()) {
+                windows.push(Dom::from_ref(descendant.window()));
+            }
+        }
+
+        // Step 5.
+        // > For each window in windows:
+        let current_timestamp = CrossProcessInstant::now();
+        for window in windows.iter() {
+            // Step 5.1.
+            // > Set window's last activation timestamp to the current high resolution time.
+            window.set_last_activation_timestamp(UserActivationTimestamp::TimeStamp(
+                current_timestamp,
+            ));
+
+            // Step 5.2.
+            // > Notify the close watcher manager about user activation given window.
+            // TODO: impl close watcher
+        }
+
+        // Ancestors and same-origin descendants in other event loops, or behind a document in
+        // another event loop, are notified through the constellation with the same timestamp.
+        if !owner_window.is_top_level() || document.iframes().iter().next().is_some() {
+            owner_window.send_to_constellation(
+                ScriptToConstellationMessage::UserActivationNotification(
+                    current_timestamp,
+                    document.origin().immutable().clone(),
+                ),
+            );
+        }
+    }
+}
+
+impl UserActivationMethods<crate::DomTypeHolder> for UserActivation {
+    /// <https://html.spec.whatwg.org/multipage/#dom-useractivation-hasbeenactive>
+    fn HasBeenActive(&self) -> bool {
+        // > The hasBeenActive getter steps are to return true if this's relevant global object has sticky activation, and false otherwise.
+        self.global().as_window().has_sticky_activation()
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-useractivation-isactive>
+    fn IsActive(&self) -> bool {
+        // > The isActive getter steps are to return true if this's relevant global object has transient activation, and false otherwise.
+        self.global().as_window().has_transient_activation()
+    }
+}
+
+/// Timestamp definition specific to [`UserActivation`].
+/// > ... which is either a DOMHighResTimeStamp, positive infinity (indicating that W has never been activated), or negative infinity
+/// > (indicating that the activation has been consumed). Initially positive infinity.
+/// > <https://html.spec.whatwg.org/multipage/#user-activation-data-model>
+#[derive(Clone, Copy, Default, PartialEq, PartialOrd, MallocSizeOf)]
+pub(crate) enum UserActivationTimestamp {
+    NegativeInfinity,
+    TimeStamp(CrossProcessInstant),
+    #[default]
+    PositiveInfinity,
+}
+
+impl Add<i64> for UserActivationTimestamp {
+    type Output = UserActivationTimestamp;
+
+    fn add(self, rhs: i64) -> Self::Output {
+        match self {
+            UserActivationTimestamp::TimeStamp(timestamp) => {
+                UserActivationTimestamp::TimeStamp(timestamp + Duration::milliseconds(rhs))
+            },
+            _ => self,
+        }
+    }
+}

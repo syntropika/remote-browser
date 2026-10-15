@@ -6,7 +6,13 @@ import core from "ultracite/oxlint/core";
 export default defineConfig({
   extends: [core],
   jsPlugins: antiSlop.jsPlugins,
-  ignorePatterns: core.ignorePatterns,
+  // The committed native bundle is generated from the checked UI sources.
+  ignorePatterns: [
+    ...core.ignorePatterns,
+    "native/servo/engine/vendor/**",
+    "native/servo/ui/*.js",
+    "native/servo/engine/src/download_bridge.js",
+  ],
   options: { typeAware: true },
   rules: {
     "func-style": "off",

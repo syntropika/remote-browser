@@ -16,6 +16,7 @@
     "ui/**/*.ts",
     "scripts/runtime.ts",
     "types/**/*.d.ts",
-    "scripts/build.ts"
+    "scripts/build.ts",
+    "scripts/build-servo-ui.ts"
   ]
 }

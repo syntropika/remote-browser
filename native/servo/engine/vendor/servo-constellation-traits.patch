@@ -1,0 +1,56 @@
+--- a/from_script_message.rs
++++ b/from_script_message.rs
+@@ -14,7 +14,7 @@
+     JavaScriptEvaluationId, MediaSessionEvent, ScriptToEmbedderChan, ViewportDetails, WakeLockType,
+ };
+ use encoding_rs::Encoding;
+-use euclid::default::Size2D as UntypedSize2D;
++use euclid::default::{Rect as UntypedRect, Size2D as UntypedSize2D};
+ use fonts_traits::SystemFontServiceProxySender;
+ use http::{HeaderMap, Method};
+ use malloc_size_of_derive::MallocSizeOf;
+@@ -27,6 +27,7 @@
+ use rustc_hash::FxHashMap;
+ use serde::{Deserialize, Serialize};
+ use servo_base::Epoch;
++use servo_base::cross_process_instant::CrossProcessInstant;
+ use servo_base::generic_channel::{GenericCallback, GenericReceiver, GenericSender, SendResult};
+ use servo_base::id::{
+     BroadcastChannelRouterId, BrowsingContextId, HistoryStateId, MessagePortId,
+@@ -565,6 +566,18 @@
+     pub size: ViewportDetails,
+     /// The kind of sizing operation.
+     pub type_: WindowSizeType,
++}
++
++/// The part of a nested browsing context's viewport that its embedding document
++/// renders visibly, after clipping by the container's ancestors and viewports.
++#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
++pub enum ViewportIntersection {
++    /// No part of the nested viewport is visible. This includes containers that
++    /// are not rendered.
++    NotVisible,
++    /// The visible area, as fractions of the nested viewport's width and height.
++    /// It lies within the unit square and has zero area for edge-adjacent views.
++    Visible(UntypedRect<f32>),
+ }
+ 
+ /// An enum that describe a type of keyboard scroll.
+@@ -805,6 +818,17 @@
+     TitleChanged(PipelineId, String),
+     /// Notify the constellation that the size of some `<iframe>`s has changed.
+     IFrameSizes(Vec<IFrameSizeMsg>),
++    /// Notify the constellation that the visible parts of the viewports of nested
++    /// browsing contexts whose containers are in the sending pipeline's document have
++    /// changed. The constellation forwards each value to the nested browsing context.
++    UpdateViewportIntersections(Vec<(BrowsingContextId, ViewportIntersection)>),
++    /// The sending pipeline's document received a trusted activation-triggering input
++    /// event at the given time. The constellation notifies the ancestor documents, and
++    /// the descendant documents with the given origin, which is the sender's origin.
++    UserActivationNotification(CrossProcessInstant, ImmutableOrigin),
++    /// The sending pipeline consumed user activation at the given time. The
++    /// constellation notifies every document of the sender's top-level traversable.
++    ConsumeUserActivation(CrossProcessInstant),
+     /// Request results from the memory reporter.
+     ReportMemory(GenericCallback<MemoryReportResult>),
+     /// Return the result of the evaluated JavaScript with the given [`JavaScriptEvaluationId`].

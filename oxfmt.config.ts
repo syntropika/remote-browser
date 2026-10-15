@@ -5,5 +5,10 @@ export default defineConfig({
   ...ultracite,
   printWidth: 100,
   trailingComma: "all",
-  ignorePatterns: [...ultracite.ignorePatterns, "**/*.md", "**/*.toml"],
+  ignorePatterns: [
+    ...ultracite.ignorePatterns,
+    "**/*.md",
+    "**/*.toml",
+    "native/servo/engine/vendor/**",
+  ],
 });

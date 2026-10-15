@@ -11,6 +11,7 @@ export type UiOptions = {
   api: Api;
   onOpen: () => void;
   onUnauthorized: () => void;
+  keyProfiles?: () => { id: string; name: string }[];
 };
 export type ControlState = {
   mode: string;
@@ -41,6 +42,7 @@ export type ApiKeyMetadata = {
   createdAt: string;
   lastUsedAt: string | null;
   legacy?: boolean;
+  profileIds?: string[] | null;
 };
 export type SavedFile = ArtifactMetadata & { url: string };
 
@@ -64,6 +66,7 @@ export type PostRoutes = {
   "/api/clipboard": { written: boolean };
   "/api/keys": { key: ApiKeyMetadata; secret: string };
   "/api/keys/revoke": { revoked: boolean };
+  "/api/keys/permissions": { updated: boolean };
 };
 
 export type { RecordingStatus } from "../src/artifacts.js";

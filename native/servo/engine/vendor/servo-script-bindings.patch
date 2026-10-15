@@ -1,0 +1,56 @@
+--- a/codegen/Bindings.conf
++++ b/codegen/Bindings.conf
+@@ -318,7 +318,7 @@
+         'Writeln',
+     ],
+     'cx_no_gc': ['GetElementById'],
+-    'realm': ['ExitFullscreen'],
++    'realm': ['ExitFullscreen', 'HasPrivateToken', 'HasRedemptionRecord'],
+ },
+ 
+ 'DissimilarOriginWindow': {
+--- a/interfaces.rs
++++ b/interfaces.rs
+@@ -123,6 +123,7 @@
+ }
+ 
+ pub trait DocumentHelpers {
++    fn private_state_tokens_enabled(cx: &mut JSContext, global: HandleObject) -> bool;
+     fn ensure_safe_to_run_script_or_layout(&self);
+ }
+ 
+--- a/webidls/Document.webidl
++++ b/webidls/Document.webidl
+@@ -244,3 +244,8 @@
+   [Throws]
+   static Document parseHTML(DOMString html, optional SetHTMLOptions options = {});
+ };
++
++partial interface Document {
++  [Func="Document::private_state_tokens_enabled"] Promise<boolean> hasPrivateToken(USVString issuer);
++  [Func="Document::private_state_tokens_enabled"] Promise<boolean> hasRedemptionRecord(USVString issuer);
++};
+--- a/webidls/Request.webidl
++++ b/webidls/Request.webidl
+@@ -35,6 +35,7 @@
+ 
+ // https://fetch.spec.whatwg.org/#requestinit
+ dictionary RequestInit {
++  PrivateToken privateToken;
+   ByteString method;
+   HeadersInit headers;
+   BodyInit? body;
+@@ -125,3 +126,13 @@
+   "strict-origin",
+   "strict-origin-when-cross-origin"
+ };
++
++// Experimental PST v1 integration; unsupported versions fail closed.
++enum PrivateTokenOperation { "token-request", "token-redemption", "send-redemption-record" };
++enum PrivateTokenRefreshPolicy { "none", "refresh" };
++dictionary PrivateToken {
++  required unsigned short version;
++  required PrivateTokenOperation operation;
++  PrivateTokenRefreshPolicy refreshPolicy = "none";
++  sequence<USVString> issuers;
++};

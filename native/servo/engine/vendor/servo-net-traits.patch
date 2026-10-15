@@ -1,0 +1,44 @@
+--- a/request.rs
++++ b/request.rs
+@@ -429,6 +429,8 @@
+ 
+ #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+ pub struct RequestBuilder {
++    #[ignore_malloc_size_of = "bounded PST request metadata"]
++    pub private_token: Option<servo_private_state_tokens::Parameters>,
+     pub id: RequestId,
+ 
+     pub preload_id: Option<PreloadId>,
+@@ -528,6 +530,7 @@
+         referrer: Referrer,
+     ) -> RequestBuilder {
+         RequestBuilder {
++            private_token: None,
+             id: RequestId::default(),
+             preload_id: None,
+             method: Method::GET,
+@@ -737,6 +740,7 @@
+             self.pipeline_id,
+             self.target_webview_id,
+         );
++        request.private_token = self.private_token;
+         request.preload_id = self.preload_id;
+         request.initiator = self.initiator;
+         request.method = self.method;
+@@ -788,6 +792,8 @@
+ /// the Fetch spec.
+ #[derive(Clone, MallocSizeOf)]
+ pub struct Request {
++    #[ignore_malloc_size_of = "bounded PST request metadata"]
++    pub private_token: Option<servo_private_state_tokens::Parameters>,
+     /// The unique id of this request so that the task that triggered it can route
+     /// messages to the correct listeners. This is a UUID that is generated when a request
+     /// is being built.
+@@ -874,6 +880,7 @@
+         webview_id: Option<WebViewId>,
+     ) -> Request {
+         Request {
++            private_token: None,
+             id,
+             preload_id: None,
+             method: Method::GET,
