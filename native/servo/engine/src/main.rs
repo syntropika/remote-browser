@@ -93,6 +93,18 @@ struct Engine {
 }
 struct Delegate(Weak<Engine>);
 impl WebViewDelegate for Delegate {
+    fn screen_geometry(&self, view: WebView) -> Option<servo::ScreenGeometry> {
+        // The headless surface is the actual screen, with no system decorations.
+        let size = view.size().to_i32();
+        let mut window_rect = servo::ScreenGeometry::default().window_rect;
+        window_rect.max.x = size.width;
+        window_rect.max.y = size.height;
+        Some(servo::ScreenGeometry {
+            size,
+            available_size: size,
+            window_rect,
+        })
+    }
     fn show_embedder_control(&self, view: WebView, control: servo::EmbedderControl) {
         if let servo::EmbedderControl::FilePicker(picker) = control
             && let Some(engine) = self.0.upgrade()

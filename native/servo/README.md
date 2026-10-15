@@ -293,6 +293,7 @@ cargo fmt -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo build --locked
 python3 ../tests/embedded_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/surface_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/worker_messages_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine

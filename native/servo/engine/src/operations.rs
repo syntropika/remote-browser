@@ -427,40 +427,41 @@ impl Engine {
                 } else {
                     None
                 };
-                let weak = Rc::downgrade(self);
-                view.take_screenshot(None, move |result| {
-                    let Some(engine) = weak.upgrade() else { return };
-                    match result {
-                        Ok(image) => {
-                            let mut bytes = std::io::Cursor::new(Vec::new());
-                            if image::DynamicImage::ImageRgba8(image)
-                                .write_to(&mut bytes, image::ImageFormat::Png)
-                                .is_err()
-                            {
-                                engine.complete(id, Err("PNG encoding failed".into()));
-                                return;
-                            }
-                            let bytes = bytes.into_inner();
-                            if let Some(name) = name {
-                                let result = engine
-                                    .files
-                                    .save("captures", &name, &bytes)
-                                    .map(|file| serde_json::to_value(file).unwrap())
-                                    .map_err(|error| error.to_string());
-                                engine.complete(id, result);
-                                return;
-                            }
-                            let encoded = STANDARD.encode(bytes);
-                            if encoded.len() > 6 * 1024 * 1024 {
-                                engine.complete(id, Err("Screenshot exceeds 6 MiB".into()));
-                            } else {
-                                engine.complete(id, Ok(json!(encoded)));
-                            }
-                        }
-                        Err(_) => engine.complete(id, Err("Screenshot unavailable".into())),
+                // Capture the current rendered viewport without waiting for network idle.
+                let context = view.rendering_context();
+                context
+                    .make_current()
+                    .map_err(|_| "Screenshot context unavailable")?;
+                view.paint();
+                let mut rect = servo::ScreenGeometry::default().window_rect;
+                let size = context.size2d().to_i32();
+                rect.max.x = size.width;
+                rect.max.y = size.height;
+                let image = context
+                    .read_to_image(rect)
+                    .ok_or("Screenshot unavailable")?;
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::ImageRgba8(image)
+                    .write_to(&mut bytes, image::ImageFormat::Png)
+                    .map_err(|_| "PNG encoding failed")?;
+                let bytes = bytes.into_inner();
+                if let Some(name) = name {
+                    let result = self
+                        .files
+                        .save("captures", &name, &bytes)
+                        .map(|file| serde_json::to_value(file).unwrap())
+                        .map_err(|error| error.to_string());
+                    self.complete(id, result);
+                } else {
+                    let encoded = STANDARD.encode(bytes);
+                    if encoded.len() > 6 * 1024 * 1024 {
+                        self.complete(id, Err("Screenshot exceeds 6 MiB".into()));
+                    } else {
+                        self.complete(id, Ok(json!(encoded)));
                     }
-                });
+                }
             }
+
             "health" => {
                 let policy: HealthPolicy = serde_json::from_value(request.args.clone())
                     .map_err(|_| "Invalid health policy")?;
