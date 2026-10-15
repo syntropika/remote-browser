@@ -3729,6 +3729,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mozangle"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5892d91814b6681a2406067efec53abe9ba4fe8748dcd99e4f5a96a99a05ac0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "walkdir",
+]
+
+[[package]]
 name = "mozjs"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5806,6 +5817,7 @@ dependencies = [
  "servo-tracing",
  "servo-url",
  "servo-wakelock",
+ "servo-webgl",
  "stylo",
  "stylo_traits",
  "surfman",
@@ -6746,6 +6758,7 @@ dependencies = [
  "servo-profile-traits",
  "servo-timers",
  "servo-tracing",
+ "servo-webgl",
  "smallvec",
  "stylo_traits",
  "surfman",
@@ -6901,6 +6914,7 @@ dependencies = [
  "mime_guess",
  "ml-dsa",
  "ml-kem",
+ "mozangle",
  "mozjs",
  "nom-rfc8288",
  "num-traits",
@@ -7151,6 +7165,31 @@ checksum = "c6611b6c7cca3a37052ccfaf904afe6d2b5f670c54999dd9b66f3997e4eba672"
 dependencies = [
  "serde",
  "servo-embedder-traits",
+]
+
+[[package]]
+name = "servo-webgl"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cff9d35818602510237795234e7cf162dde37f01d50f6dd3f0121e9b54610a"
+dependencies = [
+ "bitflags 2.13.2",
+ "byteorder",
+ "crossbeam-channel",
+ "euclid",
+ "glow",
+ "half",
+ "itertools 0.15.0",
+ "log",
+ "num-traits",
+ "parking_lot",
+ "rustc-hash",
+ "servo-base",
+ "servo-canvas-traits",
+ "servo-paint-api",
+ "servo-pixels",
+ "surfman",
+ "webrender_api",
 ]
 
 [[package]]

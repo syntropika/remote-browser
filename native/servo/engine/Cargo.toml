@@ -6,7 +6,7 @@ license = "Apache-2.0"
 rust-version = "1.88"
 [dependencies]
 remote-browser-servo = { path = ".." }
-servo = { version = "=0.7.0", default-features = false, features = ["bundled", "js_jit", "webcrypto"] }
+servo = { version = "=0.7.0", default-features = false, features = ["bundled", "js_jit", "webcrypto", "webgl"] }
 servo-net = "=0.7.0"
 servo-net-traits = "=0.7.0"
 http = "1"

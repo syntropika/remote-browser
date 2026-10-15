@@ -13,6 +13,9 @@ complex OAuth flows, passkeys, CAPTCHA, video, and particular production website
 has not been verified. Servo's web compatibility determines which sites work.
 There is a native Rust API and an MCP adapter; CDP compatibility is not implemented.
 
+The embedded build includes Servo's WebGL 1 implementation for canvas graphics.
+The WebGL regression verifies native shader compilation, rendering and pixel readback.
+
 ## Build and run the embedded executable
 
 Use Rust 1.88 or newer and the native build prerequisites for
@@ -294,6 +297,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo build --locked
 python3 ../tests/embedded_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/surface_smoke.py --engine-binary target/debug/remote-browser-servo-engine
+python3 ../tests/webgl_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/worker_messages_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/unified_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 python3 ../tests/metadata_smoke.py --engine-binary target/debug/remote-browser-servo-engine
@@ -301,7 +305,8 @@ python3 ../tests/failure_smoke.py --engine-binary target/debug/remote-browser-se
 python3 ../tests/logging_smoke.py --engine-binary target/debug/remote-browser-servo-engine
 ```
 
-Real-engine tests exercise native input, rendered PNGs, independent tab references,
+Real-engine tests exercise native input, rendered PNGs, WebGL shader rendering,
+virtual screen geometry, live captures during frame loading, independent tab references,
 background selection, concurrent actions, reservation enforcement, human takeover,
 profile isolation, HTTP-only credential metadata, cookies and local storage across
 restart, MCP negotiation, dashboard authorization, and persistent catalogs/policies.
