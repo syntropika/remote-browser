@@ -28,3 +28,4 @@ unsafe_code = "forbid"
 
 [patch.crates-io]
 servo-net = { path = "vendor/servo-net" }
+servo-script = { path = "vendor/servo-script" }

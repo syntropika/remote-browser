@@ -9,6 +9,7 @@ export default defineConfig({
   // The committed native bundle is generated from the checked UI sources.
   ignorePatterns: [
     ...core.ignorePatterns,
+    "native/servo/engine/vendor/**",
     "native/servo/ui/*.js",
     "native/servo/engine/src/download_bridge.js",
   ],

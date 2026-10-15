@@ -110,7 +110,9 @@ def exercise(binary):
                 first.call('navigate',a,{'url':origin},lease_a,error=True)
                 first.call('navigate',a,{'url':origin},human=True)
                 first.call('return',a,human=True)
-                lease_a=first.call('reserve',a,{'task':'agent a resumed'})['leaseId']
+                # Human takeover preserves the named reservation and its token.
+                first.call('reserve',a,{'task':'agent a resumed'},error=True)
+                first.call('renew',a,lease=lease_a)
                 first.call('navigate',a,{'url':origin+'/short'},lease_a)
                 policy={'origin':origin,'cookieNames':['auth_marker'],'authenticatedSelector':'[data-authenticated]','loginSelector':'#login','warningSeconds':3600}
                 health=first.call('health',a,policy,lease_a)
