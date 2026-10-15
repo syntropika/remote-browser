@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.88"
+[features]
+private-state-tokens = ["servo-private-state-tokens/boringssl"]
+
 [dependencies]
+servo-private-state-tokens = { path = "../private-state-tokens" }
 remote-browser-servo = { path = ".." }
 servo = { version = "=0.7.0", default-features = false, features = ["bundled", "js_jit", "webcrypto", "webgl"] }
 servo-net = "=0.7.0"
@@ -29,3 +33,5 @@ unsafe_code = "forbid"
 [patch.crates-io]
 servo-net = { path = "vendor/servo-net" }
 servo-script = { path = "vendor/servo-script" }
+servo-script-bindings = { path = "vendor/servo-script-bindings" }
+servo-net-traits = { path = "vendor/servo-net-traits" }

@@ -325,6 +325,7 @@ fn request_init_from_request(request: NetTraitsRequest, global: &GlobalScope) ->
     .initiator(request.initiator)
     .client(global.request_client(None))
     .response_tainting(request.response_tainting);
+    builder.private_token = request.private_token;
     builder.id = request.id;
     builder.reload_navigation = request.reload_navigation;
     builder.history_navigation = request.history_navigation;

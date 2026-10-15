@@ -20,7 +20,7 @@ impl Engine {
         match request.op.as_str() {
             "status" => {
                 let uncertain = self.tabs.borrow().values().any(|t| t.uncertain);
-                self.reply(id, Ok(json!({"owner":"agent","uncertain":uncertain})));
+                self.reply(id, Ok(json!({"owner":"agent","uncertain":uncertain,"privateStateTokens":servo_private_state_tokens::diagnostics()})));
                 return Ok(());
             }
             "tabs" => {

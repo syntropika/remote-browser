@@ -637,6 +637,12 @@ fn run_engine(
         &files_root.unwrap_or_else(|| directory.join("files")),
     )?;
     let (downloads, download_hints) = download_capture::install(files.clone());
+    servo_private_state_tokens::install(
+        &directory,
+        std::env::var_os("SERVO_PST_KEY_COMMITMENTS")
+            .map(PathBuf::from)
+            .as_deref(),
+    )?;
     let opts = Opts {
         config_dir: Some(directory),
         temporary_storage: false,

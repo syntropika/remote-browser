@@ -3647,6 +3647,7 @@ impl ScriptThread {
         // Step 8. Let loadTimingInfo be a new document load timing info with its
         //   navigation start time set to navigationParams's response's timing
         //   info's start time.
+        document.set_private_state_token_policy(metadata.headers.as_deref());
         document.set_navigation_start(incomplete.navigation_start);
 
         let referrer_policy = metadata

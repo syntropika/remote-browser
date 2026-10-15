@@ -514,6 +514,8 @@ pub(crate) struct Document {
     /// <https://html.spec.whatwg.org/multipage/#concept-document-policy-container>
     #[no_trace]
     policy_container: DomRefCell<PolicyContainer>,
+    #[ignore_malloc_size_of = "inline policy bits"]
+    pst_policy: Cell<[bool; 2]>,
     /// <https://html.spec.whatwg.org/multipage/#map-of-preloaded-resources>
     #[no_trace]
     preloaded_resources: DomRefCell<PreloadedResources>,
@@ -3473,6 +3475,49 @@ impl Document {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#allowed-to-use>
+    pub(crate) fn set_private_state_token_policy(&self, headers: Option<&http::HeaderMap>) {
+        let own = self.origin().immutable().ascii_serialization().into_owned();
+        let mut allowed = [true; 2];
+        if let Some(headers) = headers {
+            for header in headers.get_all("permissions-policy") {
+                let Ok(value) = header.to_str() else { allowed = [false; 2]; break };
+                for directive in value.split(',') {
+                    for (index, feature) in ["private-state-token-issuance", "private-state-token-redemption"].iter().enumerate() {
+                        if let Some(value) = directive.trim().strip_prefix(feature) {
+                            let value = value.trim().strip_prefix('=').unwrap_or("").trim();
+                            allowed[index] &= value == "*" || value == "(self)" || value == format!("(\"{own}\")");
+                        }
+                    }
+                }
+            }
+        }
+        self.pst_policy.set(allowed);
+    }
+
+    pub(crate) fn private_state_token_policy(&self, issuance: bool) -> bool {
+        self.pst_policy.get()[if issuance { 0 } else { 1 }]
+    }
+
+    fn query_private_state_token(&self, issuer: USVString, record: bool, cx: &mut CurrentRealm) -> RootedPromise {
+        servo_private_state_tokens::api_call();
+        let promise = crate::dom::promise::Promise::new_in_realm(cx);
+        if !self.is_fully_active() {
+            promise.reject_error(cx, Error::InvalidState(None));
+            return promise;
+        }
+        let result = crate::dom::request::private_token_context(&self.global(), !record)
+            .and_then(|top| servo_private_state_tokens::query(&issuer.0, &top, record)
+                .map_err(|error| match error {
+                    servo_private_state_tokens::Error::Invalid => Error::Type(c"Invalid PST issuer".to_owned()),
+                    _ => Error::NotAllowed(None),
+                }));
+        match result {
+            Ok(value) => promise.resolve_native(cx, &value),
+            Err(error) => promise.reject_error(cx, error),
+        }
+        promise
+    }
+
     pub(crate) fn allowed_to_use_feature(&self, _feature: PermissionName) -> bool {
         // Step 1. If document's browsing context is null, then return false.
         if !self.has_browsing_context {
@@ -4110,6 +4155,7 @@ impl Document {
             referrer,
             target_element: MutNullableDom::new(None),
             policy_container: DomRefCell::new(PolicyContainer::default()),
+            pst_policy: Cell::new([false; 2]),
             preloaded_resources: Default::default(),
             ignore_destructive_writes_counter: Default::default(),
             ignore_opens_during_unload_counter: Default::default(),
@@ -5368,6 +5414,15 @@ impl Document {
 }
 
 impl DocumentMethods<crate::DomTypeHolder> for Document {
+    /// <https://wicg.github.io/trust-token-api/#token-query>
+    fn HasPrivateToken(&self, cx: &mut CurrentRealm, issuer: USVString) -> RootedPromise {
+        self.query_private_state_token(issuer, false, cx)
+    }
+    /// <https://wicg.github.io/trust-token-api/#redemption-record-query>
+    fn HasRedemptionRecord(&self, cx: &mut CurrentRealm, issuer: USVString) -> RootedPromise {
+        self.query_private_state_token(issuer, true, cx)
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-document-document>
     fn Constructor(
         cx: &mut JSContext,
@@ -7322,6 +7377,9 @@ fn is_named_element_with_id_attribute(elem: &Element) -> bool {
 }
 
 impl DocumentHelpers for Document {
+    fn private_state_tokens_enabled(_: &mut JSContext, _: HandleObject) -> bool {
+        servo_private_state_tokens::enabled()
+    }
     fn ensure_safe_to_run_script_or_layout(&self) {
         Document::ensure_safe_to_run_script_or_layout(self)
     }

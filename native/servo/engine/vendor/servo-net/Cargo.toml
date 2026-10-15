@@ -402,3 +402,6 @@ check-cfg = [
     "cfg(llvm_pgo)",
     "cfg(ohos_mock)",
 ]
+
+[dependencies.servo-private-state-tokens]
+path = "../../../private-state-tokens"

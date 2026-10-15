@@ -478,3 +478,14 @@ Attachment navigations, download links, blob/data links and POST attachment resp
 Human takeover blocks agent actions while preserving the reservation. When the dashboard is connected, a rejected agent action can request an acknowledged five-second handoff that the user can cancel. A cancelled action remains unexecuted. Operations with unknown completion are never retried by this handoff mechanism.
 
 No CDP or Playwright adapter is included. The updated `skills/remote-browser/SKILL.md` documents the individual native MCP tools and their ownership, permission and file contracts.
+
+## Experimental Private State Tokens
+
+An optional `private-state-tokens` engine feature integrates native Document
+queries and Fetch operations with pinned BoringSSL PST V1 VOPRF cryptography and
+profile-local storage. It is disabled in normal builds. The current experiment
+supports secure top-level documents; iframe and worker operations fail closed
+pending permission delegation support. Issuer commitments must be provisioned
+separately. See [the integration guide](private-state-tokens/README.md) for the
+surface, build requirements, tests and limitations. This feature does not establish
+that a website uses PST or accepts the browser's security challenge response.

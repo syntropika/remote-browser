@@ -50,3 +50,19 @@ The offline `pointer_events_smoke.py` regression covers initial and sibling
 boundaries, click properties, double clicks, checkbox activation and cancelation.
 These corrections establish browser API behavior; website acceptance remains
 independent of the regression result.
+
+## Experimental Private State Tokens
+
+The opt-in native PST integration additionally vendors the unmodified published
+Servo 0.7.0 `servo-script-bindings` and `servo-net-traits` crates, excluding registry
+metadata, upstream tests, lockfiles and documentation. MPL-2.0 headers and license
+files are retained. Narrow changes add WebIDL dictionaries/query methods,
+request metadata, generated binding configuration and a document helper trait.
+The script patch connects Request/Fetch and Document queries to the browser
+service; the net patch processes private headers before response filtering.
+
+The implementation is gated by the engine's `private-state-tokens` feature and
+uses the separate safe browser service and native crypto wrapper. See
+[`private-state-tokens/README.md`](../../private-state-tokens/README.md) for the
+implemented surface, build requirements, privacy controls and deliberate limits.
+Iframe/worker operations fail closed pending policy delegation support.

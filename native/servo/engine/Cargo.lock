@@ -5132,6 +5132,7 @@ dependencies = [
  "servo-base",
  "servo-net",
  "servo-net-traits",
+ "servo-private-state-tokens",
  "url",
  "uuid",
  "webdriver",
@@ -6665,6 +6666,7 @@ dependencies = [
  "servo-net-traits",
  "servo-paint-api",
  "servo-pixels",
+ "servo-private-state-tokens",
  "servo-profile-traits",
  "servo-tracing",
  "servo-url",
@@ -6687,8 +6689,6 @@ dependencies = [
 [[package]]
 name = "servo-net-traits"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33ef7bce5ce3ae9bc966589e5c2ec407e0a679c9308f5ca12e23d1f5c58e576a"
 dependencies = [
  "bytes",
  "content-security-policy",
@@ -6720,6 +6720,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-paint-api",
  "servo-pixels",
+ "servo-private-state-tokens",
  "servo-profile-traits",
  "servo-url",
  "servo_arc",
@@ -6819,6 +6820,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "servo-private-state-tokens"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "http",
+ "serde",
+ "serde_json",
+ "servo-pst-crypto",
+ "url",
+]
+
+[[package]]
 name = "servo-profile"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6852,6 +6865,14 @@ dependencies = [
  "servo-base",
  "servo-malloc-size-of",
  "time",
+]
+
+[[package]]
+name = "servo-pst-crypto"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cmake",
 ]
 
 [[package]]
@@ -6958,6 +6979,7 @@ dependencies = [
  "servo-net-traits",
  "servo-paint-api",
  "servo-pixels",
+ "servo-private-state-tokens",
  "servo-profile-traits",
  "servo-script-bindings",
  "servo-script-traits",
@@ -7001,8 +7023,6 @@ dependencies = [
 [[package]]
 name = "servo-script-bindings"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b850dc804d54cd052dbc5cd63b2772a74d9472f12871d5a5ef3b4fae5194dfbd"
 dependencies = [
  "atomic_refcell",
  "bitflags 2.13.2",

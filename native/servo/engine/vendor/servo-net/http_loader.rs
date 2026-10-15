@@ -2119,6 +2119,20 @@ async fn http_network_fetch(
     context: &FetchContext,
 ) -> Response {
     let mut response_end_timer = ResponseEndTimer(Some(context.timing.clone()));
+    let private_token = if let Some(params) = &fetch_params.request.private_token {
+        let url = fetch_params.request.current_url();
+        match servo_private_state_tokens::begin(
+            url.as_str(), params, &mut fetch_params.request.headers,
+        ) {
+            Ok(pending) => Some(pending),
+            Err(error) => {
+                warn!("Private State Token operation rejected: {error}");
+                return Response::network_error(NetworkError::ResourceLoadError(error.to_string()));
+            },
+        }
+    } else {
+        None
+    };
 
     // Step 1: Let request be fetchParams’s request.
     let request = &mut fetch_params.request;
@@ -2137,7 +2151,9 @@ async fn http_network_fetch(
     if log_enabled!(log::Level::Info) {
         info!("{:?} request for {}", request.method, url);
         for header in request.headers.iter() {
-            debug!(" - {:?}", header);
+            if ![servo_private_state_tokens::TOKEN, servo_private_state_tokens::RECORD].contains(&header.0.as_str()) {
+                debug!(" - {:?}", header);
+            }
         }
     }
 
@@ -2164,7 +2180,7 @@ async fn http_network_fetch(
     // Step 6. Let newConnection be "yes" if forceNewConnection is true; otherwise "no".
 
     // Step 7. Switch on request’s mode:
-    let (response_stream, msg) = match &request.mode {
+    let (mut response_stream, msg) = match &request.mode {
         // Let connection be the result of obtaining a WebSocket connection, given request’s current URL.
         RequestMode::WebSocket {
             protocols,
@@ -2244,10 +2260,20 @@ async fn http_network_fetch(
         },
     };
 
+    if let Some(pending) = private_token {
+        let status = response_stream.status().as_u16();
+        if let Err(error) = pending.finish(status, response_stream.headers_mut()) {
+            warn!("Private State Token response rejected: {error}");
+            return Response::network_error(NetworkError::ResourceLoadError(error.to_string()));
+        }
+    }
+
     if log_enabled!(log::Level::Info) {
         debug!("{:?} response for {}", response_stream.version(), url);
         for header in response_stream.headers().iter() {
-            debug!(" - {:?}", header);
+            if ![servo_private_state_tokens::TOKEN, servo_private_state_tokens::RECORD].contains(&header.0.as_str()) {
+                debug!(" - {:?}", header);
+            }
         }
     }
 

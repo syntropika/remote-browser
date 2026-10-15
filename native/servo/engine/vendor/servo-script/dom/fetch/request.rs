@@ -175,6 +175,7 @@ impl Request {
         // Step 12. Set request to a new request with the following properties:
         let mut request: NetTraitsRequest;
         request = net_request_from_global(global, temporary_request.current_url());
+        request.private_token = temporary_request.private_token.clone();
         request.method = temporary_request.method;
         request.headers = temporary_request.headers.clone();
         request.unsafe_request = true;
@@ -192,6 +193,33 @@ impl Request {
         request.reload_navigation = temporary_request.reload_navigation;
         // history-navigation flag: request’s history-navigation flag.
         request.history_navigation = temporary_request.history_navigation;
+
+        if let Some(private_token) = &init.privateToken {
+            servo_private_state_tokens::api_call();
+            use crate::dom::bindings::codegen::Bindings::RequestBinding::{PrivateTokenOperation, PrivateTokenRefreshPolicy};
+            use servo_private_state_tokens::{Operation, Parameters};
+            if private_token.version != 1 || !servo_private_state_tokens::enabled() {
+                return Err(Error::NotSupported(None));
+            }
+            let operation = match private_token.operation {
+                PrivateTokenOperation::Token_request => Operation::TokenRequest,
+                PrivateTokenOperation::Token_redemption => Operation::TokenRedemption,
+                PrivateTokenOperation::Send_redemption_record => Operation::SendRedemptionRecord,
+            };
+            let top_level = private_token_context(global, operation == Operation::TokenRequest)?;
+            let issuers = private_token.issuers.as_ref().map(|items| items.iter().map(|v| v.0.clone()).collect::<Vec<_>>()).unwrap_or_default();
+            if issuers.len() > 2 || (operation == Operation::SendRedemptionRecord && issuers.is_empty()) {
+                return Err(Error::Type(c"Invalid PST issuers".to_owned()));
+            }
+            for issuer in &issuers {
+                servo_private_state_tokens::origin(issuer).map_err(|_|Error::Type(c"Invalid PST issuer".to_owned()))?;
+            }
+            servo_private_state_tokens::origin(request.current_url().as_str()).map_err(|_|Error::NotAllowed(None))?;
+            request.private_token = Some(Parameters {
+                operation, issuers, top_level,
+                refresh: private_token.refreshPolicy == PrivateTokenRefreshPolicy::Refresh,
+            });
+        }
 
         // Step 13. If init is not empty, then:
         if init.body.is_some() ||
@@ -226,6 +254,12 @@ impl Request {
             // TODO
             // Step 13.8. Set request’s URL list to « request’s URL ».
             // TODO
+        }
+
+        if let Some(params) = request.private_token.as_mut() {
+            params.top_level = private_token_context(global, params.operation == servo_private_state_tokens::Operation::TokenRequest)?;
+            request.cache_mode = CacheMode::NoStore;
+            request.redirect_mode = RedirectMode::Error;
         }
 
         // Step 14. If init["referrer"] exists, then:
@@ -351,6 +385,11 @@ impl Request {
         // TODO
         // Step 27.2. Otherwise, set request’s priority to init["priority"].
         // TODO
+
+        if request.private_token.is_some() {
+            request.cache_mode = CacheMode::NoStore;
+            request.redirect_mode = RedirectMode::Error;
+        }
 
         // Step 28. Set this’s request to request.
         let request = Request::from_net_request(cx, global, proto, request);
@@ -1002,4 +1041,19 @@ impl Convert<RequestRedirect> for RedirectMode {
             RedirectMode::Manual => RequestRedirect::Manual,
         }
     }
+}
+
+/// Conservative experimental policy: secure, active top-level documents only.
+/// Delegated iframe/worker policy is not implemented and fails closed.
+pub(crate) fn private_token_context(global: &GlobalScope, issuance: bool) -> Fallible<String> {
+    use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
+    use crate::dom::bindings::inheritance::Castable;
+    use crate::dom::window::Window;
+    let window = global.downcast::<Window>().ok_or(Error::NotAllowed(None))?;
+    if !global.is_secure_context() || !window.is_top_level() ||
+        !window.Document().is_fully_active() || !window.Document().private_state_token_policy(issuance) {
+        return Err(Error::NotAllowed(None));
+    }
+    servo_private_state_tokens::origin(global.origin().immutable().ascii_serialization().as_ref())
+        .map_err(|_|Error::NotAllowed(None))
 }

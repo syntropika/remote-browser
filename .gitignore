@@ -17,3 +17,5 @@ __pycache__/
 dist/
 native/servo/target/
 native/servo/engine/target/
+native/servo/private-state-tokens/target/
+native/servo/pst-crypto/target/
