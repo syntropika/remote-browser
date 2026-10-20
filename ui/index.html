@@ -1,0 +1,126 @@
+<!doctype html>
+<html class="dark h-full" data-theme="dark" lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark" />
+    <!-- The host replaces this with a fresh value per response; the overlay library signs
+         the style layers it injects with it. -->
+    <meta name="csp-nonce" content="{nonce}" />
+    <meta name="theme-color" content="#09090b" />
+    <title>Remote Browser</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body class="h-full overflow-hidden">
+    <svg
+      class="absolute size-0 overflow-hidden"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <defs>
+        <symbol id="icon-arrow" viewBox="0 0 24 24">
+          <path d="M6 18 18 6M6 6h12v12" />
+        </symbol>
+        <symbol id="icon-back" viewBox="0 0 24 24">
+          <path d="m14 6-6 6 6 6" />
+        </symbol>
+        <symbol id="icon-forward" viewBox="0 0 24 24">
+          <path d="m10 6 6 6-6 6" />
+        </symbol>
+        <symbol id="icon-reload" viewBox="0 0 24 24">
+          <path d="M20 7v5h-5M19.3 12A7.5 7.5 0 1 1 17 6.3L20 9" />
+        </symbol>
+        <symbol id="icon-tabs" viewBox="0 0 24 24">
+          <rect x="7" y="7" width="13" height="13" rx="3" />
+          <path d="M15 4H7a3 3 0 0 0-3 3v8" />
+        </symbol>
+        <symbol id="icon-more" viewBox="0 0 24 24">
+          <circle cx="5" cy="12" r="1" />
+          <circle cx="12" cy="12" r="1" />
+          <circle cx="19" cy="12" r="1" />
+        </symbol>
+        <symbol id="icon-keyboard" viewBox="0 0 24 24">
+          <rect x="2" y="5" width="20" height="14" rx="3" />
+          <path
+            d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"
+          />
+        </symbol>
+        <symbol id="icon-zoom" viewBox="0 0 24 24">
+          <path d="M9 3H3v6M15 3h6v6M21 15v6h-6M9 21H3v-6" />
+        </symbol>
+        <symbol id="icon-fit" viewBox="0 0 24 24">
+          <path d="M3 9h6V3M21 9h-6V3M15 21v-6h6M9 21v-6H3" />
+        </symbol>
+        <symbol id="icon-hand" viewBox="0 0 24 24">
+          <path
+            d="M8 13V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v9a7 7 0 0 1-7 7h-1a7 7 0 0 1-5-2l-5-5a2 2 0 0 1 3-3l3 3"
+          />
+        </symbol>
+        <symbol id="icon-enter" viewBox="0 0 24 24">
+          <path d="M20 5v7a3 3 0 0 1-3 3H4m5-5-5 5 5 5" />
+        </symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24">
+          <path d="m6 6 12 12M18 6 6 18" />
+        </symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24">
+          <path d="M12 5v14M5 12h14" />
+        </symbol>
+        <symbol id="icon-screen" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+        </symbol>
+        <symbol id="icon-window" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M3 9h18M7 6.5h.01M10 6.5h.01" />
+        </symbol>
+        <symbol id="icon-globe" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18" />
+        </symbol>
+        <symbol id="icon-lock" viewBox="0 0 24 24">
+          <rect x="4" y="10" width="16" height="11" rx="2" />
+          <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
+        </symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.63.67 1.1 1.31 1.1H21a2 2 0 1 1 0 4h-.09c-.64 0-1.17.47-1.31 1.1Z"
+          />
+        </symbol>
+        <symbol id="icon-key" viewBox="0 0 24 24">
+          <circle cx="8" cy="15" r="5" />
+          <path d="m11.5 11.5 9-9M16 7l3 3M19 4l3 3" />
+        </symbol>
+        <symbol id="icon-files" viewBox="0 0 24 24">
+          <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 13h8M8 17h5" />
+        </symbol>
+        <symbol id="icon-clipboard" viewBox="0 0 24 24">
+          <rect x="8" y="3" width="8" height="4" rx="1" />
+          <path d="M8 5H5v16h14V5h-3" />
+        </symbol>
+        <symbol id="icon-logout" viewBox="0 0 24 24">
+          <path d="M9 21H4V3h5M9 12h12m-4-4 4 4-4 4" />
+        </symbol>
+        <symbol id="icon-info" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v5m0-8h.01" />
+        </symbol>
+        <symbol id="icon-check" viewBox="0 0 24 24">
+          <path d="m5 13 4 4L19 7" />
+        </symbol>
+        <symbol id="icon-warning" viewBox="0 0 24 24">
+          <path d="M12 4 2.5 20h19L12 4Zm0 5v6m0 3h.01" />
+        </symbol>
+        <symbol id="icon-profile" viewBox="0 0 24 24">
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21v-2a8 8 0 0 1 16 0v2" />
+        </symbol>
+      </defs>
+    </svg>
+    <div class="h-full" id="root"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

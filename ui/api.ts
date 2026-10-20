@@ -1,72 +1,54 @@
-import { Cause, Data, Effect, Exit } from "effect";
+/** The dashboard's HTTP client. The dashboard asks for no credential: it is served from the
+ *  browser's own address and its requests are same-origin. */
+import { isRecord, parseJson } from "./invariants.js";
 
-import { isRecord, parseJson } from "../src/invariants.js";
-import type { GetRoutes, PostRoutes } from "./contracts.js";
+export type Failure = { statusCode?: number } & Error;
 
-export class ApiError extends Data.TaggedError("ApiError")<{
-  message: string;
-  statusCode: number;
-}> {
-  constructor(message: string, statusCode: number) {
-    super({ message, statusCode });
-  }
+export function failure(cause: unknown): Failure {
+  return cause instanceof Error ? cause : new Error(String(cause));
 }
 
-/** Network deadlines and failures are managed by Effect; the UI uses a Promise boundary. */
-export function requestEffect<A>(url: string, body?: unknown): Effect.Effect<A, Error> {
-  return Effect.acquireUseRelease(
-    Effect.sync(() => new AbortController()),
-    (controller) =>
-      Effect.gen(function* () {
-        const response = yield* Effect.tryPromise({
-          try: async () =>
-            fetch(url, {
-              method: body === undefined ? "GET" : "POST",
-              credentials: "same-origin",
-              cache: "no-store",
-              headers: body === undefined ? {} : { "Content-Type": "application/json" },
-              body: body === undefined ? undefined : JSON.stringify(body),
-              signal: controller.signal,
-            }),
-          catch: uiFailure,
-        });
-        const data = yield* Effect.tryPromise({
-          try: async () => parseJson(await response.text()),
-          catch: () => new ApiError("The server returned an invalid response.", response.status),
-        });
-        if (!response.ok) {
-          return yield* Effect.fail(
-            new ApiError(
-              isRecord(data) && typeof data.error === "string"
-                ? data.error
-                : `Request failed (${response.status}).`,
-              response.status,
-            ),
-          );
-        }
-        // SAFETY: The caller selects A from the gateway route contract; successful responses are produced by that route.
-        return data as A;
-      }),
-    (controller) =>
-      Effect.sync(() => {
-        controller.abort();
-      }),
-  ).pipe(Effect.timeout("20 seconds"), Effect.mapError(uiFailure));
+let onUnauthorized: () => void = () => undefined;
+
+export function whenUnauthorized(handler: () => void): void {
+  onUnauthorized = handler;
 }
 
-export type UiFailure = {
-  statusCode?: number;
-} & Error;
-export const uiFailure = (cause: unknown): UiFailure =>
-  cause instanceof Error ? cause : new Error(String(cause));
-
-export function api<P extends keyof GetRoutes>(url: P): Promise<GetRoutes[P]>;
-export function api<P extends keyof PostRoutes>(url: P, body: unknown): Promise<PostRoutes[P]>;
-export function api(url: string, body?: unknown): Promise<unknown>;
-export async function api(url: string, body?: unknown): Promise<unknown> {
-  const exit = await Effect.runPromiseExit(requestEffect<unknown>(url, body));
-  if (Exit.isFailure(exit)) {
-    throw Cause.squash(exit.cause);
+async function send(path: string, body?: unknown): Promise<unknown> {
+  const response = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const value = parseJson(await response.text());
+  if (!response.ok) {
+    if (response.status === 401) {
+      onUnauthorized();
+    }
+    const error: Failure = new Error(
+      isRecord(value) && typeof value.error === "string"
+        ? value.error
+        : `Request failed (${response.status}).`,
+    );
+    error.statusCode = response.status;
+    throw error;
   }
-  return exit.value;
+  return value;
+}
+
+/** One dashboard request. A caller validates what comes back; see model.ts. */
+export function api(url: string, body?: unknown): Promise<unknown> {
+  return send(url, body);
+}
+
+/** One operation on one tab of one profile. */
+export function action(
+  op: string,
+  args: Record<string, unknown> = {},
+  tabId: string | null = null,
+  profileId = "",
+): Promise<unknown> {
+  return send("/api/action", { profileId, op, tabId: tabId || null, args });
 }

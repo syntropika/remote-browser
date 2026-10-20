@@ -6,7 +6,8 @@ import core from "ultracite/oxlint/core";
 export default defineConfig({
   extends: [core],
   jsPlugins: antiSlop.jsPlugins,
-  ignorePatterns: core.ignorePatterns,
+  // The committed native bundle is generated from the checked UI sources.
+  ignorePatterns: [...core.ignorePatterns, "src/host/ui/app.js"],
   options: { typeAware: true },
   rules: {
     "func-style": "off",
@@ -98,9 +99,13 @@ export default defineConfig({
       },
     },
     {
-      files: ["scripts/integration.ts"],
-      // Rendered UI assertions must exclude labels hidden by responsive styles.
-      rules: { "unicorn/prefer-dom-node-text-content": "off" },
+      files: ["ui/**/*.tsx"],
+      // React event props take void-returning handlers, and an effect returns a cleanup
+      // on the paths that register one.
+      rules: {
+        "typescript/no-confusing-void-expression": "off",
+        "typescript/consistent-return": "off",
+      },
     },
     {
       files: ["ui/{app,contracts}.ts"],

@@ -1,21 +1,14 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "lib": ["ES2023", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
     "strict": true,
+    "jsx": "react-jsx",
     "skipLibCheck": true,
-    "types": ["node"],
-    "rootDir": ".",
-    "outDir": "dist",
-    "sourceMap": true
+    "types": ["bun"],
+    "noEmit": true
   },
-  "include": [
-    "src/**/*.ts",
-    "ui/**/*.ts",
-    "scripts/runtime.ts",
-    "types/**/*.d.ts",
-    "scripts/build.ts"
-  ]
+  "include": ["ui/**/*.ts", "ui/**/*.tsx", "scripts/**/*.ts"]
 }

@@ -2,7 +2,7 @@
   "name": "remote-browser",
   "version": "0.1.0",
   "private": true,
-  "description": "A persistent Chromium browser with MCP automation and human remote control.",
+  "description": "A browser an agent and a person share, driven through CEF and reachable over MCP.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -10,36 +10,38 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsx scripts/build.ts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.tools.json --noEmit",
-    "start": "node dist/src/server.js",
-    "test": "tsx --test test/*.test.ts",
-    "test:integration": "node dist/scripts/integration.js",
+    "build": "bun run scripts/build-ui.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "cargo test --manifest-path src/host/Cargo.toml",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives",
     "lint:fix": "oxlint --fix --deny-warnings --report-unused-disable-directives",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "check": "npm run format:check && npm run typecheck && npm run lint && npm test"
+    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test"
   },
   "dependencies": {
-    "@novnc/novnc": "1.7.0",
-    "@playwright/mcp": "0.0.83",
-    "effect": "4.0.0",
-    "playwright": "1.64.0-alpha-1790635538000",
-    "ws": "8.22.0"
+    "@heroui/react": "3.2.6",
+    "@internationalized/date": "3.12.4",
+    "@react-aria/ssr": "3.10.1",
+    "@react-aria/utils": "3.34.1",
+    "react": "19.3.1",
+    "react-aria": "3.52.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
-    "@types/node": "24.19.1",
-    "@types/ws": "8.18.2",
-    "esbuild": "0.28.2",
+    "@tailwindcss/cli": "4.1.18",
+    "@types/bun": "1.3.10",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "oxfmt": "0.70.0",
     "oxlint": "1.85.0",
     "oxlint-tsgolint": "7.0.2002",
-    "tsx": "4.23.15",
+    "tailwindcss": "4.1.18",
     "typescript": "5.9.3",
     "ultracite": "7.12.0"
   },
   "engines": {
-    "node": ">=24"
+    "bun": ">=1.3.0"
   }
 }
