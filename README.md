@@ -1,86 +1,57 @@
 # Remote Browser
 
-A self-hosted browser for you and your AI agents. Watch a live Chromium session, take control to browse or sign in, then let an agent continue in the same tabs and signed-in accounts through MCP.
+A browser you and your agents share. Chromium runs off-screen on your own machine; you watch
+it and take over from a local dashboard, and an agent drives the same tabs and signed-in
+accounts over MCP.
 
-The browser runs in Docker. Your device opens the dashboard; the agent connects to its MCP endpoint. Both use the same persistent browser profile.
+- Watch the live page, take control to browse or sign in, then hand the tab back.
+- Keep each session's cookies and sign-ins in its own profile, across restarts.
+- Let an agent read compact page snapshots and click, type, scroll and upload.
+- Save screenshots, record the session, and manage uploads and downloads per session.
+- Copy and paste between your machine and the page.
+- Give every MCP client its own API key, scoped to the sessions it may use.
 
-## What you can do
+## How it runs
 
-- Watch and control the browser from a desktop or phone.
-- Keep website sessions across container restarts and updates.
-- Let an agent navigate with Playwright, CDP and compact page snapshots.
-- Save screenshots, record videos and manage uploads and downloads in a file gallery.
-- Copy and paste text between your device and the remote browser.
-- Create and revoke a separate API key for each MCP client.
+Two executables. The **host** serves the dashboard, speaks MCP over stdio and HTTP, and keeps
+the API keys, sessions and reservations. The **engine** owns one session's profile
+and paints it. The host starts an engine per session, so a crash never takes the dashboard
+with it.
 
-## Quick start
+## Build and run
 
-Requires Docker Engine with Compose and a Linux container environment that supports Chromium's sandbox. Only x86-64 is currently tested; Docker Desktop supplies the Linux environment on macOS and Windows.
-
-```sh
-git clone https://github.com/syntropika/remote-browser.git
-cd remote-browser
-docker compose up --build -d --wait
-```
-
-Open <http://localhost:8080> and create your account with a username and a password of at least 12 characters. Choose **Take control** to browse or sign in to a website, then **Return to agent** when finished.
-
-The browser profile, account, API keys and saved files live in the `browser-data` volume. Keep that volume when updating the container.
-
-## Published Docker image
-
-The publishing workflow publishes images to [Docker Hub](https://hub.docker.com/r/syntropika/remote-browser) under both the Git version tag and `syntropika/remote-browser:latest`. Each successful tag build updates `latest` to the same image as that version. Images support both `linux/amd64` and `linux/arm64`; Docker selects the matching architecture when pulling. The first tag published with this workflow creates `latest`.
+Rust 1.88 or newer and Bun 1.3. The first engine build downloads the CEF binary
+distribution — roughly a gigabyte — and copies its runtime files beside the executable.
 
 ```sh
-docker pull syntropika/remote-browser:latest
+bun install
+bun run build                                   # the dashboard bundle the host embeds
+cargo build --release --manifest-path src/engine/Cargo.toml
+cargo build --release --manifest-path src/host/Cargo.toml
+./src/host/target/release/remote-browser-native \
+  --engine-binary src/engine/target/release/remote-browser-cef-engine
 ```
 
-To use the published image with the repository's port, persistence and sandbox settings, clone the repository as shown above and create `compose.image.yaml` in its root:
+The host prints the dashboard's address. Open it and the browser is yours: no account, no
+sign-in and no token. It listens on this machine only and refuses a request from any other
+origin, so a web page cannot drive it — but anything else running on your machine can, which
+is the trade for opening it with a click.
 
-```yaml
-services:
-  browser:
-    image: syntropika/remote-browser:latest
-```
+[src/host/README.md](src/host/README.md) documents the engine protocol, the MCP tools,
+the HTTP endpoints, the profile catalog and the smoke tests.
 
-Start the container without building locally:
+## Connect an agent
+
+The host speaks MCP over stdio, and over HTTP at `/mcp` on the dashboard port with an API
+key. A key is for agents: the dashboard itself has no sign-in, only its address. Create keys in **Settings → API keys**, where a key either reaches every session or exactly
+one. An agent that releases a tab closes it, so your own tabs stay as you left them. The agent-facing contract is described in
+[skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
+
+## Checks
 
 ```sh
-docker compose -f compose.yaml -f compose.image.yaml pull
-docker compose -f compose.yaml -f compose.image.yaml up --no-build -d --wait
+bun run check   # formatting, TypeScript, lint rules and the host's tests
 ```
 
-Open <http://localhost:8080> and follow the same account setup and MCP connection steps. Keep using both Compose files when managing this deployment. To update, run the two commands again to pull `latest` and recreate the container, preserving the `browser-data` volume. You can also use a specific version tag to pin a deployment. See [Docker Hub releases](docs/releases.md) for the publishing workflow.
-
-## Connect your agent
-
-In the dashboard, open **More options → API keys**, create a named key and copy it into your MCP client's secret storage. Configure a Streamable HTTP connection:
-
-| Setting | Value |
-| --- | --- |
-| URL | `http://localhost:8080/mcp` |
-| Header | `Authorization: Bearer <API_KEY>` |
-
-For a remote deployment, use its dashboard address instead of `localhost`. See [hosting](docs/hosting.md) for network access and configuration.
-
-The MCP exposes `browser_docs` to discover the API, `browser_tabs` to list and reserve task tabs, and `browser_execute` to run browser actions. Pass `tabId` to execute in a specific tab without changing the visible tab; pass its reservation `leaseId` to continue safely across calls. An agent can start with:
-
-```js
-return await browser.snapshot();
-```
-
-If you are using the browser, an agent control request shows a five-second prompt that you can cancel. Give API keys only to trusted agents: they can operate your signed-in accounts and run code in the container.
-
-## Documentation
-
-- [Using the dashboard](docs/usage.md) — account setup, control, mobile input and clipboard.
-- [MCP and agent automation](docs/mcp.md) — tools, Playwright/CDP, captures and file transfers.
-- [Hosting and persistence](docs/hosting.md) — configuration, remote access, updates and backups.
-- [Architecture](docs/architecture.md) — runtime components, TypeScript and Effect.
-- [Docker Hub releases](docs/releases.md) — publishing images from Git tags.
-- [Contributing](CONTRIBUTING.md) — development checks, integration tests and commit conventions.
-- [Security](SECURITY.md) — trust boundaries and vulnerability reporting.
-
-## License
-
-[Apache-2.0](LICENSE). Third-party components retain their own licenses; see [NOTICE](NOTICE) and [container dependency attribution](docker/THIRD_PARTY.md).
+The Python smoke tests under `src/host/tests/` drive both executables end to end; see the
+host's README for how to run them.

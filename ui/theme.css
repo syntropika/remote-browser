@@ -1,0 +1,159 @@
+/* The dashboard's stylesheet: HeroUI's layers, this application's utilities, and the
+   palette of the browser it drives — Brave's own dark tokens, read from its settings UI. */
+@import "@heroui/styles/css";
+
+@source ".";
+
+@theme {
+  /* Surfaces, from the darkest frame to the raised rows. */
+  --color-page: #141415;
+  --color-card: #1c1c1d;
+  --color-raised: #252527;
+  --color-line: #303032;
+  --color-line-strong: #464649;
+  /* The chrome: a browser's toolbar and its active tab share one surface, and the address
+     field is inset into it. */
+  --color-chrome: #3b3939;
+  --color-strip: #1f1f23;
+  /* The address bar's own fill. It is named apart from a form field on purpose: HeroUI maps
+     --color-field to its own field tokens, so holding that name here painted every input on a
+     card in the card's own colour and made them vanish. */
+  --color-address: #1c1c1d;
+  /* A menu draws a stronger line between its groups than a card does between its rows, and a
+     field's edge is drawn at that same strength. */
+  --color-line-menu: #5e5e62;
+  --color-line-field: #5e5e62;
+  /* Text, three steps. */
+  --color-ink: #e4e4e5;
+  --color-ink-dim: #c9c9ca;
+  --color-ink-faint: #909093;
+  /* A primary action is white on this palette, as the rest of the product's are. */
+  --color-accent: #f5f5f5;
+}
+
+/* HeroUI's own components read these, so they take the same palette. */
+.dark,
+[data-theme="dark"] {
+  --background: #141415;
+  --foreground: #e4e4e5;
+  --surface: #1c1c1d;
+  --surface-secondary: #252527;
+  --surface-tertiary: #303032;
+  --overlay: #1c1c1d;
+  --muted: #909093;
+  --accent: #f5f5f5;
+  --accent-hover: #ffffff;
+  --accent-foreground: #141415;
+  --accent-soft: #ffffff1a;
+  --accent-soft-foreground: #e4e4e5;
+  /* Quiet buttons and menu rows light up rather than darken, so the same value works on
+     the chrome, on a card and on the page. HeroUI leaves this one undefined, which is why
+     they had no hover at all. */
+  --default: #ffffff1a;
+  --default-hover: #ffffff26;
+  --default-foreground: #e4e4e5;
+  /* The chosen tab is the same white as a primary button, with dark text on it. */
+  --segment: #f5f5f5;
+  --segment-foreground: #141415;
+  /* A field is cut into the surface it sits on: a step darker than the card, with a hairline
+     around it, the way the reference browser draws the search box on its settings header.
+     HeroUI's dark theme leaves a field the same colour as a card and gives it no border at
+     all, which is invisible on this palette. */
+  --field-background: #141415;
+  --field-hover: #18181a;
+  --field-focus: #141415;
+  --field-border: #5e5e62;
+  --field-border-width: 1px;
+  --field-border-hover: #6f6f75;
+  --field-border-focus: #f5f5f5;
+  --field-radius: 16px;
+}
+
+/* The hand-made screens this dashboard replaced drew a field as a 16px-round box, 44px tall,
+   with type large enough not to zoom a phone on focus. HeroUI has tokens for the colour and the
+   radius but none for the metrics, so those are set here. The palette stays the browser's. */
+.input,
+.input-group {
+  min-height: 2.75rem;
+}
+
+/* A panel carried a visible edge on those screens, and the reveal button sat inside the field
+   without a rule in front of it. */
+.card {
+  border: 1px solid var(--color-line-strong);
+}
+
+.input-group__suffix {
+  border-inline-start: none;
+  padding-inline: 0.25rem;
+}
+
+.input {
+  padding-block: 0.6875rem;
+  font-size: 1rem;
+}
+
+.input-group [data-slot="input-group-input"] {
+  font-size: 1rem;
+}
+
+/* HeroUI tints an alert's title with its status, so the message repeats the colour cue its
+   indicator already gives. The message reads in plain ink here; the indicator keeps the colour. */
+.alert__title {
+  color: var(--color-ink);
+}
+
+/* A menu is the one surface HeroUI styles like a pill: 32px round with inset, floating rows.
+   The browser this dashboard imitates draws a flat 8px panel whose rows reach both edges, so
+   the popover is reshaped here. Every number was measured off Brave's own app menu. These
+   rules sit outside HeroUI's layers, which is what lets them win. */
+.dropdown__popover {
+  border-radius: 8px;
+  padding-block: 4px;
+  min-width: 15rem;
+}
+
+.dropdown__menu {
+  gap: 0;
+  padding: 0;
+}
+
+.menu-item {
+  min-height: 33px;
+  border-radius: 0;
+  padding-inline: 1rem;
+  gap: 0.75rem;
+}
+
+/* Consecutive groups are divided by a full-width line with a little air around it. */
+.menu-section + .menu-section {
+  border-top: 1px solid var(--color-line-menu);
+  margin-top: 3px;
+  padding-top: 3px;
+}
+
+/* An agent keeps one colour from a small palette across the tabs it holds, and the chrome
+   tints its name with the same one. */
+@layer base {
+  [data-colour="purple"] {
+    --agent: #c4b5fd;
+  }
+  [data-colour="blue"] {
+    --agent: #93c5fd;
+  }
+  [data-colour="green"] {
+    --agent: #86efac;
+  }
+  [data-colour="orange"] {
+    --agent: #fdba74;
+  }
+  [data-colour="pink"] {
+    --agent: #f9a8d4;
+  }
+  [data-colour="red"] {
+    --agent: #fca5a5;
+  }
+  [data-colour="yellow"] {
+    --agent: #fcd34d;
+  }
+}
