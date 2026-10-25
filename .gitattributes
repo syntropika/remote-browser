@@ -1,2 +1,5 @@
+# Preserve published upstream source formatting and collapse vendored diffs.
+native/servo/engine/vendor/** linguist-vendored -whitespace
+
 # Unified patches retain a context marker on otherwise empty lines.
 src/engine/cef/*.patch -whitespace
