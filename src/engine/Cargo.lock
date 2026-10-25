@@ -1351,6 +1351,7 @@ dependencies = [
  "cef",
  "fs2",
  "image",
+ "libloading",
  "remote-browser-native",
  "serde",
  "serde_json",

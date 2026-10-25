@@ -1,0 +1,142 @@
+--- a/chrome/browser/extensions/extension_install_prompt_show_params.h
++++ b/chrome/browser/extensions/extension_install_prompt_show_params.h
+@@ -17,6 +17,7 @@
+ class Profile;
+ 
+ namespace content {
++class Page;
+ class WebContents;
+ }
+ 
+@@ -55,6 +56,11 @@
+   // have been destroyed.
+   content::WebContents* GetParentWebContents();
+ 
++  // The initiating contents, including when there is no top-level native window.
++  content::WebContents* GetInitiatingWebContents() {
++    return initiating_web_contents_.get();
++  }
++
+   // The parent window for the dialog. Returns NULL if the window has been
+   // destroyed.
+   gfx::NativeWindow GetParentWindow();
+@@ -71,7 +77,9 @@
+ 
+   // Only one of these will be non-null.
+   base::WeakPtr<content::WebContents> parent_web_contents_;
+-  gfx::NativeWindow parent_window_;
++  base::WeakPtr<content::WebContents> initiating_web_contents_;
++  base::WeakPtr<content::Page> initiating_page_;
++  gfx::NativeWindow parent_window_ = gfx::NativeWindow();
+ 
+   // Used to track the parent_window_'s lifetime. We need to explicitly track it
+   // because aura::Window does not expose a WeakPtr like WebContents.
+--- a/chrome/browser/extensions/extension_install_prompt_show_params.cc
++++ b/chrome/browser/extensions/extension_install_prompt_show_params.cc
+@@ -10,6 +10,7 @@
+ #include "base/memory/weak_ptr.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/page.h"
+ #include "extensions/buildflags/buildflags.h"
+ #include "ui/native_window_tracker/native_window_tracker.h"
+ 
+@@ -40,7 +41,9 @@
+ ExtensionInstallPromptShowParams::ExtensionInstallPromptShowParams(
+     content::WebContents* contents)
+     : profile_(Profile::FromBrowserContext(contents->GetBrowserContext())),
+-      parent_web_contents_(contents->GetWeakPtr()) {
++      parent_web_contents_(contents->GetWeakPtr()),
++      initiating_web_contents_(contents->GetWeakPtr()),
++      initiating_page_(contents->GetPrimaryPage().GetWeakPtr()) {
+   DCHECK(profile_);
+   DCHECK(parent_web_contents_);
+ 
+@@ -85,6 +88,14 @@
+ }
+ 
+ bool ExtensionInstallPromptShowParams::WasParentDestroyed() {
++  // A windowless prompt still belongs to the document that initiated it. An
++  // old page in the back-forward cache must not authorize its replacement.
++  if (initiating_web_contents_.WasInvalidated() ||
++      initiating_page_.WasInvalidated() ||
++      (initiating_page_ && !initiating_page_->IsPrimary())) {
++    return true;
++  }
++
+   if (profile_->ShutdownStarted()) {
+     return true;
+   }
+--- a/chrome/browser/extensions/extension_install_prompt.cc
++++ b/chrome/browser/extensions/extension_install_prompt.cc
+@@ -3,6 +3,11 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/extensions/extension_install_prompt.h"
++
++#include "cef/libcef/features/features.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/remote_browser_install_bridge.h"
++#endif
+ 
+ #include <optional>
+ #include <utility>
+@@ -281,6 +286,13 @@
+ 
+   g_last_prompt_type_for_tests = prompt_->type();
+   did_call_show_dialog_ = true;
++
++#if BUILDFLAG(ENABLE_CEF)
++  if (remote_browser::HandleInstallPrompt(
++          show_params_->GetInitiatingWebContents(), prompt_, done_callback_)) {
++    return;
++  }
++#endif
+ 
+   // Notify observers.
+   prompt_->OnDialogOpened();
+--- a/extensions/browser/api/webstore_private/webstore_private_api.cc
++++ b/extensions/browser/api/webstore_private/webstore_private_api.cc
+@@ -3,6 +3,11 @@
+ // found in the LICENSE file.
+ 
+ #include "extensions/browser/api/webstore_private/webstore_private_api.h"
++
++#include "cef/libcef/features/features.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/remote_browser_install_bridge.h"
++#endif
+ 
+ #include <stddef.h>
+ 
+@@ -1043,6 +1048,10 @@
+   // If we are enabling the launcher, we should not show the app list in order
+   // to train the user to open it themselves at least once.
+   approval->skip_post_install_ui = !!details().enable_launcher;
++#if BUILDFLAG(ENABLE_CEF)
++  approval->skip_post_install_ui |=
++      remote_browser::IsWindowless(GetSenderWebContents());
++#endif
+   approval->dummy_extension = dummy_extension_.get();
+   approval->installing_icon = gfx::ImageSkia::CreateFrom1xBitmap(icon_);
+   approval->bypassed_safebrowsing_friction = friction_dialog_shown_;
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -487,6 +487,7 @@
+     "//chrome/browser/ui/toolbar",
+   ]
+   deps = [
++    "//cef/libcef/features:buildflags",
+     "//base",
+     "//chrome/app:command_ids",
+     "//chrome/app/theme:chrome_unscaled_resources",
+--- a/extensions/browser/api/webstore_private/BUILD.gn
++++ b/extensions/browser/api/webstore_private/BUILD.gn
+@@ -27,6 +27,7 @@
+   ]
+ 
+   deps = [
++    "//cef/libcef/features:buildflags",
+     "//components/crx_file",
+     "//components/enterprise",
+     "//components/enterprise/browser/promotion:prefs",

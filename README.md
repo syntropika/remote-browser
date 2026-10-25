@@ -47,6 +47,15 @@ key. A key is for agents: the dashboard itself has no sign-in, only its address.
 one. An agent that releases a tab closes it, so your own tabs stay as you left them. The agent-facing contract is described in
 [skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
 
+## Extension installation (experimental)
+
+The native store-installation bridge requires a custom CEF build. Its
+[source integration and build instructions](src/engine/cef/README.md) route installation
+permissions to the dashboard while retaining Chromium's signed-package installer.
+The standard precompiled CEF distribution does not include this bridge, and its native
+Add to Chrome dialog is unsupported in windowless mode. Run the real-store acceptance
+suite against the custom distribution before treating this integration as ready.
+
 ## Checks
 
 ```sh

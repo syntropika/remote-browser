@@ -243,6 +243,8 @@ pub fn fault(
 }
 fn operation(value: &str) -> &'static str {
     match value {
+        "extension_installs" => "extension_installs",
+        "extension_install_decide" => "extension_install_decide",
         "browser_files" => "browser_files",
         "browser_upload" => "browser_upload",
         "browser_download" => "browser_download",
@@ -325,6 +327,7 @@ fn normal_level(op: &str) -> Level {
     if matches!(
         op,
         "navigate"
+            | "extension_install_decide"
             | "open"
             | "close"
             | "select"

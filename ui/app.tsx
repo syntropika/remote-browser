@@ -8,6 +8,7 @@ import { asyncHandler, background } from "./async-boundary.js";
 import { Chrome } from "./chrome.js";
 import { ClipboardDialog, HandoffDialog, MediaDialog, NewProfileDialog } from "./dialogs.js";
 import { Display } from "./display.js";
+import { ExtensionInstalls } from "./extensions.js";
 import { FilesPanel } from "./files.js";
 import { Icon } from "./icons.js";
 import type { Health, ManagedFile, Policy, Profile, Tab } from "./model.js";
@@ -611,6 +612,9 @@ export function App() {
         tabId={tabId}
       />
       <MediaDialog file={preview} onClose={() => setPreview(null)} profileId={profileId} />
+      {profileId && !dialog && !panel && !handoff && !preview ? (
+        <ExtensionInstalls key={profileId} onNotice={inform} profileId={profileId} />
+      ) : null}
       <HandoffDialog
         error={handoffError}
         isOpen={!!handoff}

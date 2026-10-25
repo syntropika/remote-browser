@@ -8,6 +8,8 @@
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use cef::args::Args;
+mod extension_installs;
+
 use cef::*;
 use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -531,6 +533,7 @@ impl Surfacing {
 }
 
 struct Engine {
+    installs: Option<extension_installs::InstallBridge>,
     tabs: Vec<Surfacing>,
     active: usize,
     next_tab: u32,
@@ -553,6 +556,9 @@ impl Engine {
     /// Closes one tab and forgets what it held. A caller has checked that it may go: the
     /// engine always keeps one.
     fn discard(&mut self, at: usize) {
+        if let Some(installs) = &self.installs {
+            installs.cancel(self.tabs[at].browser.identifier());
+        }
         if let Some(host) = self.tabs[at].browser.host() {
             host.close_browser(1);
         }
@@ -1189,6 +1195,49 @@ impl Engine {
         }
 
         match call.op.as_str() {
+            "extension_installs" => {
+                let Some(installs) = &self.installs else {
+                    return Ok(json!({"available": false, "requests": []}));
+                };
+                let mut requests = Vec::new();
+                for pending in installs.pending().map_err(|error| error.to_string())? {
+                    let Some(tab) = self
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.browser.identifier() == pending.browser_id)
+                    else {
+                        installs.cancel(pending.browser_id);
+                        continue;
+                    };
+                    requests.push(json!({
+                        "id": pending.id, "tabId": tab.id,
+                        "extensionId": pending.extension_id, "name": pending.name,
+                        "version": pending.version, "origin": pending.origin,
+                        "permissions": pending.permissions,
+                        "secondsRemaining": pending.seconds_remaining,
+                    }));
+                }
+                Ok(json!({"available": true, "requests": requests}))
+            }
+            "extension_install_decide" => {
+                if !call.human {
+                    return Err("Extension installation decisions require the dashboard".into());
+                }
+                let id = call.args["id"]
+                    .as_str()
+                    .ok_or("An installation request id is required")?;
+                let allow = call.args["allow"]
+                    .as_bool()
+                    .ok_or("An explicit installation decision is required")?;
+                let installs = self
+                    .installs
+                    .as_ref()
+                    .ok_or("This CEF build does not support extension installation decisions")?;
+                installs
+                    .decide(id, self.tabs[at].browser.identifier(), allow)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"decision": if allow { "accepted" } else { "cancelled" }}))
+            }
             "status" => Ok(json!({"owner": "agent", "uncertain": false})),
             "tabs" => {
                 // Reading a reservation prunes the expired ones, so the listing is built
@@ -1795,6 +1844,7 @@ fn main() {
     };
     let inbox = reader();
     let mut engine = Engine {
+        installs: extension_installs::InstallBridge::discover(),
         tabs: vec![first],
         active: 0,
         next_tab: 1,
@@ -1824,6 +1874,9 @@ fn main() {
             None if inbox.ended() => break,
             None => std::thread::sleep(Duration::from_millis(2)),
         }
+    }
+    if let Some(installs) = &engine.installs {
+        installs.cancel(0);
     }
     shutdown();
 }

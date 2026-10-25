@@ -184,6 +184,8 @@ impl Automation {
         if !matches!(
             op,
             "handoff_status"
+                | "extension_installs"
+                | "extension_install_decide"
                 | "handoff_ack"
                 | "handoff_cancel"
                 | "tabs"

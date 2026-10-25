@@ -15,6 +15,7 @@ uuid = { version = "1", features = ["v4"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.23.1"
 fs2 = "0.4"
+libloading = "0.9"
 
 [profile.dev]
 debug = 0
