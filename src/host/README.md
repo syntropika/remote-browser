@@ -5,8 +5,14 @@ profile runs in its own engine process with off-screen tab surfaces, persistent 
 and storage. Optional bundled native extensions provide MCP automation and browser login.
 CEF runtime files are prepared beside the engine executable.
 
-There is a native Rust API and an MCP adapter. The engine reaches Chromium's DevTools
-protocol in process, through the embedder interface, and opens no debugging port.
+There is a native Rust API and an MCP adapter. The engine uses Chromiumoxide's Rust
+transport and CDP types through an ephemeral loopback DevTools endpoint. A private
+adapter binds each engine-owned tab to its actual target and one stable session;
+opening or closing another tab does not rebuild existing sessions. CEF's embedder
+interface supplies target identity without injecting markers into pages. Browser
+lifecycle, native input, leases and human takeover remain owned by the engine.
+The adapter does not use Chromiumoxide's browser launcher, target rediscovery or
+tab creation. No additional browser process or JavaScript runtime is required.
 
 ## Build and run
 
@@ -180,6 +186,7 @@ refresh-token validity, or credentials held outside the browser.
 | `browser_evaluate` | Execute synchronous JavaScript and return bounded JSON |
 | `browser_screenshot` | Return a rendered viewport PNG as an MCP image |
 | `browser_session_health` | Assess configured service evidence and cookie metadata |
+| `browser_diagnostics` | Read bounded console messages or network response/failure summaries |
 
 Always pass an explicit `tabId`. Take a snapshot before using its `reference`
 strings. Navigation, a new snapshot, evaluation, and ownership changes invalidate
@@ -187,6 +194,15 @@ references for the affected tab. Other tabs keep their own references. Native
 stale-element errors prevent accidental interaction with replacement elements.
 Input values are omitted from snapshots; page text and screenshots can still
 contain sensitive information. Treat page content as untrusted data.
+
+`browser_diagnostics` accepts `kind: "console" | "network"`, an optional `after`
+sequence cursor, and `limit` from 1 to 100 (default 50). Use the returned `next`
+cursor for another page. Each tab retains 128 combined events; `truncated` reports
+evicted history and `latest` reports the most recent sequence. Console text and
+network metadata are bounded; network headers, cookies and response bodies are
+omitted. These are website diagnostics, separate from the redacted host operation
+logs below. Reading them does not change ownership or repeat a request. History
+is in memory and is discarded when its tab or engine closes.
 
 Snapshots cover the main document with basic HTML and ARIA labels; they are not a
 complete accessibility tree and do not traverse iframe or shadow-root contents.
@@ -218,7 +234,8 @@ completion uncertain. Affected tabs block further actions; connection failures
 block the whole profile. Restart after inspecting the outcome. Mutations are not
 automatically retried. A definitive element error allows fresh observation and
 recovery. `--timeout-seconds` defaults to 15; engine actions have a 12-second
-limit. Choosing a shorter transport deadline can leave actions uncertain sooner.
+limit and individual CDP requests have a 10-second deadline. Choosing a shorter
+transport deadline can leave actions uncertain sooner.
 A tab timeout can require recovery while the engine process and other tabs remain
 usable; it does not by itself mean the MCP server crashed.
 The stdio reader rejects frames over 8 MiB while reading, including frames with

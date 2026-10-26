@@ -9,6 +9,7 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use cef::args::Args;
 mod browser_lifecycle;
+mod cdp;
 mod extension_installs;
 mod extensions;
 mod operations;
@@ -24,7 +25,7 @@ use remote_browser_native::reservations::{ReservationInfo, Reservations};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{BufRead, Write};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -189,7 +190,6 @@ struct Shared {
     size: Mutex<(i32, i32)>,
     /// Counts frames, so an operation can wait for the page it asked for to be drawn.
     paints: AtomicU64,
-    results: Mutex<HashMap<i32, (bool, Vec<u8>)>>,
     url: Mutex<String>,
     title: Mutex<String>,
     /// Counts the pages this tab has been on, so a snapshot of an earlier one is known to
@@ -286,29 +286,6 @@ wrap_display_handler! {
     }
 }
 
-wrap_dev_tools_message_observer! {
-    struct Protocol {
-        shared: Arc<Shared>,
-    }
-
-    impl DevToolsMessageObserver {
-        fn on_dev_tools_method_result(
-            &self,
-            _browser: Option<&mut Browser>,
-            message_id: ::std::os::raw::c_int,
-            success: ::std::os::raw::c_int,
-            result: Option<&[u8]>,
-        ) {
-            let payload = result.map(<[u8]>::to_vec).unwrap_or_default();
-            self.shared
-                .results
-                .lock()
-                .unwrap()
-                .insert(message_id, (success != 0, payload));
-        }
-    }
-}
-
 wrap_app! {
     struct Offscreen;
 
@@ -318,16 +295,15 @@ wrap_app! {
             _process_type: Option<&CefString>,
             command_line: Option<&mut CommandLine>,
         ) {
-            // Every surface this engine paints is off screen, so Chromium is told to use
-            // no window system. Left to choose, it connects to the desktop of whoever
-            // started the engine, which it does not need and cannot rely on.
-            if let Some(command_line) = command_line
-                && command_line.has_switch(Some(&CefString::from("ozone-platform"))) != 1
-            {
-                command_line.append_switch_with_value(
-                    Some(&CefString::from("ozone-platform")),
-                    Some(&CefString::from("headless")),
-                );
+            if let Some(command_line) = command_line {
+                if command_line.has_switch(Some(&CefString::from("type"))) != 1 {
+                    command_line.append_switch_with_value(Some(&CefString::from("remote-debugging-port")), Some(&CefString::from("0")));
+                    command_line.append_switch_with_value(Some(&CefString::from("remote-debugging-address")), Some(&CefString::from("127.0.0.1")));
+                }
+                // Off-screen surfaces do not require a desktop window system.
+                if command_line.has_switch(Some(&CefString::from("ozone-platform"))) != 1 {
+                    command_line.append_switch_with_value(Some(&CefString::from("ozone-platform")), Some(&CefString::from("headless")));
+                }
             }
         }
     }
@@ -480,7 +456,7 @@ struct Surfacing {
     clicks: pointer::Clicks,
     /// Text the dashboard put on this profile's clipboard, waiting to be pasted.
     pasteboard: String,
-    _registration: Option<Registration>,
+    target: String,
 }
 
 impl Surfacing {
@@ -516,10 +492,7 @@ impl Surfacing {
             host.was_resized();
             host.set_focus(1);
         }
-        let registration = browser.host().and_then(|host| {
-            let mut observer = Protocol::new(shared.clone());
-            host.add_dev_tools_message_observer(Some(&mut observer))
-        });
+        let target = cdp::identify(&browser).ok()?;
         Some(Self {
             id,
             browser,
@@ -530,7 +503,7 @@ impl Surfacing {
             pointer: (size.0 / 2, size.1 / 2),
             clicks: pointer::Clicks::default(),
             pasteboard: String::new(),
-            _registration: registration,
+            target,
         })
     }
 
@@ -555,13 +528,13 @@ impl Surfacing {
 }
 
 struct Engine {
+    cdp: cdp::Adapter,
     installs: Option<extension_installs::InstallBridge>,
     extensions: Option<extensions::Manager>,
     browsers: browser_lifecycle::Browsers,
     tabs: Vec<Surfacing>,
     active: usize,
     next_tab: u32,
-    next_message: i32,
     /// The profile's file workspace: what a page may upload and what it downloaded.
     files: Option<Files>,
     /// Which client is working on which tab, and until when.
@@ -581,6 +554,7 @@ impl Engine {
     /// Closes one tab and forgets what it held. A caller has checked that it may go: the
     /// engine always keeps one.
     fn discard(&mut self, at: usize) {
+        self.cdp.forget(&self.tabs[at].id);
         if let Some(installs) = &self.installs {
             installs.cancel(self.tabs[at].browser.identifier());
         }
@@ -674,6 +648,12 @@ impl Engine {
             .map(|files| files.root().join("downloads"));
         let tab = Surfacing::open(id.clone(), self.surface, downloads, self.browsers.clone())
             .ok_or("the tab could not be created")?;
+        if let Err(error) = self.cdp.bind(&id, &tab.target) {
+            if let Some(host) = tab.browser.host() {
+                host.close_browser(1);
+            }
+            return Err(error);
+        }
         let painted = tab.shared.clone();
         self.tabs.push(tab);
         // A browser paints its first frame a moment after it exists, and until it does its
@@ -683,32 +663,9 @@ impl Engine {
         Ok(Value::String(id))
     }
 
-    /// Sends one DevTools method to a tab and waits for the result that carries its id.
+    /// Use the stable Chromiumoxide session for this engine-owned tab.
     fn protocol(&mut self, at: usize, method: &str, params: Value) -> Result<Value, String> {
-        let host = self.tabs[at].browser.host().ok_or("the tab has no host")?;
-        self.next_message += 1;
-        let id = self.next_message;
-        let message = json!({"id": id, "method": method, "params": params});
-        let bytes = serde_json::to_vec(&message).map_err(|error| error.to_string())?;
-        if host.send_dev_tools_message(Some(&bytes)) != 1 {
-            return Err("the tab refused the protocol message".into());
-        }
-        let shared = self.tabs[at].shared.clone();
-        let arrived = pump_until(|| shared.results.lock().unwrap().contains_key(&id));
-        let Some((success, payload)) = shared.results.lock().unwrap().remove(&id) else {
-            return Err(if arrived {
-                "the result was lost"
-            } else {
-                "uncertain"
-            }
-            .into());
-        };
-        let result: Value = serde_json::from_slice(&payload).unwrap_or(Value::Null);
-        if success {
-            Ok(result)
-        } else {
-            Err(result.to_string())
-        }
+        self.cdp.execute(&self.tabs[at].id, method, params)
     }
 
     fn navigate(&mut self, at: usize, url: &str, id: u64) -> Result<Value, String> {
@@ -1183,6 +1140,7 @@ impl Engine {
         let acts = matches!(
             call.op.as_str(),
             "navigate"
+                | "cdp"
                 | "evaluate"
                 | "input"
                 | "reload"
@@ -1231,6 +1189,14 @@ impl Engine {
         }
 
         match call.op.as_str() {
+            "diagnostics" => {
+                let kind = call.args["kind"]
+                    .as_str()
+                    .ok_or("diagnostics needs a kind")?;
+                let after = call.args["after"].as_u64().unwrap_or(0);
+                let limit = call.args["limit"].as_u64().unwrap_or(50).clamp(1, 100) as usize;
+                self.cdp.events(&self.tabs[at].id, kind, after, limit)
+            }
             "extensions" => match &self.extensions {
                 Some(manager) => {
                     manager.request(self.tabs[at].browser.identifier(), json!({"op": "list"}))
@@ -1820,7 +1786,12 @@ fn claim(profile_root: &str) -> std::io::Result<std::fs::File> {
         .truncate(false)
         .open(directory.join("engine.lock"))?;
     lock.try_lock_exclusive()?;
-    for leftover in ["SingletonLock", "SingletonCookie", "SingletonSocket"] {
+    for leftover in [
+        "SingletonLock",
+        "SingletonCookie",
+        "SingletonSocket",
+        "DevToolsActivePort",
+    ] {
         let path = directory.join(leftover);
         if std::fs::symlink_metadata(&path).is_ok() {
             std::fs::remove_file(&path)?;
@@ -1918,22 +1889,40 @@ fn main() {
         None => None,
     };
     let downloads = files.as_ref().map(|files| files.root().join("downloads"));
+    let cdp = match cdp::Adapter::start(std::path::Path::new(&profile_root)) {
+        Ok(cdp) => cdp,
+        Err(error) => {
+            eprintln!("CDP startup failed: {error}");
+            shutdown();
+            std::process::exit(1);
+        }
+    };
     let browsers = browser_lifecycle::Browsers::default();
     let Some(first) = Surfacing::open("tab-1".to_string(), VIEWPORT, downloads, browsers.clone())
     else {
         eprintln!("the first tab could not be created");
+        drop(cdp);
         shutdown();
         std::process::exit(1);
     };
+    if let Err(error) = cdp.bind(&first.id, &first.target) {
+        eprintln!("CDP tab binding failed: {error}");
+        drop(cdp);
+        browsers.close_all();
+        drop(first);
+        pump_within(Duration::from_secs(8), || browsers.all_closed());
+        shutdown();
+        std::process::exit(1);
+    }
     let inbox = reader();
     let mut engine = Engine {
+        cdp,
         installs: extension_installs::InstallBridge::discover(),
         extensions: extensions::Manager::discover(),
         browsers: browsers.clone(),
         tabs: vec![first],
         active: 0,
         next_tab: 1,
-        next_message: 0,
         files,
         reservations: Reservations::default(),
         next_snapshot: 0,

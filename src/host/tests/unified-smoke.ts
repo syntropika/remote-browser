@@ -20,7 +20,7 @@ export async function run(engine: string, host: string) {
       try {
         const { client } = runtime;
         const dash = runtime.dashboard;
-        assert.equal((await client.request("tools/list", {})).tools.length, 16);
+        assert.equal((await client.request("tools/list", {})).tools.length, 17);
         assert((await dash.api("/api/profiles")).data.profiles.length);
         await dash.api("/api/profiles", undefined, 403, "https://foreign.example");
         const a = (await client.call("browser_tabs", { action: "open" })).tabId;

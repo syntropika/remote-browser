@@ -21,7 +21,7 @@ export async function run(engine: string, host: string) {
       await http.request("initialize", INIT, 401, { authorized: false });
       await http.request("initialize", INIT, 403, { origin: "https://foreign.example" });
       assert((await http.request("initialize", INIT)).result);
-      assert.equal((await http.request("tools/list", {})).result.tools.length, 16);
+      assert.equal((await http.request("tools/list", {})).result.tools.length, 17);
       const tab = (await client.call("browser_tabs", { action: "open" })).tabId;
       assert(
         (await http.call("browser_tabs", { action: "list" })).tabs.some((t: any) => t.id === tab),

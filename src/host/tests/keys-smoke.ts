@@ -48,7 +48,7 @@ export async function run(engine: string, host: string) {
       assert.equal(created.key.name, "Work laptop");
       const active = new Http(runtime.url, secret);
       await active.request("initialize", INIT);
-      assert.equal((await active.request("tools/list", {})).result.tools.length, 16);
+      assert.equal((await active.request("tools/list", {})).result.tools.length, 17);
       const profile = (await owner.api("/api/profiles", { name: "Restricted profile" })).data.id;
       const limited = (
         await owner.api("/api/keys", { name: "Restricted key", profileIds: [profile] }, 201)

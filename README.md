@@ -7,6 +7,7 @@ accounts over MCP.
 - Watch the live page, take control to browse or sign in, then hand the tab back.
 - Keep each session's cookies and sign-ins in its own profile, across restarts.
 - Let an agent read compact page snapshots and click, type, scroll and upload.
+- Read bounded console messages and network response or failure summaries through MCP.
 - Save screenshots, record the session, and manage uploads and downloads per session.
 - Copy and paste between your machine and the page.
 - Give every MCP client its own API key, scoped to the sessions it may use.

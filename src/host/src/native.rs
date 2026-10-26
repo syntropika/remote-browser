@@ -108,6 +108,7 @@ fn observation(op: &str) -> bool {
     matches!(
         op,
         "status"
+            | "diagnostics"
             | "extensions"
             | "extension_installs"
             | "tabs"

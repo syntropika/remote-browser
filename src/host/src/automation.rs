@@ -336,6 +336,28 @@ impl Automation {
             .request("evaluate", Some(tab), json!({"script":script}), false)
             .await
     }
+    /// Read bounded console or network summaries from the same engine-owned tab.
+    pub async fn diagnostics(
+        &self,
+        tab: &str,
+        kind: &str,
+        after: u64,
+        limit: usize,
+    ) -> Result<Value> {
+        if !matches!(kind, "console" | "network") || !(1..=100).contains(&limit) {
+            return Err(Error::Invalid(
+                "Use console or network diagnostics with a limit from 1 to 100".into(),
+            ));
+        }
+        self.0
+            .request(
+                "diagnostics",
+                Some(tab),
+                json!({"kind":kind,"after":after,"limit":limit}),
+                false,
+            )
+            .await
+    }
     pub async fn session_health(&self, tab: &str, policy: &HealthPolicy) -> Result<SessionHealth> {
         Ok(serde_json::from_value(
             self.0

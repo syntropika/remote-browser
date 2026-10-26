@@ -17,7 +17,11 @@ The CEF engine currently starts with its OS sandbox disabled. Separate engine pr
 are a failure boundary, not a security boundary against hostile websites. Use a dedicated
 operating-system account or an external isolation boundary appropriate to your deployment.
 Keep the host and the pinned CEF runtime updated together, and verify runtime checksums.
-The engine uses Chromium's embedder interface without opening a debugging listener.
+The engine uses an ephemeral loopback DevTools listener for its native Chromiumoxide
+adapter. It is not forwarded through the dashboard or exposed as a public MCP tool.
+Direct local CDP access bypasses API keys, tab leases and human takeover, so other
+processes on the same machine are part of the trusted execution environment. Do not
+publish or proxy that listener to untrusted clients.
 
 ## Reporting a vulnerability
 
