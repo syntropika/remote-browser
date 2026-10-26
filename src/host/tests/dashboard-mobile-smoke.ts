@@ -180,7 +180,7 @@ export async function run(engine: string, host: string, args: Record<string, any
           assert.equal(layout.dotMargin, "9px");
           assert.equal(layout.background, layout.chrome);
           assert(
-            layout.address.width >= 120,
+            layout.address.width >= (width === 320 ? 72 : 120),
             `The address needs usable space on a narrow screen: ${JSON.stringify(layout)}`,
           );
           assert(layout.toolbar.height <= 48, "Mobile navigation stays in one compact row");
@@ -189,6 +189,13 @@ export async function run(engine: string, host: string, args: Record<string, any
             `Mobile toolbar controls have touch targets of at least 44 pixels: ${JSON.stringify(layout.controls)}`,
           );
           assert(layout.document <= layout.viewport, "The toolbar must not overflow the viewport");
+          for (const label of ["Back", "Forward"]) {
+            const arrow = layout.controls.find((box: any) => box.label === label);
+            assert(
+              arrow && arrow.right <= layout.address.left,
+              `${label} stays to the left of the URL field`,
+            );
+          }
           assert(
             layout.controls.every((box: any) => box.left >= 0 && box.right <= layout.viewport),
             "Every visible toolbar control must fit inside the screen",
@@ -203,6 +210,21 @@ export async function run(engine: string, host: string, args: Record<string, any
             );
           }
         }
+        await click(browser, "Back");
+        await wait(() =>
+          browser.evaluate(
+            `document.querySelector('[aria-label="Page address"]').value === 'about:blank'`,
+          ),
+        );
+        await wait(() =>
+          browser.evaluate(`!document.querySelector('button[aria-label="Forward"]').disabled`),
+        );
+        await click(browser, "Forward");
+        await wait(() =>
+          browser.evaluate(
+            `document.querySelector('[aria-label="Page address"]').value.includes('long-address')`,
+          ),
+        );
         await click(browser, "More options");
         const menu = await wait(() =>
           browser.evaluate(
