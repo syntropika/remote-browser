@@ -25,6 +25,7 @@ const local = [
   "release",
   "shutdown",
   "surface",
+  "display-control",
   "label-activation",
   "user-activation",
   "webgl",
@@ -35,6 +36,7 @@ const optional = [
   "dashboard-pointer",
   "dashboard-dialog",
   "dashboard-mobile",
+  "dashboard-viewers",
 ];
 const { values } = parseArgs({
   options: {
@@ -82,6 +84,7 @@ if (values.list) {
     "dashboard-pointer",
     "dashboard-dialog",
     "dashboard-mobile",
+    "dashboard-viewers",
   ]);
   if (suites.some((suite) => hostSuites.has(suite)) && !host) {
     throw new Error("Pass --host-binary or REMOTE_BROWSER_HOST_BINARY for host suites");

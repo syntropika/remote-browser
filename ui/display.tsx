@@ -1,8 +1,9 @@
 /** The page itself: frames the engine paints, and the input a person sends back. */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { action, failure } from "./api.js";
+import { action, displayId, failure } from "./api.js";
 import { background } from "./async-boundary.js";
+import { displayScale } from "./display-session.js";
 import { Icon } from "./icons.js";
 import type { Frame } from "./model.js";
 import { readFrame } from "./model.js";
@@ -24,6 +25,8 @@ type Props = {
   tabId: string;
   /** Whether input reaches the page. A tab an agent holds only shows its frames. */
   interactive: boolean;
+  controls: boolean;
+  visible: boolean;
   epoch: number;
   onNotice: (message: string) => void;
   onReady: (ready: boolean) => void;
@@ -53,6 +56,8 @@ export function Display({
   profileId,
   tabId,
   interactive,
+  controls,
+  visible,
   epoch,
   onNotice,
   onReady,
@@ -108,7 +113,7 @@ export function Display({
   // Frames. The engine holds each request until the page moves, so a change reaches the
   // display as soon as it is painted, and an unchanged page costs one reply.
   useEffect(() => {
-    if (!tabId) {
+    if (!tabId || !visible) {
       return;
     }
     let watching = true;
@@ -139,8 +144,7 @@ export function Display({
         // a session switch corrects what the previous engine was painting.
         surface.current = { width: frame.viewWidth, height: frame.viewHeight };
         sized.current = true;
-        target.style.width = `${frame.viewWidth}px`;
-        target.style.height = `${frame.viewHeight}px`;
+        target.style.aspectRatio = `${frame.viewWidth} / ${frame.viewHeight}`;
         if (resized) {
           target.width = frame.surfaceWidth;
           target.height = frame.surfaceHeight;
@@ -197,13 +201,13 @@ export function Display({
     return () => {
       watching = false;
     };
-  }, [tabId, profileId, epoch, onNotice, onReady, onSurface]);
+  }, [tabId, profileId, epoch, visible, onNotice, onReady, onSurface]);
 
   // The engine renders the surface the chrome leaves for the page, so a wide window shows
   // a wide page rather than a small one stretched to fit.
   useEffect(() => {
     const box = viewport.current;
-    if (!box || !tabId) {
+    if (!box || !tabId || !controls || !visible) {
       return;
     }
     let timer = 0;
@@ -224,7 +228,7 @@ export function Display({
         height,
         screenWidth: window.screen.width,
         screenHeight: window.screen.height,
-        deviceScaleFactor: window.devicePixelRatio || 1,
+        deviceScaleFactor: displayScale(width, height, window.devicePixelRatio),
         mobile: pointer.matches && hover.matches,
       };
       const measured = JSON.stringify(metrics);
@@ -281,7 +285,7 @@ export function Display({
       pointer.removeEventListener("change", schedule);
       hover.removeEventListener("change", schedule);
     };
-  }, [tabId, profileId, epoch, onNotice]);
+  }, [tabId, profileId, epoch, controls, visible, onNotice]);
 
   // Wheel and touch listeners are registered here because a page scrolled with the wheel
   // must not also scroll the dashboard, and React's own listeners cannot prevent that.
@@ -424,7 +428,7 @@ export function Display({
     }
     canvas.current?.focus({ preventScroll: true });
     if (!interactive) {
-      onNotice("Wait for the page, or take control if this tab is reserved.");
+      onNotice("Wait for the page, or take control to interact from this screen.");
       return;
     }
     if (!sized.current) {
@@ -511,13 +515,18 @@ export function Display({
   };
 
   return (
-    <div className="bg-page relative flex size-full overflow-hidden" ref={viewport}>
+    <div
+      className="bg-page relative flex size-full items-start justify-center overflow-hidden"
+      data-display-id={displayId}
+      ref={viewport}
+    >
       <canvas
         aria-label="Browser page"
         // A frame keeps the size it was painted at: stretched to its box it would scale
         // the page for as long as a new surface takes to arrive, which reads as the page
         // changing resolution.
-        className="block max-w-none flex-none touch-none self-start bg-white outline-none"
+        className="block max-h-full max-w-full flex-none touch-none self-start bg-white outline-none"
+        style={{ width: "auto", height: "auto", objectFit: "contain" }}
         height={768}
         onClick={onClick}
         onKeyDown={onKeyDown}

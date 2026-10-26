@@ -11,6 +11,7 @@ use cef::args::Args;
 mod agent_actions;
 mod browser_lifecycle;
 mod cdp;
+mod display;
 mod extension_installs;
 mod extensions;
 mod operations;
@@ -151,7 +152,7 @@ struct Painted {
 }
 
 /// A rectangle of the surface, in the pixels the page is painted at.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Patch {
     x: i32,
     y: i32,
@@ -192,10 +193,18 @@ impl Patch {
 /// this is sent the whole surface instead.
 const REMEMBERED_CHANGES: usize = 48;
 
+struct EncodedCapture {
+    seq: u64,
+    patch: Patch,
+    png: Vec<u8>,
+}
+
 /// What the handlers CEF owns hand back to the loop that serves operations.
 #[derive(Default)]
 struct Shared {
     painted: Mutex<Painted>,
+    /// Viewers requesting the same painted rectangle share its PNG encoding.
+    encoded: Mutex<Option<EncodedCapture>>,
     /// The surface the dashboard asked for, which the render handler reports to CEF.
     size: Mutex<Viewport>,
     /// Counts frames, so an operation can wait for the page it asked for to be drawn.
@@ -485,6 +494,7 @@ struct Surfacing {
     dialog: Rc<RefCell<Option<agent_actions::PendingDialog>>>,
     /// A tab a person took; agent operations on it are refused until they hand it back.
     human: bool,
+    displays: display::Displays,
     pointer: (i32, i32),
     clicks: pointer::Clicks,
     /// Text the dashboard put on this profile's clipboard, waiting to be pasted.
@@ -541,6 +551,7 @@ impl Surfacing {
             picker,
             dialog,
             human: false,
+            displays: display::Displays::default(),
             pointer: (size.width / 2, size.height / 2),
             clicks: pointer::Clicks::default(),
             pasteboard: String::new(),
@@ -563,6 +574,8 @@ impl Surfacing {
             "url": brief(&self.shared.url.lock().unwrap()),
             "title": brief(&self.shared.title.lock().unwrap()),
             "reservation": reservation,
+            "displayController": self.displays.controller(),
+            "viewers": self.displays.count(),
             "busy": busy,
         })
     }
@@ -582,9 +595,6 @@ struct Engine {
     reservations: Reservations,
     /// Counts snapshots, so a reference from an earlier one is recognised as stale.
     next_snapshot: u64,
-    /// The display the dashboard last measured. Every tab renders at this size, so a tab
-    /// opened later is the same shape as the one it was opened from.
-    surface: Viewport,
     /// The calls waiting to be served, so work that can yield sees one coming.
     inbox: Arc<Inbox>,
     navigations: Vec<Navigation>,
@@ -674,7 +684,8 @@ impl Engine {
             .files
             .as_ref()
             .map(|files| files.root().join("downloads"));
-        let tab = Surfacing::open(id.clone(), self.surface, downloads, self.browsers.clone())
+        let size = *self.tabs[self.active].shared.size.lock().unwrap();
+        let tab = Surfacing::open(id.clone(), size, downloads, self.browsers.clone())
             .ok_or("the tab could not be created")?;
         if let Err(error) = self.cdp.bind(&id, &tab.target) {
             if let Some(host) = tab.browser.host() {
@@ -684,7 +695,7 @@ impl Engine {
         }
         let painted = tab.shared.clone();
         self.tabs.push(tab);
-        if self.surface != Viewport::default() {
+        if size != Viewport::default() {
             let at = self.tabs.len() - 1;
             if let Err(error) = self.apply_viewport(at) {
                 self.discard(at);
@@ -797,6 +808,12 @@ impl Engine {
             })
             .filter(|moved| moved.area() * 5 < whole.area() * 3 && moved.area() > 0)
             .unwrap_or(whole);
+        if let Some(cached) = self.tabs[at].shared.encoded.lock().unwrap().as_ref()
+            && cached.seq == seq
+            && cached.patch == moved
+        {
+            return Ok((seq, moved, cached.png.clone()));
+        }
         // CEF paints BGRA. PNG wants RGB, and a page surface is opaque, so the alpha is a
         // quarter of the bytes to compress for nothing. Fast compression keeps a loopback
         // display at a frame rate a person reads as movement rather than as steps.
@@ -829,6 +846,11 @@ impl Engine {
                 image::ExtendedColorType::Rgb8,
             )
             .map_err(|error| error.to_string())?;
+        *self.tabs[at].shared.encoded.lock().unwrap() = Some(EncodedCapture {
+            seq,
+            patch: moved,
+            png: png.clone(),
+        });
         Ok((seq, moved, png))
     }
 
@@ -1207,6 +1229,8 @@ impl Engine {
                 | "upload"
                 | "download"
                 | "choose_files"
+                | "return"
+                | "clipboard_cut"
         );
         if (acts || call.op == "release")
             && !matches!(call.op.as_str(), "agent_dialog" | "js_dialog")
@@ -1221,6 +1245,12 @@ impl Engine {
             let tab = self.tabs[at].id.clone();
             let taken = self.tabs[at].human;
             if call.human {
+                if !self.tabs[at]
+                    .displays
+                    .allows(call.args["displayId"].as_str())
+                {
+                    return Err("Another screen controls this tab; take control first".into());
+                }
                 // A tab an agent reserved stays the agent's until the person takes it,
                 // which is what the dashboard's control button is for.
                 if !taken && self.reservations.info(&tab).is_some() {
@@ -1426,10 +1456,12 @@ impl Engine {
                 self.reservations.remove(&self.tabs[at].id);
                 self.release(at);
                 self.tabs[at].human = true;
+                self.tabs[at].displays.take(call.args["displayId"].as_str());
                 Ok(Value::Null)
             }
             "return" => {
                 self.tabs[at].human = false;
+                self.tabs[at].displays.take(None);
                 Ok(Value::Null)
             }
             "navigate" => {
@@ -1615,24 +1647,48 @@ impl Engine {
                 }
                 Ok(Value::Null)
             }
-            // The surface follows the dashboard's display, so a wide window is rendered
-            // wide rather than stretched from a fixed one.
+            "display" => {
+                if !call.human {
+                    return Err("Display presence requires the dashboard".into());
+                }
+                let id = call.args["displayId"]
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.len() <= 128)
+                    .ok_or("A display ID is required")?;
+                let available = self.reservations.info(&self.tabs[at].id).is_none();
+                if call.args["leave"].as_bool() == Some(true) {
+                    self.tabs[at].displays.leave(id);
+                } else {
+                    self.tabs[at].displays.observe(
+                        id,
+                        call.args["visible"].as_bool() == Some(true),
+                        available,
+                    );
+                }
+                Ok(
+                    json!({"controller":self.tabs[at].displays.controller() == Some(id),"viewers":self.tabs[at].displays.count()}),
+                )
+            }
+            // Only this tab's controlling screen can change its rendering metrics.
             "resize" => {
-                let view = self.surface.resize(&call.args);
-                // A window is one shape for every tab in it, including the ones opened
-                // after it was measured.
-                self.surface = view;
-                for tab in &self.tabs {
+                let tab = &self.tabs[at];
+                if !call.human
+                    || (!tab.human && self.reservations.info(&tab.id).is_some())
+                    || !tab.displays.allows(call.args["displayId"].as_str())
+                {
+                    return Err("Take control of this tab before resizing it".into());
+                }
+                let current = *tab.shared.size.lock().unwrap();
+                let view = current.resize(&call.args);
+                if view != current {
                     *tab.shared.size.lock().unwrap() = view;
                     if let Some(host) = tab.browser.host() {
                         host.notify_screen_info_changed();
                         host.was_resized();
                     }
+                    self.apply_viewport(at)?;
+                    pump_for(SETTLE);
                 }
-                for index in 0..self.tabs.len() {
-                    self.apply_viewport(index)?;
-                }
-                pump_for(SETTLE);
                 Ok(view.device_metrics())
             }
             "health" => self.session_health(at, &call.args),
@@ -2001,7 +2057,6 @@ fn main() {
         files,
         reservations: Reservations::default(),
         next_snapshot: 0,
-        surface: VIEWPORT,
         inbox: inbox.clone(),
         navigations: Vec::new(),
     };

@@ -287,7 +287,7 @@ impl Engine {
                 let size = &layout["cssContentSize"];
                 let w = size["width"].as_f64().unwrap_or(0.);
                 let h = size["height"].as_f64().unwrap_or(0.);
-                let scale = f64::from(self.surface.scale);
+                let scale = f64::from(self.tabs[at].shared.size.lock().unwrap().scale);
                 let pixels_w = (w * scale).ceil();
                 let pixels_h = (h * scale).ceil();
                 if w <= 0.

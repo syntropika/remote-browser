@@ -262,14 +262,27 @@ Snapshots cover the main document with basic HTML and ARIA labels; they are not 
 complete accessibility tree and do not traverse iframe or shadow-root contents.
 The React dashboard paints engine frames onto a canvas and resizes the engine surface to
 match the available display. It sends CSS viewport dimensions, screen dimensions, pixel
-density, and whether the primary input is touch without hover. The engine applies these
-metrics to the profile's tabs, including newly opened tabs. Mobile mode enables Chromium's
-mobile viewport, touch capabilities, mobile user agent and client hints; switching to a
-desktop restores its defaults. Server-selected website variants take effect on the next
-navigation or reload, without automatically reloading pages or discarding form input.
-Native painting uses the requested density up to a factor of four and a 32-million-pixel
-surface budget. Frame metadata separates backing pixels from CSS coordinates so input
-still lands correctly on high-density displays. The engine disables the
+density, and whether the primary input is touch without hover. Each tab keeps independent
+metrics; a new tab initially inherits the selected tab's size. Mobile mode enables Chromium's
+mobile viewport and touch capabilities. User agents and client hints remain native to the
+profile across display changes. Sites choosing variants exclusively from the user agent
+may therefore retain their desktop variant.
+
+One dashboard screen controls each tab's size and input. Other screens show the same image,
+scaled without cropping, until the person chooses **Ask for control**. Taking control also
+revokes any agent reservation. Viewing an agent's tab cannot resize it or release its lease.
+Hidden screens stop requesting frames and retain their controller identity; leaving the tab
+or closing the dashboard releases display control. Abandoned visible viewers expire after
+15 seconds, independently of agent reservations, which never expire automatically.
+The internal dashboard action API attaches a per-page `displayId` to human operations.
+The `display` action reports presence (`visible`) or departure (`leave`); once a controller
+exists, other display IDs and anonymous human mutations are refused until explicit takeover.
+
+Live rendering caps density at two and targets at most two million backing pixels, with
+a minimum density of one. Explicit native metrics remain bounded by a factor of four and
+32 million pixels. Viewers requesting the same painted rectangle share its PNG encoding.
+Frame metadata separates backing pixels from CSS coordinates so input still lands correctly
+on high-density displays. The engine disables the
 `AutomationControlled` Blink feature by default while retaining its private CDP connection.
 Frame sequence numbers allow unchanged replies and partial
 PNG updates. Mouse, keyboard, wheel and touch input use the host action API. Touch devices

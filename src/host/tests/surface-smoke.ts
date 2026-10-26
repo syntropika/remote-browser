@@ -83,7 +83,7 @@ export async function run(binary: string) {
         screenHeight: 844,
         ratio: 3,
         webdriver: false,
-        mobile: true,
+        mobile: false,
         touch: true,
       });
       const phoneFrame = await wait(
@@ -110,7 +110,7 @@ export async function run(binary: string) {
       assert.equal(
         await engine.call("evaluate", opened, {
           script:
-            "return navigator.userAgent.includes('Mobile') && navigator.userAgentData.mobile && devicePixelRatio === 3;",
+            "return !navigator.userAgent.includes('Mobile') && !navigator.userAgentData.mobile && devicePixelRatio === 3;",
         }),
         true,
       );
@@ -132,7 +132,7 @@ export async function run(binary: string) {
           script:
             "return {width:innerWidth,height:innerHeight,screenWidth:screen.width,screenHeight:screen.height,angle:screen.orientation.angle,mobile:navigator.userAgentData.mobile};",
         }),
-        { width: 844, height: 292, screenWidth: 844, screenHeight: 390, angle: 90, mobile: true },
+        { width: 844, height: 292, screenWidth: 844, screenHeight: 390, angle: 90, mobile: false },
       );
       await engine.call(
         "resize",
@@ -147,7 +147,7 @@ export async function run(binary: string) {
         },
         { human: true },
       );
-      for (const target of [tab, opened]) {
+      for (const target of [tab]) {
         const desktop = await engine.call("evaluate", target, {
           script:
             "return {width:innerWidth,screenWidth:screen.width,ratio:devicePixelRatio,mobile:navigator.userAgentData.mobile,touch:navigator.maxTouchPoints};",
@@ -160,6 +160,14 @@ export async function run(binary: string) {
           touch: 0,
         });
       }
+      assert.deepEqual(
+        await engine.call("evaluate", opened, {
+          script:
+            "return {width:innerWidth,ratio:devicePixelRatio,touch:navigator.maxTouchPoints>0};",
+        }),
+        { width: 390, ratio: 3, touch: true },
+        "A resize must leave other tabs unchanged",
+      );
     });
   } finally {
     release();

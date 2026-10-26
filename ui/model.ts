@@ -32,6 +32,7 @@ export type Tab = {
   owner: "human" | "agent";
   busy: boolean;
   uncertain: boolean;
+  displayController: string | null;
 };
 
 export type Policy = {
@@ -111,6 +112,7 @@ export function readTab(value: unknown): Tab {
     owner: tab.owner === "human" ? "human" : "agent",
     busy: flag(tab.busy),
     uncertain: flag(tab.uncertain),
+    displayController: optionalText(tab.displayController),
   };
 }
 

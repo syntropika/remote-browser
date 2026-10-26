@@ -26,11 +26,19 @@ async function click(browser: Browser, label: string) {
 }
 
 async function item(browser: Browser, label: string) {
-  const point = await wait(() =>
-    browser.evaluate(
+  let previous: number[] | null = null;
+  const point = await wait(async () => {
+    const current = await browser.evaluate(
       `(() => {const node=Array.from(document.querySelectorAll('[role=menuitem]')).find(node=>node.textContent.trim()===${JSON.stringify(label)});if(!node)return null;const r=node.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];})()`,
-    ),
-  );
+    );
+    const before = previous;
+    const stable =
+      current &&
+      before &&
+      current.every((value: number, index: number) => Math.abs(value - before[index]) < 0.5);
+    previous = current;
+    return stable ? current : null;
+  });
   await browser.mouse("mousePressed", point[0], point[1], 1);
   await browser.mouse("mouseReleased", point[0], point[1]);
 }
@@ -98,8 +106,10 @@ export async function run(engine: string, host: string, args: Record<string, any
             screenHeight: 844,
           });
           await waitForDisplay(browser);
-          await runtime.dashboard.action("reload", tab);
-          assert(mobileRequested, "Navigation from a phone must request the mobile website");
+          await browser.evaluate(
+            `fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profileId:"default",op:"reload",tabId:${JSON.stringify(tab)},args:{displayId:document.querySelector("[data-display-id]").dataset.displayId}})}).then(r=>{if(!r.ok)throw Error("Reload failed");return r.json()})`,
+          );
+          assert(!mobileRequested, "Resizing must preserve the profile browser identity");
           const reservation = await runtime.client.call("browser_tabs", {
             action: "reserve",
             tabId: tab,
@@ -135,8 +145,8 @@ export async function run(engine: string, host: string, args: Record<string, any
             height: display.height,
             screenWidth: width,
             screenHeight: 844,
-            ratio: 3,
-            mobile: true,
+            ratio: 2,
+            mobile: false,
             touch: true,
           });
           const backing = await browser.evaluate(
@@ -144,8 +154,8 @@ export async function run(engine: string, host: string, args: Record<string, any
           );
           assert.equal(
             backing.width,
-            width * 3,
-            "The canvas paints at the phone pixel density without changing its CSS width",
+            width * 2,
+            "Live rendering bounds phone density without changing its CSS width",
           );
           await wait(() =>
             browser.evaluate("!document.querySelector('[aria-label=\"Page address\"]').disabled"),
@@ -351,7 +361,9 @@ export async function run(engine: string, host: string, args: Record<string, any
         });
         await browser.call("Emulation.setTouchEmulationEnabled", { enabled: false });
         await waitForDisplay(browser);
-        await runtime.dashboard.action("reload", tab);
+        await browser.evaluate(
+          `fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profileId:"default",op:"reload",tabId:${JSON.stringify(tab)},args:{displayId:document.querySelector("[data-display-id]").dataset.displayId}})}).then(r=>{if(!r.ok)throw Error("Reload failed");return r.json()})`,
+        );
         assert(!mobileRequested, "Returning to a desktop must restore desktop website requests");
         const address = await browser.evaluate(
           "(() => {const r=document.querySelector('form[aria-label=\"Open a website\"]').getBoundingClientRect();return {center:r.left+r.width/2,viewport:innerWidth/2};})()",

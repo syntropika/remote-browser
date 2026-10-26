@@ -10,6 +10,7 @@ type Props = {
   profileId: string;
   tab: Tab | undefined;
   interactive: boolean;
+  controls: boolean;
   recording: boolean;
   onProfile: (id: string) => void;
   onHistory: (op: "back" | "forward" | "reload") => void;
@@ -23,6 +24,7 @@ export function BrowserMenu({
   profileId,
   tab,
   interactive,
+  controls,
   recording,
   onProfile,
   onHistory,
@@ -32,7 +34,7 @@ export function BrowserMenu({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<"main" | "sessions" | "capture">("main");
-  const human = tab?.owner === "human";
+  const human = controls && tab?.owner === "human";
   const dispatch = (key: string) => {
     if (key === "main" || key === "sessions" || key === "capture") {
       return;
@@ -41,10 +43,12 @@ export function BrowserMenu({
       onProfile(key.slice(8));
     } else if (key === "back" || key === "forward" || key === "reload") {
       onHistory(key);
-    } else if (key === "take-control") {
-      onTake();
-    } else if (key === "return-control") {
-      onReturn();
+    } else if (key === "control") {
+      if (human) {
+        onReturn();
+      } else {
+        onTake();
+      }
     } else {
       onMenu(key);
     }
@@ -117,7 +121,7 @@ export function BrowserMenu({
                   <Icon name="forward" className="ml-auto size-4" />
                 </Dropdown.Item>
                 <Dropdown.Item
-                  id={human ? "return-control" : "take-control"}
+                  id="control"
                   textValue={human ? "Return this tab to agents" : "Ask for control"}
                   isDisabled={!tab || tab.uncertain}
                 >

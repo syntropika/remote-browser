@@ -111,7 +111,11 @@ export class Browser {
     await this.call("Page.navigate", { url });
   }
   async evaluate(expression: string): Promise<Wire> {
-    const result = await this.call("Runtime.evaluate", { expression, returnByValue: true });
+    const result = await this.call("Runtime.evaluate", {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    });
     if (result.exceptionDetails) {
       throw new Error(JSON.stringify(result.exceptionDetails));
     }
@@ -152,7 +156,7 @@ export async function waitForDisplay(browser: Browser): Promise<DisplayRect> {
       browser.evaluate(`(() => {
       const display = document.querySelector('section[aria-label="Browser display"]');
       const canvas = display?.querySelector('canvas[aria-label="Browser page"]');
-      if (!canvas || display.getAttribute('aria-busy') !== 'false') return null;
+      if (!canvas || display.getAttribute('aria-busy') !== 'false' || document.querySelector('[aria-label="Page address"]')?.disabled) return null;
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
       const available = display.getBoundingClientRect();

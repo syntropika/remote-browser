@@ -68,37 +68,18 @@ impl Viewport {
 }
 
 impl super::Engine {
-    /// Mobile emulation includes viewport-meta behavior, touch capability and the browser's
-    /// Chromium version in its mobile user agent. Desktop restores CEF's native defaults.
+    /// Viewport-meta behavior and touch follow this tab's display. Browser identity stays
+    /// native to the profile; resizing never rewrites user agents or client hints.
     pub(super) fn apply_viewport(&mut self, at: usize) -> Result<(), String> {
-        let view = self.surface;
+        let view = *self.tabs[at].shared.size.lock().unwrap();
         if view.mobile {
             self.protocol(
                 at,
                 "Emulation.setDeviceMetricsOverride",
                 view.device_metrics(),
             )?;
-            let version = self.protocol(at, "Browser.getVersion", json!({}))?;
-            let agent = version["userAgent"]
-                .as_str()
-                .ok_or("CEF did not report its user agent")?;
-            let version = agent
-                .split("Chrome/")
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-                .ok_or("CEF did not report its Chromium version")?;
-            let major = version.split('.').next().unwrap_or(version);
-            self.protocol(at, "Emulation.setUserAgentOverride", json!({
-                "userAgent":format!("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Mobile Safari/537.36"),
-                "userAgentMetadata":{"brands":[{"brand":"Chromium","version":major}],"fullVersionList":[{"brand":"Chromium","version":version}],"platform":"Android","platformVersion":"10.0.0","architecture":"","model":"K","mobile":true}
-            }))?;
         } else {
             self.protocol(at, "Emulation.clearDeviceMetricsOverride", json!({}))?;
-            self.protocol(
-                at,
-                "Emulation.setUserAgentOverride",
-                json!({"userAgent":""}),
-            )?;
         }
         self.protocol(
             at,

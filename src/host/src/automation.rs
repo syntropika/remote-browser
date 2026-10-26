@@ -202,6 +202,7 @@ impl Automation {
                 | "input"
                 | "scroll"
                 | "resize"
+                | "display"
                 | "health"
                 | "files"
                 | "read_file"
