@@ -60,7 +60,7 @@ key. A key is for agents: the dashboard itself has no sign-in, only its address.
 one. An agent that releases a tab closes it, so your own tabs stay as you left them. The agent-facing contract is described in
 [skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
 
-## Extensions (experimental)
+## Extensions
 
 The dashboard includes an Extensions toolbar shortcut and a Settings section for each
 session: list installed extensions, enable or disable them, open their options, or

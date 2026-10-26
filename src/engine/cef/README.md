@@ -10,7 +10,7 @@ engine reports `available: false` and the dashboard does not show an install dec
 
 ### Reuse the compiled runtime
 
-For Linux x86-64, use the pinned experimental
+For Linux x86-64, use the pinned
 [CEF release](https://github.com/syntropika/remote-browser/releases/tag/cef-154.0.34-rb.1):
 
 ```sh
