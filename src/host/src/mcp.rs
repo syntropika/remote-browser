@@ -16,6 +16,7 @@ use crate::{Error, Result, health::HealthPolicy, profiles::Profiles};
 #[derive(Clone)]
 pub struct NativeMcp {
     pub profiles: Profiles,
+    pub extension: std::sync::Arc<crate::native_extensions::McpExtension>,
 }
 
 #[derive(Deserialize)]
@@ -234,6 +235,7 @@ struct DownloadArgs {
 }
 impl NativeMcp {
     async fn execute(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
+        self.extension.enabled()?;
         let value = match name {
             "browser_control" => {
                 #[derive(Deserialize)]
@@ -538,6 +540,9 @@ impl ServerHandler for NativeMcp {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, ErrorData> {
+        self.extension
+            .enabled()
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         Ok(ListToolsResult::with_all_items(tools()))
     }
 

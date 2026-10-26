@@ -21,7 +21,8 @@ use std::{path::PathBuf, sync::Arc};
 struct Host {
     profiles: Profiles,
     origin: String,
-    keys: Arc<ApiKeys>,
+    extension: Arc<crate::native_extensions::McpExtension>,
+    access: Arc<crate::access::AccessExtension>,
 }
 type Reply = std::result::Result<Json<Value>, DashboardError>;
 async fn observe(request: Request, next: Next) -> Response {
@@ -39,6 +40,10 @@ async fn observe(request: Request, next: Next) -> Response {
         (_, "/api/files/content") => "file_content",
         (_, "/api/profiles") => "profiles",
         (_, "/api/action") => "action",
+        (_, "/api/extensions/native") => "native_extensions",
+        (_, "/api/extensions/access/configure") => "access_settings",
+        (_, "/api/access/login") => "login",
+        (_, "/api/access/logout") => "logout",
         (_, "/api/policies") => "policies",
         _ => "unknown",
     };
@@ -113,12 +118,173 @@ fn manager(
     }
     Ok(())
 }
+fn extension_keys(host: &Host) -> std::result::Result<Arc<ApiKeys>, DashboardError> {
+    host.extension.keys().map_err(failure)
+}
+
+async fn native_extensions(State(host): State<Host>, headers: HeaderMap) -> Reply {
+    manager(&host, &headers, false)?;
+    Ok(Json(
+        json!({"extensions":[host.extension.describe().map_err(failure)?, host.access.describe().map_err(failure)?]}),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeExtensionAction {
+    id: String,
+    action: String,
+    confirmed: Option<bool>,
+}
+
+async fn change_native_extension(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<NativeExtensionAction>,
+) -> std::result::Result<Response, DashboardError> {
+    manager(&host, &headers, true)?;
+    if input.action == "uninstall" && input.confirmed != Some(true) {
+        return Err(DashboardError(
+            StatusCode::BAD_REQUEST,
+            "Confirm removal of the native extension first".into(),
+        ));
+    }
+    let access = host.access.clone();
+    let is_access = input.id == "access";
+    let value = tokio::task::spawn_blocking(move || match input.id.as_str() {
+        "mcp" => host.extension.update(&input.id, &input.action),
+        "access" => host.access.update(&input.action),
+        _ => Err(crate::Error::Invalid("Unknown native extension".into())),
+    })
+    .await
+    .map_err(|_| failure("Native extension settings are unavailable"))?
+    .map_err(failure)?;
+    let response = Json(value.clone()).into_response();
+    if is_access && value["enabled"] == true {
+        access_cookie(response, &access.session().map_err(failure)?)
+    } else {
+        Ok(response)
+    }
+}
+
+fn cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("cookie")?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("rb_access="))
+}
+
+fn access_cookie(
+    mut response: Response,
+    token: &str,
+) -> std::result::Result<Response, DashboardError> {
+    response.headers_mut().insert(
+        "set-cookie",
+        format!("rb_access={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200")
+            .parse()
+            .map_err(|_| failure("Browser session is unavailable"))?,
+    );
+    Ok(response)
+}
+
+async fn browser_access(State(host): State<Host>, request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    let public = matches!(path, "/api/access/status" | "/api/access/login");
+    if path.starts_with("/api/") && !public {
+        let allowed = host.access.required().and_then(|required| {
+            if required {
+                host.access.authenticated(cookie(request.headers()))
+            } else {
+                Ok(true)
+            }
+        });
+        match allowed {
+            Ok(true) => {}
+            Ok(false) => {
+                return DashboardError(StatusCode::UNAUTHORIZED, "Sign in to this browser".into())
+                    .into_response();
+            }
+            Err(_) => {
+                return DashboardError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Browser access is unavailable".into(),
+                )
+                .into_response();
+            }
+        }
+    }
+    next.run(request).await
+}
+
+async fn access_status(State(host): State<Host>, headers: HeaderMap) -> Reply {
+    authorize(&host, &headers)?;
+    Ok(Json(
+        json!({"required":host.access.required().map_err(failure)?, "authenticated":host.access.authenticated(cookie(&headers)).map_err(failure)?}),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Credentials {
+    username: String,
+    password: String,
+}
+
+async fn access_login(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<Credentials>,
+) -> std::result::Result<Response, DashboardError> {
+    same_origin(&host, &headers)?;
+    let token =
+        tokio::task::spawn_blocking(move || host.access.login(&input.username, &input.password))
+            .await
+            .map_err(|_| failure("Browser login is unavailable"))?
+            .map_err(|error| DashboardError(StatusCode::UNAUTHORIZED, error.to_string()))?;
+    access_cookie(Json(json!({"authenticated":true})).into_response(), &token)
+}
+
+async fn configure_access(
+    State(host): State<Host>,
+    headers: HeaderMap,
+    Json(input): Json<Credentials>,
+) -> std::result::Result<Response, DashboardError> {
+    manager(&host, &headers, true)?;
+    let access = host.access;
+    let (value, token) = tokio::task::spawn_blocking(move || {
+        access.configure(&input.username, &input.password)?;
+        Ok::<_, crate::Error>((access.describe()?, access.session()?))
+    })
+    .await
+    .map_err(|_| failure("Access settings are unavailable"))?
+    .map_err(failure)?;
+    access_cookie(Json(value).into_response(), &token)
+}
+
+async fn access_logout(
+    State(host): State<Host>,
+    headers: HeaderMap,
+) -> std::result::Result<Response, DashboardError> {
+    same_origin(&host, &headers)?;
+    host.access.logout(cookie(&headers)).map_err(failure)?;
+    let mut response = Json(json!({"authenticated":false})).into_response();
+    response.headers_mut().insert(
+        "set-cookie",
+        "rb_access=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
+            .parse()
+            .unwrap(),
+    );
+    Ok(response)
+}
+
 fn key_failure(error: KeyError) -> DashboardError {
     DashboardError(StatusCode::from_u16(error.0).unwrap(), error.1.into())
 }
 async fn list_keys(State(host): State<Host>, headers: HeaderMap) -> Reply {
     manager(&host, &headers, false)?;
-    let keys = host.keys.clone();
+    let keys = extension_keys(&host)?;
     let keys = tokio::task::spawn_blocking(move || keys.list())
         .await
         .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
@@ -144,9 +310,9 @@ async fn create_key(
 ) -> std::result::Result<Response, DashboardError> {
     manager(&host, &headers, true)?;
     known_profiles(&host, input.profile_ids.as_deref()).await?;
+    let keys = extension_keys(&host)?;
     let value = tokio::task::spawn_blocking(move || {
-        host.keys
-            .create_scoped(&input.name, input.profile_ids, || Ok(()))
+        keys.create_scoped(&input.name, input.profile_ids, || Ok(()))
     })
     .await
     .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
@@ -159,10 +325,11 @@ async fn revoke_key(
     Json(input): Json<RevokeKey>,
 ) -> Reply {
     manager(&host, &headers, true)?;
-    tokio::task::spawn_blocking(move || host.keys.revoke(&input.id, || Ok(())))
-    .await
-    .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
-    .map_err(key_failure)?;
+    let keys = extension_keys(&host)?;
+    tokio::task::spawn_blocking(move || keys.revoke(&input.id, || Ok(())))
+        .await
+        .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+        .map_err(key_failure)?;
     Ok(Json(json!({"revoked":true})))
 }
 async fn known_profiles(
@@ -196,13 +363,11 @@ async fn key_permissions(
 ) -> Reply {
     manager(&host, &headers, true)?;
     known_profiles(&host, input.profile_ids.as_deref()).await?;
-    tokio::task::spawn_blocking(move || {
-        host.keys
-            .permissions(&input.id, input.profile_ids, || Ok(()))
-    })
-    .await
-    .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
-    .map_err(key_failure)?;
+    let keys = extension_keys(&host)?;
+    tokio::task::spawn_blocking(move || keys.permissions(&input.id, input.profile_ids, || Ok(())))
+        .await
+        .map_err(|_| key_failure(KeyError(503, "API keys are unavailable.")))?
+        .map_err(key_failure)?;
     Ok(Json(json!({"updated":true})))
 }
 #[derive(Deserialize)]
@@ -445,14 +610,17 @@ async fn index() -> impl IntoResponse {
 pub async fn start(
     profiles: Profiles,
     port: u16,
-    keys: Arc<ApiKeys>,
+    extension: Arc<crate::native_extensions::McpExtension>,
+    access: Arc<crate::access::AccessExtension>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let address = listener.local_addr()?;
     let origin = format!("http://{address}");
     eprintln!("Remote Browser dashboard: {origin}");
+    let mcp = crate::http_mcp::router(profiles.clone(), extension.clone(), address);
     let host = Host {
-        keys,
+        access,
+        extension,
         profiles,
         origin,
     };
@@ -460,6 +628,16 @@ pub async fn start(
         .route("/", get(index))
         .route("/app.js", get(dashboard_script))
         .route("/app.css", get(dashboard_styles))
+        .route("/api/access/status", get(access_status))
+        .route(
+            "/api/access/login",
+            post(access_login).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route("/api/access/logout", post(access_logout))
+        .route(
+            "/api/extensions/access/configure",
+            post(configure_access).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/api/files/content", get(file_content))
         .route(
             "/api/keys",
@@ -475,12 +653,18 @@ pub async fn start(
             "/api/keys/permissions",
             post(key_permissions).layer(DefaultBodyLimit::max(4096)),
         )
+        .route(
+            "/api/extensions/native",
+            get(native_extensions).post(change_native_extension),
+        )
         .route("/api/profiles", get(list_profiles).post(create))
         .route("/api/action", post(action))
         .route("/api/policies", post(policies))
+        .layer(middleware::from_fn_with_state(host.clone(), browser_access))
         .layer(DefaultBodyLimit::max(65536))
         .layer(middleware::from_fn_with_state(host.clone(), observe))
-        .with_state(host);
+        .with_state(host)
+        .merge(mcp);
     Ok(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     }))
@@ -511,14 +695,17 @@ mod tests {
         )
         .unwrap();
         let host = Host {
-            keys: Arc::new(
-                ApiKeys::new(
-                    std::env::temp_dir()
-                        .join(format!("browser-keys-{}.json", uuid::Uuid::new_v4())),
-                    None,
-                )
-                .unwrap(),
-            ),
+            access: crate::access::AccessExtension::open(
+                std::env::temp_dir().join(format!("browser-access-{}.json", uuid::Uuid::new_v4())),
+            )
+            .unwrap(),
+            extension: crate::native_extensions::McpExtension::open(
+                std::env::temp_dir().join(format!("browser-native-{}.json", uuid::Uuid::new_v4())),
+                std::env::temp_dir().join(format!("browser-keys-{}.json", uuid::Uuid::new_v4())),
+                None,
+                false,
+            )
+            .unwrap(),
             profiles,
             origin: "http://127.0.0.1:8000".into(),
         };

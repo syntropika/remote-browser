@@ -1,4 +1,5 @@
 //! Local browser automation with an engine boundary and an MCP adapter.
+pub mod access;
 pub mod api_keys;
 pub mod automation;
 pub mod cli;
@@ -12,6 +13,7 @@ pub mod logging;
 pub mod mcp;
 pub mod media;
 pub mod native;
+pub mod native_extensions;
 pub mod profiles;
 pub mod reservations;
 pub mod snapshot;

@@ -54,7 +54,7 @@ class Runtime:
         # The host and the engine are separate executables; the engine comes from the
         # argument, the environment, or the host itself when it has one inside.
         engine=engine or (env or os.environ).get('REMOTE_BROWSER_ENGINE_BINARY')
-        command=[str(binary),'--profile-root',str(root),'--dashboard-port','0']
+        command=[str(binary),'--profile-root',str(root),'--dashboard-port','0','--mcp-stdio']
         if engine:command+=['--engine-binary',str(engine)]
         self.process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env)
         self.logs=[]; urls=queue.Queue()

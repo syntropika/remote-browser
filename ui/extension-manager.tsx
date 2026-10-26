@@ -278,7 +278,7 @@ export function ExtensionManager({
           </Group>
         ) : (
           <div className="border-line flex flex-col items-start gap-2 rounded-3xl border px-6 py-8">
-            <h3 className="text-sm font-semibold">No extensions installed</h3>
+            <h3 className="text-sm font-semibold">No Chrome extensions installed</h3>
             <p className="text-ink-dim max-w-prose text-sm">
               Add an extension from the Chrome Web Store. Its permissions will appear here for your
               approval.

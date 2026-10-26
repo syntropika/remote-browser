@@ -9,7 +9,7 @@ class Runtime:
         self.root=root;self.logs=[];urls=queue.Queue()
         token=root/'seed';token.write_text(seed);token.chmod(0o600)
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-        self.process=subprocess.Popen([str(binary),'--profile-root',str(root/'browser'),'--dashboard-port','0','--mcp-http-port',str(port),'--mcp-http-token-file',str(token)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        self.process=subprocess.Popen([str(binary),'--profile-root',str(root/'browser'),'--dashboard-port','0','--mcp-stdio','--mcp-http-port',str(port),'--mcp-http-token-file',str(token)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         def read():
             for line in self.process.stderr:
                 self.logs.append(line)

@@ -14,6 +14,9 @@ struct Args {
     /// Protected API key registry shared by dashboard management and HTTP MCP.
     #[arg(long, env = "REMOTE_BROWSER_API_KEYS_FILE")]
     api_keys_file: Option<PathBuf>,
+    /// Enable stdio MCP alongside a dashboard; installs MCP on first launch.
+    #[arg(long)]
+    mcp_stdio: bool,
     /// Optional loopback Streamable HTTP MCP listener sharing the stdio browser.
     #[arg(long)]
     mcp_http_port: Option<u16>,
@@ -78,6 +81,7 @@ pub fn main(embedded_binary: Option<PathBuf>) {
 }
 
 async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
+    let use_stdio = args.mcp_stdio || args.dashboard_port.is_none();
     let (mut config, catalog) = if let Some(root) = args.profile_root {
         let binary = args.engine_binary.or(embedded_binary).ok_or_else(|| {
             Error::Invalid(
@@ -143,61 +147,44 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
         .or(args.mcp_http_token_file.as_ref())
         .and_then(|path| path.parent())
         .map(std::path::Path::to_path_buf);
-    let keys = if args.dashboard_port.is_some() || args.mcp_http_port.is_some() {
-        let path = args
-            .api_keys_file
-            .or_else(|| state.as_ref().map(|parent| parent.join("api-keys.json")))
-            .ok_or_else(|| {
-                Error::Invalid("Dashboard or HTTP MCP requires a persistent --api-keys-file".into())
-            })?;
-        let seed = args
-            .mcp_http_token_file
-            .as_deref()
-            .map(crate::http_mcp::token)
-            .transpose()?;
-        Some(std::sync::Arc::new(
-            crate::api_keys::ApiKeys::new(path, seed)
-                .map_err(|error| Error::Invalid(error.1.into()))?,
-        ))
-    } else {
-        None
-    };
+    let state = state.unwrap_or_else(|| PathBuf::from("."));
+    let keys_path = args
+        .api_keys_file
+        .unwrap_or_else(|| state.join("api-keys.json"));
+    let seed = args
+        .mcp_http_token_file
+        .as_deref()
+        .map(crate::http_mcp::token)
+        .transpose()?;
+    let extension = crate::native_extensions::McpExtension::open(
+        state.join("native-extensions.json"),
+        keys_path,
+        seed,
+        use_stdio || args.mcp_http_port.is_some() || args.mcp_http_token_file.is_some(),
+    )?;
+    let access = crate::access::AccessExtension::open(state.join("access-extension.json"))?;
     let profiles =
         Profiles::with_catalog(config, Duration::from_secs(args.timeout_seconds), catalog)?;
     // Preserve the original startup handshake and fail early if the default browser is unavailable.
     profiles.browser(None).await?;
     let dashboard = if let Some(port) = args.dashboard_port {
         Some(
-            crate::dashboard::start(
-                profiles.clone(),
-                port,
-                keys.as_ref().unwrap().clone(),
-            )
-            .await?,
+            crate::dashboard::start(profiles.clone(), port, extension.clone(), access.clone())
+                .await?,
         )
     } else {
         None
     };
     let http_mcp = if let Some(port) = args.mcp_http_port {
-        Some(crate::http_mcp::start(profiles.clone(), port, keys.unwrap()).await?)
+        Some(crate::http_mcp::start(profiles.clone(), port, extension.clone()).await?)
     } else {
         None
     };
-    let result = async {
-        let shutdown = shutdown_signal();
-        tokio::pin!(shutdown);
-        let handler = NativeMcp { profiles: profiles.clone() };
-        let server = tokio::select! {
-            result = handler.serve(rmcp::transport::stdio()) => result.map_err(|error| Error::Protocol(error.to_string()))?,
-            signal = &mut shutdown => { signal?; return Ok(()); }
-        };
-        let cancellation = server.cancellation_token();
-        tokio::select! {
-            result = server.waiting() => { result.map_err(|error| Error::Protocol(error.to_string()))?; }
-            signal = &mut shutdown => { signal?; cancellation.cancel(); }
-        }
-        Ok(())
-    }.await;
+    let result = if use_stdio {
+        serve_stdio(profiles.clone(), extension).await
+    } else {
+        shutdown_signal().await.map_err(crate::Error::Io)
+    };
     // Save embedded profiles on engine shutdown; external browsers keep running.
     if let Some(dashboard) = dashboard {
         dashboard.abort();
@@ -207,6 +194,28 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
     }
     profiles.close().await;
     result
+}
+
+async fn serve_stdio(
+    profiles: Profiles,
+    extension: std::sync::Arc<crate::native_extensions::McpExtension>,
+) -> Result<()> {
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+    let handler = NativeMcp {
+        profiles,
+        extension,
+    };
+    let server = tokio::select! {
+        result = handler.serve(rmcp::transport::stdio()) => result.map_err(|error| Error::Protocol(error.to_string()))?,
+        signal = &mut shutdown => { signal?; return Ok(()); }
+    };
+    let cancellation = server.cancellation_token();
+    tokio::select! {
+        result = server.waiting() => { result.map_err(|error| Error::Protocol(error.to_string()))?; }
+        signal = &mut shutdown => { signal?; cancellation.cancel(); }
+    }
+    Ok(())
 }
 
 async fn shutdown_signal() -> std::io::Result<()> {

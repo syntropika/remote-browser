@@ -8,6 +8,7 @@ description = "Native browser automation API and local MCP server"
 
 [dependencies]
 axum = "0.8.8"
+argon2 = "0.5.3"
 fs2 = "0.4"
 libc = "0.2"
 sha2 = "0.10"

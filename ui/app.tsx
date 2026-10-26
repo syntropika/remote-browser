@@ -1,6 +1,7 @@
 /** The dashboard: one browser, its tabs, and the people and agents sharing it. */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { BrowserLogin } from "./access.js";
 import type { Tone } from "./alert.js";
 import { Alert } from "./alert.js";
 import { action, api, failure, whenUnauthorized } from "./api.js";
@@ -459,33 +460,7 @@ export function App() {
     return <main className="bg-page h-dvh" />;
   }
   if (phase === "closed") {
-    return (
-      <main className="bg-page grid min-h-dvh place-items-center px-6 py-8">
-        <section aria-labelledby="closed-title" className="w-full max-w-96">
-          <div className="mb-10 flex items-center gap-2.5 text-sm font-semibold">
-            <span className="border-line-strong bg-card grid size-10 place-items-center rounded-[14px] border">
-              <Icon className="size-[22px]" name="window" />
-            </span>
-            Remote Browser
-          </div>
-          <h1
-            className="text-[26px] leading-tight font-semibold tracking-[-0.025em] text-balance"
-            id="closed-title"
-          >
-            Open this browser's own address
-          </h1>
-          <p className="text-ink-faint mt-3 text-sm leading-relaxed">
-            This browser has no account and no sign-in. It prints an address carrying a one-time
-            token when it starts, and that address is the only way in. Restart it to print a new
-            one; an agent reaches it over MCP with an API key instead.
-          </p>
-          <p className="border-line-strong text-ink-faint mt-7 flex items-start gap-2 border-t pt-5 text-xs leading-relaxed">
-            <Icon className="mt-0.5 size-[15px]" name="lock" />
-            Your website sessions stay separate in each browser session.
-          </p>
-        </section>
-      </main>
-    );
+    return <BrowserLogin onSignedIn={connect} />;
   }
 
   return (

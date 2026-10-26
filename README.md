@@ -31,7 +31,8 @@ bun run build                                   # the dashboard bundle the host 
 bun run build:engine --release
 cargo build --release --manifest-path src/host/Cargo.toml
 ./src/host/target/release/remote-browser-native \
-  --engine-binary src/engine/target/release/remote-browser-cef-engine
+  --engine-binary src/engine/target/release/remote-browser-cef-engine \
+  --profile-root /path/to/private-browser-data --dashboard-port 8081
 ```
 
 The runtime version, source revision, download URL and checksums are pinned in
@@ -45,27 +46,39 @@ Set `CEF_PATH` explicitly to use another existing flat CEF distribution with its
 Direct Cargo builds retain the CEF crate's default behavior, which downloads stock CEF
 when `CEF_PATH` is absent; use `build:engine` for the extension-enabled Linux build.
 
-The host prints the dashboard's address. Open it and the browser is yours: no account, no
-sign-in and no token. It listens on this machine only and refuses a request from any other
-origin, so a web page cannot drive it — but anything else running on your machine can, which
-is the trade for opening it with a click.
+The host prints the dashboard's address. A fresh dashboard opens without a login. Install
+the optional **Access** native extension in **Settings → Extensions**, then configure its
+username and password in **Settings → Access** to require sign-in. The listener is loopback
+only and rejects foreign browser origins. Without Access, local programs can use the
+dashboard API; protect the browser data directory as private user data.
 
 [src/host/README.md](src/host/README.md) documents the engine protocol, the MCP tools,
 the HTTP endpoints, the profile catalog and the smoke tests.
 
 ## Connect an agent
 
-The host speaks MCP over stdio, and over HTTP at `/mcp` on the dashboard port with an API
-key. A key is for agents: the dashboard itself has no sign-in, only its address. Create keys in **Settings → API keys**, where a key either reaches every session or exactly
-one. An agent that releases a tab closes it, so your own tabs stay as you left them. The agent-facing contract is described in
-[skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
+Install **MCP** in **Settings → Extensions**, then open **Settings → MCP** to create a
+client API key and copy the `/mcp` endpoint on the dashboard port. Each key reaches every
+session or a selected session. Disabling or uninstalling MCP rejects new agent operations
+while the dashboard stays usable. Access controls the browser login independently; its
+cookies never authorize MCP.
+
+For stdio clients, use `--mcp-stdio` alongside `--dashboard-port`, or launch without a
+dashboard. Explicit MCP launch options install the module on first startup. Existing key
+registries migrate automatically; later restarts respect the saved module state.
+An agent that releases a tab closes it, so your own tabs stay as you left them. The
+agent-facing contract is described in [skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
 
 ## Extensions
 
-The dashboard includes an Extensions toolbar shortcut and a Settings section for each
-session: list installed extensions, enable or disable them, open their options, or
-remove them after confirmation. Management requires the custom native API and reports
-when it is unavailable in older browser builds.
+The dashboard includes an Extensions toolbar shortcut. Its Settings page lists optional
+native modules for the whole browser and Chrome extensions for the selected session.
+Chrome extensions can be enabled or disabled, opened for configuration, or removed after
+confirmation. Chrome extension management requires the custom native API and reports
+when it is unavailable in older browser builds. Native module settings appear only after
+installation. Both modules are bundled with the host; installing them requires no download.
+Uninstalling preserves their saved configuration, including revoked API keys, for later
+reinstallation. Access must be explicitly enabled again after reinstalling.
 
 The native store-installation bridge requires a custom CEF build. Its
 [source integration and build instructions](src/engine/cef/README.md) route installation

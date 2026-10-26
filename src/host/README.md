@@ -1,30 +1,28 @@
-# Experimental native browser
+# Native browser host
 
-A Rust executable with an embedded Chromium engine, stdio MCP automation, persistent
-session profiles, and a local dashboard showing actual rendered pages. It runs without
-Docker, without Playwright and without a separately installed browser. Each profile runs
-in its own engine process; each tab has its own off-screen rendering surface. The existing
-Chromium application remains available independently.
-
-This is a working prototype, not a finished product. Its integration tests use a local
-synthetic login website; compatibility with particular production websites has not been
-verified. The engine is Chromium, embedded through the Chromium Embedded Framework, so a
-page sees the platform Chromium presents.
+A Rust host with an embedded dashboard and a separate Chromium engine executable. Each
+profile runs in its own engine process with off-screen tab surfaces, persistent cookies
+and storage. Optional bundled native extensions provide MCP automation and browser login.
+It runs without Docker, Playwright or a separately installed browser.
 
 There is a native Rust API and an MCP adapter. The engine reaches Chromium's DevTools
 protocol in process, through the embedder interface, and opens no debugging port.
 
 ## Build and run
 
-Use Rust 1.88 or newer. The first build of the engine downloads the CEF binary
-distribution, roughly a gigabyte, and copies its runtime files beside the executable;
-the build script adds an `$ORIGIN` run path so the folder stays relocatable. Linux
-x86-64 has been tested; other platforms have not been verified by this prototype.
+Use Rust 1.88 or newer, Bun 1.3, and Python 3.12 or newer. From the repository root,
+prepare the pinned extension-enabled Linux x86-64 CEF runtime and build the engine:
 
 ```sh
-cd src/engine
-cargo build --release
+bun install
+bun run build
+bun run build:engine --release
 ```
+
+The build command downloads the already compiled 293 MB runtime, verifies its checksum,
+and caches it outside the checkout. Cargo copies runtime files beside the executable
+and uses an `$ORIGIN` run path. See the root README for cache configuration and platform
+requirements. Other platforms require an explicit compatible `CEF_PATH`.
 
 The host and the engine are separate executables. Build the host and give it a catalog
 naming the engine it should start:
@@ -47,12 +45,20 @@ cargo build --release --manifest-path src/host/Cargo.toml
 ./remote-browser-native --profiles-config /path/to/profiles.json --dashboard-port 0
 ```
 
-`--dashboard-port 0` chooses an available loopback port. The dashboard origin is printed on
-standard error, and opening it is all there is: no account, no sign-in and no token. What the
-dashboard still refuses is a request naming another origin, which is what keeps a web page from
-driving this browser; a local client, which sends no origin, may read and change. Anything
-running on this machine can therefore use it. Keep stdin open for MCP; EOF or SIGTERM closes the engines and saves persistent
-data. The dashboard is tied to the MCP lifetime.
+`--dashboard-port 0` chooses an available loopback port, printed on standard error.
+A fresh dashboard has no login and runs independently of stdin until SIGTERM or Ctrl-C.
+It rejects foreign browser origins; local programs may use its API without credentials
+unless the Access extension is enabled. Native-extension and key-management mutations
+always require the exact dashboard Origin.
+
+Install **MCP** and **Access** independently from **Settings → Extensions**. Their Settings
+sections appear only while installed. MCP contains agent connection settings and API keys;
+Access adds a username/password login for people opening the dashboard. Both are bundled
+with the host and install without a download. Chrome extensions remain scoped to the
+selected browser profile, while these native modules apply to the whole host instance.
+
+With `--mcp-stdio`, the dashboard shares the stdio client's lifetime: EOF or SIGTERM
+closes the engines and saves persistent data. Without a dashboard, stdio MCP is the default.
 
 An MCP client configuration can launch the host directly:
 
@@ -61,7 +67,7 @@ An MCP client configuration can launch the host directly:
   "mcpServers": {
     "native-browser": {
       "command": "/path/to/remote-browser-native",
-      "args": ["--profiles-config", "/path/to/profiles.json", "--dashboard-port", "0"]
+      "args": ["--profiles-config", "/path/to/profiles.json", "--dashboard-port", "0", "--mcp-stdio"]
     }
   }
 }
@@ -193,7 +199,7 @@ profile and tab panels. Mobile places navigation above the page and a native key
 input below it. Mobile zoom switches between fit and actual size; one-finger swipes
 scroll the fitted page or pan the actual-size display, and two fingers scroll the
 actual-size page. Session status and check settings are available in More options.
-There is no sign-in screen; the dashboard opens straight onto the page it is showing.
+The dashboard opens onto its page unless the optional Access extension requires sign-in.
 Mouse and pen input reaches the page as performed: pointer movement, hover, presses and
 releases keep their order and timing, and leaving the display ends hover. Moves queued behind
 a slower action collapse into the latest position. A press belongs to the pointer, tab and
@@ -354,7 +360,7 @@ Download/upload/chooser operations honor the target tab's reservation and human
 ownership; file management is scoped to the profile independently of tab leases.
 
 Downloads are explicit through the tool or **Save a download link** in Files.
-This prototype does not automatically capture every download click,
+Automatic capture does not cover every download click,
 `Content-Disposition` navigation, POST export, or popup download. Site-generated
 links may require page-specific workflows. Workspaces are a managed API boundary,
 not a filesystem sandbox against another process running as the same OS user.
@@ -366,41 +372,52 @@ REMOTE_BROWSER_ENGINE_BINARY=/path/to/remote-browser-cef-engine \
   python3 src/host/tests/files_smoke.py --engine-binary /path/to/remote-browser-native
 ```
 
-## Dashboard owner account
+## Native extensions and browser login
 
-The dashboard restores the original username/password flow independently of website
-logins inside profiles. The first visit creates one owner account; later visits
-sign in with that account. The default record is `dashboard-account.json` beside
-the profiles catalog. Set `--dashboard-account /path/to/account.json` (or
-`REMOTE_BROWSER_DASHBOARD_ACCOUNT`) to use a different protected file. The schema is compatible
-with the original application's version-1 scrypt record (N=32768, r=8, p=1,
-64-byte hash), so an existing `account.json` can be reused without resetting the
-password or exporting plaintext credentials. Keep the original file as a backup.
+A fresh dashboard starts with MCP and Access uninstalled and creates no API key registry.
+On first startup, explicit MCP options (`--mcp-stdio`, `--mcp-http-port`, or a seed token)
+and an existing API key registry install MCP for compatibility. Later startups preserve
+its installed/enabled state even when those arguments remain present. Disabling or
+uninstalling MCP rejects HTTP requests with 503 and blocks stdio tool operations. An
+accepted operation may finish; browser tabs remain usable.
 
-Passwords use scrypt with a random salt and are never stored as plaintext or
-logged. Authentication creates an HttpOnly, SameSite=Strict session cookie lasting
-at most eight hours. Sign out revokes it; restarting the process requires another
-sign-in but preserves the account, profiles, website sessions and files. Sessions
-are bounded to 32, authentication attempts to 30 per minute, and concurrent password
-derivations to two. Use `--dashboard-secure-cookie` behind HTTPS. Cookie-authenticated
-mutations and owner setup/login/logout require the expected Origin header. A reverse
-proxy must preserve cookies and Set-Cookie responses while validating the external
-origin before any origin rewrite. Forwarding authentication headers alone is insufficient.
+The private `native-extensions.json` and `access-extension.json` records live beside the
+profile catalog. Writes are atomic, files use mode `0600`, and malformed records prevent
+startup rather than silently disabling login. Uninstalling retains configuration and key
+revocations for reinstall. Access reinstalls disabled and requires explicit enablement.
 
-The stdio MCP interface does not depend on a dashboard login. The private bearer
-continues to support trusted integration clients; the human login form does not
-ask for it. Username and password belong to the dashboard owner, not to a website
-account or a particular browser profile.
+Install Access, then set a username and a password of at least 12 characters in
+**Settings → Access**. Saving enables login and signs out other browser sessions.
+Passwords are stored as salted Argon2id hashes. Login creates a random HttpOnly,
+SameSite=Strict cookie valid for at most 12 hours. Sign out revokes it; process restart
+requires another login while retaining the account, website sessions and files. Sessions
+are bounded to 128; five failed logins trigger a one-minute cooldown. Access protects
+dashboard APIs only. MCP uses its own API keys and never accepts browser cookies.
+The listener remains loopback HTTP; this is not a public hosting interface.
 
-```sh
-REMOTE_BROWSER_ENGINE_BINARY=/path/to/remote-browser-cef-engine \
-  python3 src/host/tests/account_smoke.py --engine-binary /path/to/remote-browser-native
-```
+Native module management endpoints:
 
-## Shared HTTP MCP adapter
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/extensions/native` | List bundled modules and their installed/enabled state |
+| `POST /api/extensions/native` | `{id, action}`; IDs `mcp`/`access`, actions `install`/`enable`/`disable`/`uninstall`; uninstall also requires `confirmed: true` |
+| `POST /api/extensions/access/configure` | `{username, password}`; Access must be installed; enables login and issues a session |
+| `GET /api/access/status` | Whether login is required and this cookie is authenticated |
+| `POST /api/access/login` | `{username, password}`; issues a browser session |
+| `POST /api/access/logout` | Revokes this browser session |
 
-To connect an MCP gateway to the same live profiles as the dashboard and stdio
-client, enable the optional loopback Streamable HTTP listener:
+Login status and login are public; other dashboard APIs require a valid Access session
+when login is enabled. Mutations above require the exact dashboard Origin. Module
+uninstallation removes its Settings section, without deleting profile data.
+
+## Shared HTTP MCP adapter and API keys
+
+After installing MCP, **Settings → MCP** provides the endpoint, named key creation,
+one-time secret display/copy, session permissions, usage dates and confirmed revocation.
+Leaving Settings clears the displayed secret. Run `bun run build` after UI changes to
+regenerate the embedded dashboard assets before building Rust.
+
+`/mcp` is served directly on the dashboard port. A separate loopback listener is optional:
 
 ```sh
 ./remote-browser-native --profiles-config /path/to/profiles.json \
@@ -408,57 +425,43 @@ client, enable the optional loopback Streamable HTTP listener:
   --mcp-http-token-file /path/to/private-mcp-bearer
 ```
 
-An optional token file must contain a 32–256 character bearer and be private to its
-owner on Unix. It seeds an **Initial key** only when no registry exists. HTTP requests require `Authorization: Bearer <value>`; dashboard login
-cookies do not authorize MCP. The endpoint is `/mcp`, uses stateless JSON responses,
-validates Host and Origin, and limits request bodies to 64 KiB. The service calls
-the same automation handler and profile registry as stdio, so reservations and
-human takeover are shared across both transports. Keep stdin open for the host
-lifetime. A reverse proxy must forward Accept, authorization and MCP protocol
-headers to the correct loopback listener and preserve response headers. Configure
-its external origin/peer policy explicitly. Existing gateways can retain their
-upstream bearer by putting that same secret in the protected token file on initial
-setup, or by reusing a compatible registry that already contains its hash.
+Both listeners share profiles, keys, reservations and human takeover. A disabled module
+can leave the listener bound, but rejects MCP operations. The optional seed file contains
+a private 32–256 character bearer and creates an **Initial key** only when no registry
+exists. Requests require `Authorization: Bearer <value>`, validate Host and Origin, and
+have a 64 KiB body limit. Browser login cookies do not authorize MCP.
 
+Key management requires an Access session when browser login is enabled, and always
+requires the exact Origin for mutations. Automation bearers cannot administer keys or
+sign in. Keys contain 256 random bits; only SHA-256 hashes and display metadata are
+stored in `api-keys.json` beside the catalog. Override the path with `--api-keys-file` or
+`REMOTE_BROWSER_API_KEYS_FILE`. Compatible existing registries retain their named keys;
+use one owner process per registry and keep a backup during migration.
 
-## API key management
+Every HTTP MCP request revalidates its key. Revocation rejects subsequent requests;
+a previously accepted operation may finish. Revoked seed keys are not reimported on
+restart, malformed registries fail closed, and last-use writes occur at most once per
+minute per key. Up to 100 active keys are supported. A seed token is unnecessary when
+keys are managed through Settings.
 
-Sign in with the owner account, then open **More options → API keys**. The restored
-settings panel provides the MCP endpoint, named key creation, one-time secret
-display and copy, creation and last-use dates, and confirmed revocation. Leaving
-settings clears the displayed secret. The panel uses the same component and
-stylesheet as the original dashboard; run `bun run build` after changing
-that component to regenerate the committed JavaScript bundle before a Rust build.
-
-The panel displays `/mcp` on the dashboard origin, assuming a reverse proxy that
-exposes both listeners there. A direct separate-port launch must instead configure
-the MCP client with the `--mcp-http-port` listener, such as `http://127.0.0.1:8083/mcp`
-in the example above. The dashboard listener does not proxy MCP itself.
-
-Only the owner session cookie can list, create or revoke keys. Automation bearers
-cannot manage keys or sign in. Mutations require the exact dashboard Origin. New
-keys have 256 random bits; only SHA-256 hashes and display metadata are stored in
-the private version-1 `api-keys.json` registry beside the owner account. Configure
-`--api-keys-file` or `REMOTE_BROWSER_API_KEYS_FILE` to change this path. The schema accepts
-the original application's registry, so existing named keys can be retained. Use
-one registry owner process and retain the original as a backup during migration.
-
-Every HTTP MCP request checks the registry, including requests with an existing
-MCP session. Revocation rejects subsequent requests immediately; an action already
-accepted may finish. Other keys continue working. A revoked initial key is never
-reimported on restart, and a malformed registry fails closed. Last-use metadata
-writes are limited to once per minute per key; the displayed timestamp can lag
-within that interval. Up to 100 active keys are supported. The HTTP listener does
-not need a seed token when the owner manages keys through the dashboard.
+Verify both independent modules against the actual engine:
 
 ```sh
-REMOTE_BROWSER_ENGINE_BINARY=/path/to/remote-browser-cef-engine \
-  python3 src/host/tests/keys_smoke.py --engine-binary /path/to/remote-browser-native
+python3 src/host/tests/native_extensions_smoke.py \
+  --host-binary /path/to/remote-browser-native \
+  --engine-binary /path/to/remote-browser-cef-engine
 ```
+
+The test checks a fresh browser without keys, installation, real authenticated automation,
+login protection and cookies, independent disable/re-enable, persisted state across
+restart, confirmed uninstall, and revocation retention after reinstall.
 
 ## Native workflow parity
 
-The dashboard retains username/password owner login and adds API key login. Key sessions use HttpOnly cookies and are revalidated on each request. The owner can assign all profiles (including future profiles) or a specific nonempty profile selection to each key, and edit that selection later. Existing keys retain all-profile access. Restricted keys cannot create profiles or administer keys. MCP and dashboard operations enforce the same profile permissions. Tab reservations are bound to the acquiring key; agents may share one key and reserve with their own `agentName` and independent `leaseId`.
+The Access native extension provides optional browser login. The separate MCP extension
+owns API keys and agent session permissions. Restricted agent keys cannot create profiles
+or administer keys. Tab reservations are bound to the acquiring key; agents may share one
+key and reserve with their own `agentName` and independent `leaseId`.
 
 `browser_control` provides native back/forward, real reload, profile clipboard operations (8192 UTF-8 bytes), saved PNG captures and MP4 recording. Recordings require FFmpeg on the runtime host, follow the profile's visible tab, omit audio and run for at most 300 seconds. Captures and recordings appear alongside downloads/uploads in Files, with preview, download and deletion controls. Managed files remain bounded to 64 MiB.
 
