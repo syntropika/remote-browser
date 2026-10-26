@@ -155,6 +155,7 @@ def exercise(binary, verify_expiry, protocol_only):
                     engine.call('extension_install_decide', tab, decision, error=True)
                     engine.call('extension_install_decide', tab, {'id': request['id'], 'allow': 'true'}, human=True, error=True)
                     assert engine.call('extension_installs')['requests'][0]['id'] == request['id']
+                    print('PASS: real Store button and native permission request; wrong-tab, nonhuman and malformed decisions refused.', flush=True)
                     other = start('other-profile')
                     assert other.call('extension_installs')['requests'] == []
                     other.call('extension_install_decide', other.call('tabs')[0]['id'], decision, human=True, error=True)
@@ -164,6 +165,8 @@ def exercise(binary, verify_expiry, protocol_only):
                     assert wait(lambda: status(engine, tab)) == 'installable'
                     engine.call('extension_install_decide', tab, decision, human=True, error=True)
 
+                    print('PASS: profile isolation, clean secondary shutdown, refusal without installation and single-use decisions.', flush=True)
+
                     pending(engine, tab)
                     engine.call('navigate', tab, {'url': 'about:blank'}, human=True)
                     empty(engine)
@@ -171,11 +174,14 @@ def exercise(binary, verify_expiry, protocol_only):
                     pending(engine, closing_tab)
                     engine.call('close', closing_tab, human=True)
                     empty(engine)
+                    print('PASS: pending installation canceled on navigation and tab closure.', flush=True)
                     if verify_expiry:
                         request = pending(engine, tab)
+                        print('Checking the three-minute native request expiry.', flush=True)
                         wait(lambda: engine.call('extension_installs')['requests'],
                              lambda requests: not requests, seconds=195)
                         engine.call('extension_install_decide', tab, {'id': request['id'], 'allow': True}, human=True, error=True)
+                        print('PASS: expired installation request cannot be approved.', flush=True)
 
                     request = pending(engine, tab)
                     decision = {'id': request['id'], 'allow': True}
@@ -185,6 +191,7 @@ def exercise(binary, verify_expiry, protocol_only):
                     wait(lambda: status(engine, tab), lambda value: value == 'enabled', seconds=60)
                     options(engine, tab)
                     set_theme(engine, tab, 'force_light')
+                    print('PASS: signed Store extension installed and its real options UI saved a light theme.', flush=True)
                     engine.stop()
 
                     for expected, color in [('force_light', 'rgb(255, 255, 255)'), ('force_dark', 'rgb(26, 26, 26)')]:
@@ -197,6 +204,7 @@ def exercise(binary, verify_expiry, protocol_only):
                             parsed:!!document.getElementById('jsonFormatterParsed'),
                             json:window.json, background:getComputedStyle(document.body).backgroundColor
                         };'''}), lambda value: value['parsed'] and value.get('json') == PAYLOAD and value['background'] == color)
+                        print(f'PASS: restart restored {expected}, extension storage and formatted-page appearance.', flush=True)
                         if expected == 'force_light':
                             options(engine, tab)
                             set_theme(engine, tab, 'force_dark')

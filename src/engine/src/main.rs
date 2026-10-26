@@ -8,6 +8,7 @@
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use cef::args::Args;
+mod browser_lifecycle;
 mod extension_installs;
 
 use cef::*;
@@ -394,6 +395,7 @@ wrap_client! {
         shared: Arc<Shared>,
         picker: Rc<RefCell<Option<FileDialogCallback>>>,
         downloads: Option<std::path::PathBuf>,
+        browsers: browser_lifecycle::Browsers,
     }
 
     impl Client {
@@ -411,6 +413,10 @@ wrap_client! {
 
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(Downloads::new(self.downloads.clone()))
+        }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.browsers.handler())
         }
     }
 }
@@ -468,12 +474,17 @@ struct Surfacing {
 }
 
 impl Surfacing {
-    fn open(id: String, size: (i32, i32), downloads: Option<std::path::PathBuf>) -> Option<Self> {
+    fn open(
+        id: String,
+        size: (i32, i32),
+        downloads: Option<std::path::PathBuf>,
+        browsers: browser_lifecycle::Browsers,
+    ) -> Option<Self> {
         let shared = Arc::new(Shared::default());
         *shared.size.lock().unwrap() = size;
         let picker = Rc::new(RefCell::new(None));
         let window_info = WindowInfo::default().set_as_windowless(0);
-        let mut client = Surfaced::new(shared.clone(), picker.clone(), downloads);
+        let mut client = Surfaced::new(shared.clone(), picker.clone(), downloads, browsers);
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
@@ -534,6 +545,7 @@ impl Surfacing {
 
 struct Engine {
     installs: Option<extension_installs::InstallBridge>,
+    browsers: browser_lifecycle::Browsers,
     tabs: Vec<Surfacing>,
     active: usize,
     next_tab: u32,
@@ -647,7 +659,7 @@ impl Engine {
             .files
             .as_ref()
             .map(|files| files.root().join("downloads"));
-        let tab = Surfacing::open(id.clone(), self.surface, downloads)
+        let tab = Surfacing::open(id.clone(), self.surface, downloads, self.browsers.clone())
             .ok_or("the tab could not be created")?;
         let painted = tab.shared.clone();
         self.tabs.push(tab);
@@ -1837,7 +1849,9 @@ fn main() {
         None => None,
     };
     let downloads = files.as_ref().map(|files| files.root().join("downloads"));
-    let Some(first) = Surfacing::open("tab-1".to_string(), VIEWPORT, downloads) else {
+    let browsers = browser_lifecycle::Browsers::default();
+    let Some(first) = Surfacing::open("tab-1".to_string(), VIEWPORT, downloads, browsers.clone())
+    else {
         eprintln!("the first tab could not be created");
         shutdown();
         std::process::exit(1);
@@ -1845,6 +1859,7 @@ fn main() {
     let inbox = reader();
     let mut engine = Engine {
         installs: extension_installs::InstallBridge::discover(),
+        browsers: browsers.clone(),
         tabs: vec![first],
         active: 0,
         next_tab: 1,
@@ -1878,5 +1893,13 @@ fn main() {
     if let Some(installs) = &engine.installs {
         installs.cancel(0);
     }
+    browsers.close_all();
+    // Release browser and DevTools references before CEF's OnBeforeClose callbacks.
+    drop(engine);
+    if !pump_within(Duration::from_secs(8), || browsers.all_closed()) {
+        eprintln!("the engine could not close every browser before shutdown");
+        std::process::exit(1);
+    }
+    drop(browsers);
     shutdown();
 }

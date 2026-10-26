@@ -98,6 +98,19 @@ Build and run against the custom CEF distribution before considering this featur
 ready. A Rust build against stock CEF, a mocked bridge, patch applicability, or a UI
 fixture alone does not establish that the native source integration compiles or works.
 
+Run the browser shutdown regression and the real-store suite against the same engine:
+
+```sh
+python3 src/host/tests/shutdown_smoke.py --engine-binary /path/to/remote-browser-cef-engine
+python3 src/host/tests/extension_install_smoke.py \
+  --engine-binary /path/to/remote-browser-cef-engine --verify-expiry
+```
+
+Shutdown must close every native browser, release the engine's browser and DevTools
+references, and receive all `OnBeforeClose` callbacks before calling `cef_shutdown`.
+The shutdown regression checks both the protocol command and closed standard input,
+including multiple tabs and reopening the same profile.
+
 The real-store acceptance run must cover an enabled Add to Chrome click, the web
 permission dialog, cancellation without installation, explicit approval, preserved
 published extension identity, native installation completion, clean shutdown, and
