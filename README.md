@@ -47,7 +47,12 @@ key. A key is for agents: the dashboard itself has no sign-in, only its address.
 one. An agent that releases a tab closes it, so your own tabs stay as you left them. The agent-facing contract is described in
 [skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
 
-## Extension installation (experimental)
+## Extensions (experimental)
+
+The dashboard includes an Extensions toolbar shortcut and a Settings section for each
+session: list installed extensions, enable or disable them, open their options, or
+remove them after confirmation. Management requires the custom native API and reports
+when it is unavailable in older browser builds.
 
 The native store-installation bridge requires a custom CEF build. Its
 [source integration and build instructions](src/engine/cef/README.md) route installation

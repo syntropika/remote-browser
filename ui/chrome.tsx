@@ -265,6 +265,20 @@ export function Chrome({
               {holding === "you" ? "Return this tab to agents" : "Ask for control of this tab"}
             </Tooltip.Content>
           </Tooltip>
+          <Tooltip>
+            <Tooltip.Trigger>
+              <Button
+                aria-label="Extensions"
+                isIconOnly
+                onPress={() => onMenu("extensions")}
+                size="sm"
+                variant="ghost"
+              >
+                <Icon name="extensions" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Extensions</Tooltip.Content>
+          </Tooltip>
           <Dropdown>
             <Button aria-label="More options" isIconOnly size="sm" variant="ghost">
               <Icon name="more" />
@@ -280,6 +294,10 @@ export function Chrome({
                   <Dropdown.Item id="settings" textValue="Settings">
                     <Icon name="settings" />
                     Settings
+                  </Dropdown.Item>
+                  <Dropdown.Item id="extensions" textValue="Extensions">
+                    <Icon name="extensions" />
+                    Extensions
                   </Dropdown.Item>
                   <Dropdown.Item id="files" textValue="Files">
                     <Icon name="files" />

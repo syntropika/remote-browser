@@ -184,6 +184,10 @@ impl Automation {
         if !matches!(
             op,
             "handoff_status"
+                | "extensions"
+                | "extension_set_enabled"
+                | "extension_remove"
+                | "extension_options"
                 | "extension_installs"
                 | "extension_install_decide"
                 | "handoff_ack"

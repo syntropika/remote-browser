@@ -28,7 +28,8 @@ def main():
     patches = [(chromium, ROOT / "chromium.patch"), (cef, ROOT / "cef.patch")]
     copies = [
         (ROOT / name, cef / "libcef/browser" / ("remote_browser_" + name))
-        for name in ["install_bridge.h", "install_bridge.cc", "install_bridge_capi.h"]
+        for name in ["install_bridge.h", "install_bridge.cc", "install_bridge_capi.h",
+                     "extension_management.cc", "extension_management_capi.h"]
     ]
     # Complete preflight before the first mutation. Refuse partial/repeated application
     # instead of guessing which source changes belong to this integration.

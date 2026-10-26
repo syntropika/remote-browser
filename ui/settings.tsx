@@ -4,15 +4,19 @@ import { useEffect, useState } from "react";
 
 import { failure } from "./api.js";
 import { asyncHandler } from "./async-boundary.js";
+import { ExtensionManager } from "./extension-manager.js";
 import { Icon } from "./icons.js";
 import { Keys } from "./keys.js";
 import type { Policy, Profile } from "./model.js";
 import { origin } from "./model.js";
 import { FormRow, Group, Row } from "./rows.js";
 
-type Section = "sessions" | "keys" | "checks" | "display" | "access";
+export type SettingsSection = "sessions" | "extensions" | "keys" | "checks" | "display" | "access";
 
 type Props = {
+  initialSection: SettingsSection;
+  onOpenTab: (id: string, profile: string) => void;
+  onStore: (profile: string) => Promise<void>;
   profiles: Profile[];
   profileId: string;
   endpoint: string;
@@ -28,12 +32,18 @@ type Props = {
   onClose: () => void;
 };
 
-const SECTIONS: { id: Section; label: string; icon: string; blurb: string }[] = [
+const SECTIONS: { id: SettingsSection; label: string; icon: string; blurb: string }[] = [
   {
     id: "sessions",
     label: "Sessions",
     icon: "profile",
     blurb: "Separate browsers, each with its own sign-ins",
+  },
+  {
+    id: "extensions",
+    label: "Extensions",
+    icon: "extensions",
+    blurb: "Manage the extensions installed in this session",
   },
   {
     id: "keys",
@@ -62,6 +72,9 @@ const SECTIONS: { id: Section; label: string; icon: string; blurb: string }[] = 
 ];
 
 export function Settings({
+  initialSection,
+  onOpenTab,
+  onStore,
   profiles,
   profileId,
   endpoint,
@@ -74,7 +87,7 @@ export function Settings({
   onReconnect,
   onClose,
 }: Props) {
-  const [section, setSection] = useState<Section>("sessions");
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [policy, setPolicy] = useState<Policy>({
     origin: "",
     cookieNames: [],
@@ -101,17 +114,27 @@ export function Settings({
 
   return (
     <section aria-label="Settings" className="bg-card absolute inset-0 z-30 flex">
-      <aside className="flex w-64 shrink-0 flex-col gap-1 p-3">
-        <Button className="justify-start" onPress={onClose} size="sm" variant="ghost">
+      <aside className="flex w-14 shrink-0 flex-col gap-1 p-2 sm:w-64 sm:p-3">
+        <Button
+          aria-label="Back to browser"
+          className="justify-start"
+          onPress={onClose}
+          size="sm"
+          variant="ghost"
+        >
           <Icon name="back" />
-          Back to browser
+          <span className="hidden sm:inline">Back to browser</span>
         </Button>
-        <h1 className="px-3 pt-4 pb-2 text-lg font-semibold tracking-tight">Settings</h1>
+        <h1 className="sr-only text-lg font-semibold tracking-tight sm:not-sr-only sm:px-3 sm:pt-4 sm:pb-2">
+          Settings
+        </h1>
         <nav aria-label="Settings sections" className="flex flex-col gap-0.5">
           {SECTIONS.map((entry) => (
             <button
               aria-current={entry.id === section}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+              aria-label={entry.label}
+              title={entry.label}
+              className={`flex items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors sm:px-3 ${
                 entry.id === section
                   ? "border-accent text-ink border-l-2 bg-white/10 font-medium"
                   : "text-ink-dim hover:bg-raised border-l-2 border-transparent"
@@ -123,21 +146,32 @@ export function Settings({
               type="button"
             >
               <Icon name={entry.icon} />
-              {entry.label}
+              <span className="hidden sm:inline">{entry.label}</span>
             </button>
           ))}
         </nav>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="shrink-0 px-8 py-4">
+        <header className="shrink-0 px-4 py-4 sm:px-8">
           <h2 className="text-xl font-semibold tracking-tight">{current?.label}</h2>
           <p className="text-ink-faint text-sm">{current?.blurb}</p>
         </header>
         {/* The page the sections write on: a darker canvas whose corner is rounded where the
             sidebar and the header meet it, the way the reference browser lays its settings out. */}
         <div className="bg-page min-h-0 flex-1 overflow-auto rounded-tl-3xl">
-          <div className="mx-auto flex max-w-3xl flex-col gap-7 px-8 py-7">
+          <div className="mx-auto flex max-w-3xl flex-col gap-7 px-4 py-5 sm:px-8 sm:py-7">
+            {section === "extensions" ? (
+              <ExtensionManager
+                key={profileId}
+                onOpenTab={onOpenTab}
+                onStore={onStore}
+                profileId={profileId}
+                profileName={
+                  profiles.find((profile) => profile.id === profileId)?.name || "this session"
+                }
+              />
+            ) : null}
             {section === "sessions" ? (
               <>
                 <Group

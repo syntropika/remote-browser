@@ -38,7 +38,8 @@ with the default allocator settings can abort during engine startup.
 Regenerate and build a CEF binary distribution with the normal CEF tooling. Its
 `libcef.so` must export `rb_extension_install_enable_v1`,
 `rb_extension_install_poll_v1`, `rb_extension_install_resolve_v1`, and
-`rb_extension_install_cancel_v1`. Keep the corresponding CEF resources and distribution
+`rb_extension_install_cancel_v1`. Installed-extension management additionally requires
+`rb_extensions_manage_v1`. Keep the corresponding CEF resources and distribution
 metadata together. Build the Rust engine with that distribution as `CEF_PATH`:
 
 ```sh
@@ -120,3 +121,31 @@ and resulting page behavior. Repeat with another option value. Also cover duplic
 decisions, wrong tabs, navigation, closure, timeout, and profile isolation. Test only
 isolated profiles. The existing research spike supplies baseline behavior, not passing
 acceptance evidence for this new integration.
+
+## Installed extension management
+
+The optional `rb_extensions_manage_v1` export provides a versioned JSON interface
+for listing, enabling, disabling, removing, and opening options for installed user
+extensions. See `extension_management_capi.h` for the single-call buffer contract.
+The browser ID selects the owning profile; component extensions are excluded.
+Chromium policy and permission-increase restrictions remain authoritative. Enabling
+only clears an ordinary user-disabled state; extensions requiring additional review
+are not enabled through this interface.
+
+The dashboard toolbar includes an Extensions shortcut to Settings. Each session has
+its own extension list, enable switch, options action, and confirmed removal action.
+The host exposes `extensions` as an observation. Changes and opening options require
+human/dashboard actions: `extension_set_enabled` needs an explicit boolean and
+`extension_remove` needs `confirmed: true`. Older CEF builds report management as
+unavailable. Chrome toolbar popups remain outside this integration.
+
+Run the management acceptance suite against the custom runtime:
+
+```sh
+python3 src/host/tests/extension_management_smoke.py \
+  --engine-binary /path/to/remote-browser-cef-engine
+```
+
+This isolated-profile suite checks a real Store extension, policy-aware metadata,
+profile isolation, human-only changes, actual options, page behavior while disabled,
+and persistence of disabled state, saved options, and removal across clean restarts.

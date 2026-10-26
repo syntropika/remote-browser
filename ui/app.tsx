@@ -13,6 +13,7 @@ import { FilesPanel } from "./files.js";
 import { Icon } from "./icons.js";
 import type { Health, ManagedFile, Policy, Profile, Tab } from "./model.js";
 import { editable, origin, readHealth, readPolicy, readProfile, readTab } from "./model.js";
+import type { SettingsSection } from "./settings.js";
 import { Settings } from "./settings.js";
 import { TabStrip } from "./tabs.js";
 import { flag, list, record, text } from "./wire.js";
@@ -38,6 +39,7 @@ export function App() {
   const [epoch, setEpoch] = useState(0);
   const [dialog, setDialog] = useState<"" | "profile" | "clipboard">("");
   const [panel, setPanel] = useState<"" | "files" | "settings">("");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("sessions");
   const [preview, setPreview] = useState<ManagedFile | null>(null);
   const [surface, setSurface] = useState("—");
   const [recording, setRecording] = useState(false);
@@ -344,7 +346,13 @@ export function App() {
       setDialog("profile");
       return;
     }
+    if (key === "extensions") {
+      setSettingsSection("extensions");
+      setPanel("settings");
+      return;
+    }
     if (key === "files" || key === "settings") {
+      setSettingsSection("sessions");
       setPanel(key);
       return;
     }
@@ -582,6 +590,27 @@ export function App() {
       />
       {panel === "settings" ? (
         <Settings
+          initialSection={settingsSection}
+          key={settingsSection}
+          onOpenTab={(id, profile) => {
+            if (profile === live.current.profileId) {
+              setPanel("");
+              selectTab(id);
+            }
+          }}
+          onStore={async (profile) => {
+            const id = text(await action("open", {}, null, profile));
+            await action(
+              "navigate",
+              { url: "https://chromewebstore.google.com/category/extensions" },
+              id,
+              profile,
+            );
+            if (profile === live.current.profileId) {
+              setPanel("");
+              selectTab(id);
+            }
+          }}
           endpoint={`${location.origin}/mcp`}
           onClose={() => setPanel("")}
           onNewSession={() => setDialog("profile")}

@@ -10,6 +10,7 @@ use base64::prelude::BASE64_STANDARD;
 use cef::args::Args;
 mod browser_lifecycle;
 mod extension_installs;
+mod extensions;
 
 use cef::*;
 use image::ImageEncoder;
@@ -545,6 +546,7 @@ impl Surfacing {
 
 struct Engine {
     installs: Option<extension_installs::InstallBridge>,
+    extensions: Option<extensions::Manager>,
     browsers: browser_lifecycle::Browsers,
     tabs: Vec<Surfacing>,
     active: usize,
@@ -1207,6 +1209,59 @@ impl Engine {
         }
 
         match call.op.as_str() {
+            "extensions" => match &self.extensions {
+                Some(manager) => {
+                    manager.request(self.tabs[at].browser.identifier(), json!({"op": "list"}))
+                }
+                None => Ok(json!({"available": false, "extensions": []})),
+            },
+            "extension_set_enabled" | "extension_remove" | "extension_options" => {
+                if !call.human {
+                    return Err("Extension management requires the dashboard".into());
+                }
+                let id = call.args["id"]
+                    .as_str()
+                    .ok_or("An extension ID is required")?;
+                let request = match call.op.as_str() {
+                    "extension_set_enabled" => json!({
+                        "op": "set_enabled", "id": id,
+                        "enabled": call.args["enabled"].as_bool()
+                            .ok_or("An explicit enabled state is required")?,
+                    }),
+                    "extension_remove" => {
+                        if call.args["confirmed"].as_bool() != Some(true) {
+                            return Err("Confirm removal of this extension first".into());
+                        }
+                        json!({"op": "remove", "id": id, "confirmed": true})
+                    }
+                    _ => json!({"op": "options", "id": id}),
+                };
+                let result = self
+                    .extensions
+                    .as_ref()
+                    .ok_or("This CEF build does not support extension management")?
+                    .request(self.tabs[at].browser.identifier(), request)?;
+                if call.op == "extension_options" {
+                    let url = result["url"]
+                        .as_str()
+                        .ok_or("This extension has no options page")?;
+                    let parsed =
+                        url::Url::parse(url).map_err(|_| "Invalid extension options URL")?;
+                    if parsed.scheme() != "chrome-extension" || parsed.host_str() != Some(id) {
+                        return Err("Invalid extension options URL".into());
+                    }
+                    let opened = self.open()?;
+                    let index = self.index(opened.as_str())?;
+                    let frame = self.tabs[index]
+                        .browser
+                        .main_frame()
+                        .ok_or("The options tab has no frame")?;
+                    frame.load_url(Some(&CefString::from(url)));
+                    self.settle(index)?;
+                    return Ok(opened);
+                }
+                Ok(result)
+            }
             "extension_installs" => {
                 let Some(installs) = &self.installs else {
                     return Ok(json!({"available": false, "requests": []}));
@@ -1859,6 +1914,7 @@ fn main() {
     let inbox = reader();
     let mut engine = Engine {
         installs: extension_installs::InstallBridge::discover(),
+        extensions: extensions::Manager::discover(),
         browsers: browsers.clone(),
         tabs: vec![first],
         active: 0,
