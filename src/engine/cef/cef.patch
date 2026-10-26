@@ -1,0 +1,24 @@
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -540,6 +540,11 @@
+     "libcef/browser/browser_guest_util.h",
+     "libcef/browser/browser_host_base.cc",
+     "libcef/browser/browser_host_base.h",
++    "libcef/browser/remote_browser_install_bridge.cc",
++    "libcef/browser/remote_browser_install_bridge.h",
++    "libcef/browser/remote_browser_install_bridge_capi.h",
++    "libcef/browser/remote_browser_extension_management.cc",
++    "libcef/browser/remote_browser_extension_management_capi.h",
+     "libcef/browser/browser_host_create.cc",
+     "libcef/browser/browser_info.cc",
+     "libcef/browser/browser_info.h",
+--- a/libcef_dll/libcef.lst
++++ b/libcef_dll/libcef.lst
+@@ -4,6 +4,6 @@
+ 
+ {
+   /* Only export necessary symbols from libcef.so. */
+-  global: cef_*;
++  global: cef_*; rb_extension_install_*; rb_extensions_*;
+   local: *;
+ };

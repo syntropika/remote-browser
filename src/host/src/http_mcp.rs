@@ -1,5 +1,5 @@
 //! Optional authenticated HTTP adapter over the same profiles as stdio and the dashboard.
-use crate::{Error, Result, api_keys::ApiKeys, mcp::NativeMcp, profiles::Profiles};
+use crate::{Error, Result, mcp::NativeMcp, native_extensions::McpExtension, profiles::Profiles};
 use axum::{
     Router,
     extract::{Request, State},
@@ -12,7 +12,19 @@ use rmcp::transport::streamable_http_server::{
 };
 use std::{io::Read, path::Path, sync::Arc};
 
-async fn authorize(State(keys): State<Arc<ApiKeys>>, mut request: Request, next: Next) -> Response {
+async fn authorize(
+    State(extension): State<Arc<McpExtension>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    if extension.enabled().is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("cache-control", "no-store")],
+            "The MCP extension is not enabled",
+        )
+            .into_response();
+    }
     let supplied = request
         .headers()
         .get("authorization")
@@ -20,17 +32,21 @@ async fn authorize(State(keys): State<Arc<ApiKeys>>, mut request: Request, next:
         .and_then(|header| header.strip_prefix("Bearer "))
         .unwrap_or("");
     let supplied = supplied.to_owned();
-    let registry = keys.clone();
-    let allowed = tokio::task::spawn_blocking(move || registry.authenticate_id(&supplied)).await;
+    let allowed = tokio::task::spawn_blocking(move || {
+        let keys = extension.keys().map_err(|_| ())?;
+        let id = keys.authenticate_id(&supplied).map_err(|_| ())?;
+        Ok::<_, ()>((keys, id))
+    })
+    .await;
     let status = match allowed {
-        Ok(Ok(Some(id))) => {
+        Ok(Ok((keys, Some(id)))) => {
             request.extensions_mut().insert(crate::identity::Client {
                 id,
                 keys: Some(keys),
             });
             None
         }
-        Ok(Ok(None)) => Some(StatusCode::UNAUTHORIZED),
+        Ok(Ok((_, None))) => Some(StatusCode::UNAUTHORIZED),
         _ => Some(StatusCode::SERVICE_UNAVAILABLE),
     };
     if let Some(status) = status {
@@ -94,31 +110,42 @@ pub fn token(path: &Path) -> Result<String> {
     }
     Ok(text.to_owned())
 }
-pub async fn start(
+/// Mount on the browser address or a dedicated listener; both use the same extension state.
+pub fn router(
     profiles: Profiles,
-    port: u16,
-    keys: Arc<ApiKeys>,
-) -> Result<tokio::task::JoinHandle<()>> {
-    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
-    let address = listener.local_addr()?;
+    extension: Arc<McpExtension>,
+    address: std::net::SocketAddr,
+) -> Router {
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_json_response(true)
         .with_allowed_hosts([address.to_string(), format!("localhost:{}", address.port())])
         .with_allowed_origins([format!("http://{address}")])
         .with_max_request_body_bytes(65536);
+    let service_extension = extension.clone();
     let service = StreamableHttpService::new(
         move || {
             Ok(NativeMcp {
                 profiles: profiles.clone(),
+                extension: service_extension.clone(),
             })
         },
         Arc::new(LocalSessionManager::default()),
         config,
     );
-    let app = Router::new()
+    Router::new()
         .route_service("/mcp", service)
-        .layer(middleware::from_fn_with_state(keys, authorize));
+        .layer(middleware::from_fn_with_state(extension, authorize))
+}
+
+pub async fn start(
+    profiles: Profiles,
+    port: u16,
+    extension: Arc<McpExtension>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
+    let address = listener.local_addr()?;
+    let app = router(profiles, extension, address);
     Ok(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     }))

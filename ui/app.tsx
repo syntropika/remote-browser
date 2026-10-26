@@ -1,17 +1,26 @@
 /** The dashboard: one browser, its tabs, and the people and agents sharing it. */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { BrowserLogin } from "./access.js";
 import type { Tone } from "./alert.js";
 import { Alert } from "./alert.js";
 import { action, api, failure, whenUnauthorized } from "./api.js";
 import { asyncHandler, background } from "./async-boundary.js";
 import { Chrome } from "./chrome.js";
-import { ClipboardDialog, HandoffDialog, MediaDialog, NewProfileDialog } from "./dialogs.js";
+import {
+  ClipboardDialog,
+  HandoffDialog,
+  MediaDialog,
+  NewProfileDialog,
+  WebsiteDialog,
+} from "./dialogs.js";
 import { Display } from "./display.js";
+import { ExtensionInstalls } from "./extensions.js";
 import { FilesPanel } from "./files.js";
 import { Icon } from "./icons.js";
 import type { Health, ManagedFile, Policy, Profile, Tab } from "./model.js";
 import { editable, origin, readHealth, readPolicy, readProfile, readTab } from "./model.js";
+import type { SettingsSection } from "./settings.js";
 import { Settings } from "./settings.js";
 import { TabStrip } from "./tabs.js";
 import { flag, list, record, text } from "./wire.js";
@@ -37,6 +46,7 @@ export function App() {
   const [epoch, setEpoch] = useState(0);
   const [dialog, setDialog] = useState<"" | "profile" | "clipboard">("");
   const [panel, setPanel] = useState<"" | "files" | "settings">("");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("sessions");
   const [preview, setPreview] = useState<ManagedFile | null>(null);
   const [surface, setSurface] = useState("—");
   const [recording, setRecording] = useState(false);
@@ -47,7 +57,8 @@ export function App() {
   live.current = { profileId, tabId, profiles, tabs };
 
   const tab = tabs.find((candidate) => candidate.id === tabId);
-  const interactive = editable(tab) && ready;
+  const pageDialog = editable(tab) ? tab?.jsDialog : null;
+  const interactive = editable(tab) && ready && !pageDialog;
 
   const report = useCallback((cause: unknown) => {
     setNote({ tone: "danger", text: failure(cause).message });
@@ -343,7 +354,13 @@ export function App() {
       setDialog("profile");
       return;
     }
+    if (key === "extensions") {
+      setSettingsSection("extensions");
+      setPanel("settings");
+      return;
+    }
     if (key === "files" || key === "settings") {
+      setSettingsSection("sessions");
       setPanel(key);
       return;
     }
@@ -450,33 +467,7 @@ export function App() {
     return <main className="bg-page h-dvh" />;
   }
   if (phase === "closed") {
-    return (
-      <main className="bg-page grid min-h-dvh place-items-center px-6 py-8">
-        <section aria-labelledby="closed-title" className="w-full max-w-96">
-          <div className="mb-10 flex items-center gap-2.5 text-sm font-semibold">
-            <span className="border-line-strong bg-card grid size-10 place-items-center rounded-[14px] border">
-              <Icon className="size-[22px]" name="window" />
-            </span>
-            Remote Browser
-          </div>
-          <h1
-            className="text-[26px] leading-tight font-semibold tracking-[-0.025em] text-balance"
-            id="closed-title"
-          >
-            Open this browser's own address
-          </h1>
-          <p className="text-ink-faint mt-3 text-sm leading-relaxed">
-            This browser has no account and no sign-in. It prints an address carrying a one-time
-            token when it starts, and that address is the only way in. Restart it to print a new
-            one; an agent reaches it over MCP with an API key instead.
-          </p>
-          <p className="border-line-strong text-ink-faint mt-7 flex items-start gap-2 border-t pt-5 text-xs leading-relaxed">
-            <Icon className="mt-0.5 size-[15px]" name="lock" />
-            Your website sessions stay separate in each browser session.
-          </p>
-        </section>
-      </main>
-    );
+    return <BrowserLogin onSignedIn={connect} />;
   }
 
   return (
@@ -505,8 +496,16 @@ export function App() {
           profiles={profiles}
           recording={recording}
           tab={tab}
+          tabs={tabs}
+          onSelectTab={selectTab}
+          onCloseTab={closeTab}
+          onOpenTab={openTab}
         />
-        <div className="bg-page relative min-h-0 flex-1 overflow-hidden">
+        <section
+          aria-busy={!ready}
+          aria-label="Browser display"
+          className="bg-page relative min-h-0 flex-1 overflow-hidden"
+        >
           <Display
             epoch={epoch}
             interactive={interactive}
@@ -526,7 +525,7 @@ export function App() {
               </p>
             </div>
           )}
-        </div>
+        </section>
         {note ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center">
             <Alert description={note.text} onClose={() => setNote(null)} tone={note.tone} />
@@ -581,6 +580,27 @@ export function App() {
       />
       {panel === "settings" ? (
         <Settings
+          initialSection={settingsSection}
+          key={settingsSection}
+          onOpenTab={(id, profile) => {
+            if (profile === live.current.profileId) {
+              setPanel("");
+              selectTab(id);
+            }
+          }}
+          onStore={async (profile) => {
+            const id = text(await action("open", {}, null, profile));
+            await action(
+              "navigate",
+              { url: "https://chromewebstore.google.com/category/extensions" },
+              id,
+              profile,
+            );
+            if (profile === live.current.profileId) {
+              setPanel("");
+              selectTab(id);
+            }
+          }}
           endpoint={`${location.origin}/mcp`}
           onClose={() => setPanel("")}
           onNewSession={() => setDialog("profile")}
@@ -611,6 +631,18 @@ export function App() {
         tabId={tabId}
       />
       <MediaDialog file={preview} onClose={() => setPreview(null)} profileId={profileId} />
+      {pageDialog ? (
+        <WebsiteDialog
+          key={`${profileId}:${tabId}:${pageDialog.id}`}
+          dialog={pageDialog}
+          profileId={profileId}
+          tabId={tabId}
+          onResolved={() => refresh(profileId)}
+        />
+      ) : null}
+      {profileId && !dialog && !panel && !handoff && !preview && !pageDialog ? (
+        <ExtensionInstalls key={profileId} onNotice={inform} profileId={profileId} />
+      ) : null}
       <HandoffDialog
         error={handoffError}
         isOpen={!!handoff}

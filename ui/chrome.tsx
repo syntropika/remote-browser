@@ -2,9 +2,10 @@
 import { Button, Dropdown, InputGroup, Tooltip } from "@heroui/react";
 import { useEffect, useRef, useState } from "react";
 
-import { agentColour } from "./agents.js";
+import { BrowserMenu } from "./browser-menu.js";
 import { Icon } from "./icons.js";
 import type { Health, Profile, Tab } from "./model.js";
+import { MobileTabs } from "./tabs.js";
 
 type Props = {
   tab: Tab | undefined;
@@ -20,6 +21,10 @@ type Props = {
   onMenu: (key: string) => void;
   onTake: () => void;
   onReturn: () => void;
+  tabs: Tab[];
+  onSelectTab: (id: string) => void;
+  onCloseTab: (id: string) => void;
+  onOpenTab: () => void;
 };
 
 const healthNames: Record<Health["state"], string> = {
@@ -51,6 +56,10 @@ export function Chrome({
   onMenu,
   onTake,
   onReturn,
+  tabs,
+  onSelectTab,
+  onCloseTab,
+  onOpenTab,
 }: Props) {
   const [address, setAddress] = useState("");
   const field = useRef<HTMLInputElement | null>(null);
@@ -80,59 +89,64 @@ export function Chrome({
   const state = health ? healthNames[health.state] + remaining : healthNote;
 
   return (
-    <div className="bg-chrome flex flex-col px-2 py-1.5">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <Tooltip>
-          <Tooltip.Trigger>
-            <Button
-              aria-label="Back"
-              isDisabled={!interactive || !tab?.canGoBack}
-              isIconOnly
-              onPress={() => {
-                onHistory("back");
-              }}
-              size="sm"
-              variant="ghost"
-            >
-              <Icon name="back" />
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content>Back</Tooltip.Content>
-        </Tooltip>
-        <Tooltip>
-          <Tooltip.Trigger>
-            <Button
-              aria-label="Forward"
-              isDisabled={!interactive || !tab?.canGoForward}
-              isIconOnly
-              onPress={() => {
-                onHistory("forward");
-              }}
-              size="sm"
-              variant="ghost"
-            >
-              <Icon name="forward" />
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content>Forward</Tooltip.Content>
-        </Tooltip>
-        <Tooltip>
-          <Tooltip.Trigger>
-            <Button
-              aria-label="Reload page"
-              isDisabled={!interactive}
-              isIconOnly
-              onPress={() => {
-                onHistory("reload");
-              }}
-              size="sm"
-              variant="ghost"
-            >
-              <Icon name="reload" />
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content>Reload</Tooltip.Content>
-        </Tooltip>
+    <div className="bg-chrome @container flex flex-col px-2 py-1.5">
+      <div
+        aria-label="Browser toolbar"
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 @2xl:grid-cols-[minmax(10.5rem,1fr)_minmax(0,3fr)_minmax(10.5rem,1fr)]"
+      >
+        <div className="hidden shrink-0 items-center gap-1.5 @2xl:flex">
+          <Tooltip>
+            <Tooltip.Trigger>
+              <Button
+                aria-label="Back"
+                isDisabled={!interactive || !tab?.canGoBack}
+                isIconOnly
+                onPress={() => {
+                  onHistory("back");
+                }}
+                size="sm"
+                variant="ghost"
+              >
+                <Icon name="back" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Back</Tooltip.Content>
+          </Tooltip>
+          <Tooltip>
+            <Tooltip.Trigger>
+              <Button
+                aria-label="Forward"
+                isDisabled={!interactive || !tab?.canGoForward}
+                isIconOnly
+                onPress={() => {
+                  onHistory("forward");
+                }}
+                size="sm"
+                variant="ghost"
+              >
+                <Icon name="forward" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Forward</Tooltip.Content>
+          </Tooltip>
+          <Tooltip>
+            <Tooltip.Trigger>
+              <Button
+                aria-label="Reload page"
+                isDisabled={!interactive}
+                isIconOnly
+                onPress={() => {
+                  onHistory("reload");
+                }}
+                size="sm"
+                variant="ghost"
+              >
+                <Icon name="reload" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Reload</Tooltip.Content>
+          </Tooltip>
+        </div>
         <form
           aria-label="Open a website"
           className="min-w-0 flex-1"
@@ -141,12 +155,13 @@ export function Chrome({
             onNavigate(address.trim());
           }}
         >
-          <InputGroup className="bg-address border-line/70 w-full rounded-full border">
+          <InputGroup className="bg-address border-line/70 w-full min-w-0 overflow-hidden rounded-full border">
             <InputGroup.Prefix>
               <Icon name="globe" />
             </InputGroup.Prefix>
             <InputGroup.Input
               aria-label="Page address"
+              className="w-0 min-w-0 flex-1"
               autoCapitalize="none"
               autoComplete="off"
               disabled={!interactive}
@@ -179,7 +194,7 @@ export function Chrome({
               </Tooltip>
               {health ? (
                 <span
-                  className="text-ink-faint max-w-52 truncate text-xs"
+                  className="text-ink-faint hidden max-w-52 truncate text-xs @3xl:block"
                   title={`${state} · ${health.evidence}`}
                 >
                   {state}
@@ -188,29 +203,23 @@ export function Chrome({
             </InputGroup.Suffix>
           </InputGroup>
         </form>
-        <div className="flex flex-shrink-0 items-center gap-1.5">
-          {working ? (
-            <span
-              className="border-line flex max-w-56 items-center gap-1.5 truncate rounded-full border px-2.5 py-1 text-xs"
-              data-colour={agentColour(working.agentName)}
-              style={{ color: "var(--agent)" }}
-              title={`${working.agentName}: ${working.task}`}
-            >
-              <Icon name="lock" />
-              <span className="truncate max-sm:hidden">
-                {working.agentName}: {working.task}
-              </span>
-            </span>
-          ) : null}
+        <div className="flex shrink-0 items-center justify-end @2xl:gap-1.5">
+          <MobileTabs
+            tabs={tabs}
+            tabId={tab?.id || ""}
+            onSelect={onSelectTab}
+            onClose={onCloseTab}
+            onOpen={onOpenTab}
+          />
           <Dropdown>
             <Button
               aria-label={`Session: ${profileName}`}
-              className="whitespace-nowrap"
+              className="hidden whitespace-nowrap @2xl:inline-flex"
+              isIconOnly
               size="sm"
               variant="ghost"
             >
               <Icon name="profile" />
-              <span className="max-w-40 truncate max-sm:hidden">{profileName}</span>
             </Button>
             <Dropdown.Popover placement="bottom end">
               <Dropdown.Menu
@@ -252,6 +261,7 @@ export function Chrome({
             <Tooltip.Trigger>
               <Button
                 aria-label={holding === "you" ? "Return this tab to agents" : "Ask for control"}
+                className="hidden @2xl:inline-flex"
                 isDisabled={!tab || tab.uncertain}
                 isIconOnly
                 onPress={holding === "you" ? onReturn : onTake}
@@ -265,60 +275,33 @@ export function Chrome({
               {holding === "you" ? "Return this tab to agents" : "Ask for control of this tab"}
             </Tooltip.Content>
           </Tooltip>
-          <Dropdown>
-            <Button aria-label="More options" isIconOnly size="sm" variant="ghost">
-              <Icon name="more" />
-            </Button>
-            <Dropdown.Popover placement="bottom end">
-              <Dropdown.Menu
-                aria-label="Browser menu"
-                onAction={(key) => {
-                  onMenu(String(key));
-                }}
+          <Tooltip>
+            <Tooltip.Trigger>
+              <Button
+                aria-label="Extensions"
+                className="hidden @2xl:inline-flex"
+                isIconOnly
+                onPress={() => onMenu("extensions")}
+                size="sm"
+                variant="ghost"
               >
-                <Dropdown.Section aria-label="This browser">
-                  <Dropdown.Item id="settings" textValue="Settings">
-                    <Icon name="settings" />
-                    Settings
-                  </Dropdown.Item>
-                  <Dropdown.Item id="files" textValue="Files">
-                    <Icon name="files" />
-                    Files
-                  </Dropdown.Item>
-                </Dropdown.Section>
-                <Dropdown.Section aria-label="This page">
-                  <Dropdown.SubmenuTrigger>
-                    <Dropdown.Item id="capture" textValue="Capture">
-                      <Icon name="screen" />
-                      Capture
-                      <Dropdown.SubmenuIndicator />
-                    </Dropdown.Item>
-                    <Dropdown.Popover placement="left top">
-                      <Dropdown.Menu
-                        aria-label="Capture"
-                        onAction={(key) => {
-                          onMenu(String(key));
-                        }}
-                      >
-                        <Dropdown.Item id="screenshot" textValue="Save screenshot">
-                          <Icon name="screen" />
-                          Save screenshot
-                        </Dropdown.Item>
-                        <Dropdown.Item id="recording" textValue="Record browser">
-                          <Icon name="window" />
-                          {recording ? "Stop recording" : "Record browser"}
-                        </Dropdown.Item>
-                      </Dropdown.Menu>
-                    </Dropdown.Popover>
-                  </Dropdown.SubmenuTrigger>
-                  <Dropdown.Item id="clipboard" textValue="Clipboard">
-                    <Icon name="clipboard" />
-                    Clipboard
-                  </Dropdown.Item>
-                </Dropdown.Section>
-              </Dropdown.Menu>
-            </Dropdown.Popover>
-          </Dropdown>
+                <Icon name="extensions" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>Extensions</Tooltip.Content>
+          </Tooltip>
+          <BrowserMenu
+            profiles={profiles}
+            profileId={profileId}
+            tab={tab}
+            interactive={interactive}
+            recording={recording}
+            onProfile={onProfile}
+            onHistory={onHistory}
+            onMenu={onMenu}
+            onTake={onTake}
+            onReturn={onReturn}
+          />
         </div>
       </div>
     </div>

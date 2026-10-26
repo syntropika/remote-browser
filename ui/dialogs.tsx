@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { action, failure } from "./api.js";
 import { asyncHandler, background } from "./async-boundary.js";
+import type { JsDialog } from "./model.js";
 import { record, text } from "./wire.js";
 
 type Shell = {
@@ -14,6 +15,117 @@ type Shell = {
   title: string;
   size?: "sm" | "md" | "lg";
 };
+
+/** A website's blocking dialog, resolved through its native callback. */
+export function WebsiteDialog({
+  dialog,
+  profileId,
+  tabId,
+  onResolved,
+}: {
+  dialog: JsDialog;
+  profileId: string;
+  tabId: string;
+  onResolved: () => Promise<void>;
+}) {
+  const [value, setValue] = useState(dialog.defaultPromptText);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const resolve = async (accept: boolean) => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await action("js_dialog", { id: dialog.id, accept, promptText: value }, tabId, profileId);
+      await onResolved();
+    } catch (cause) {
+      setError(failure(cause).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      isOpen
+      onOpenChange={(open) => {
+        if (!open) {
+          background(resolve(false));
+        }
+      }}
+    >
+      <Modal.Backdrop isDismissable={false}>
+        <Modal.Container size="sm">
+          <Modal.Dialog>
+            <Modal.Header>
+              <Modal.Heading>
+                {dialog.type === "prompt"
+                  ? "Website prompt"
+                  : dialog.type === "confirm"
+                    ? "Confirm action"
+                    : "Website message"}
+              </Modal.Heading>
+            </Modal.Header>
+            <Modal.Body>
+              <form
+                className="flex flex-col gap-4"
+                onSubmit={asyncHandler(async (event: { preventDefault: () => void }) => {
+                  event.preventDefault();
+                  await resolve(true);
+                })}
+              >
+                {dialog.origin ? (
+                  <p className="text-ink-faint text-sm break-words">{dialog.origin}</p>
+                ) : null}
+                <p className="max-h-[40dvh] overflow-auto break-words whitespace-pre-wrap">
+                  {dialog.message}
+                </p>
+                {dialog.type === "prompt" ? (
+                  <TextField isDisabled={busy}>
+                    <Label>Your response</Label>
+                    <Input
+                      autoFocus
+                      maxLength={8192}
+                      value={value}
+                      onChange={(event) => setValue(event.target.value)}
+                    />
+                  </TextField>
+                ) : null}
+                {error ? (
+                  <p className="text-danger text-sm" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  {dialog.type !== "alert" && (
+                    <Button
+                      isDisabled={busy}
+                      variant="ghost"
+                      onPress={asyncHandler(async () => {
+                        await resolve(false);
+                      })}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    autoFocus={dialog.type !== "prompt"}
+                    isDisabled={busy}
+                    type="submit"
+                    variant="primary"
+                  >
+                    {busy ? "Responding…" : "OK"}
+                  </Button>
+                </div>
+              </form>
+            </Modal.Body>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
+  );
+}
 
 function Overlay({ children, isOpen, onClose, title, size = "md" }: Shell) {
   return (

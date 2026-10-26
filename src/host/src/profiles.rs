@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, OnceCell, RwLock};
 pub struct ProfileConfig {
     pub default_profile_id: String,
     pub profiles: Vec<ProfileDefinition>,
-    pub engine_binary: Option<PathBuf>,
+    pub engine_binary: PathBuf,
     pub data_root: Option<PathBuf>,
     #[serde(default)]
     pub files_root: Option<PathBuf>,
@@ -23,7 +23,7 @@ pub struct ProfileConfig {
 pub struct ProfileDefinition {
     pub id: String,
     pub name: String,
-    pub data_directory: Option<PathBuf>,
+    pub data_directory: PathBuf,
     #[serde(default)]
     pub services: Vec<crate::health::HealthPolicy>,
 }
@@ -78,14 +78,7 @@ impl Profiles {
             if entries.contains_key(&definition.id) {
                 return Err(Error::Invalid("Profile IDs must be unique".into()));
             }
-            let Some(directory) = &definition.data_directory else {
-                return Err(Error::Invalid("Each profile needs a dataDirectory".into()));
-            };
-            if config.engine_binary.is_none() {
-                return Err(Error::Invalid(
-                    "Embedded profiles require engineBinary".into(),
-                ));
-            }
+            let directory = &definition.data_directory;
             prepare_directory(directory)?;
             let canonical = std::fs::canonicalize(directory)?;
             if !directories.insert(canonical) {
@@ -129,6 +122,9 @@ impl Profiles {
             _catalog_lock: catalog_lock,
         })
     }
+    pub(crate) fn profile_id(&self, id: Option<&str>) -> String {
+        id.unwrap_or(&self.default_id).to_owned()
+    }
     pub async fn browser(&self, id: Option<&str>) -> Result<Automation> {
         let id = id.unwrap_or(&self.default_id);
         crate::identity::check_profile(id)?;
@@ -146,20 +142,13 @@ impl Profiles {
                     .for_profile(id)
                     .scope(async {
                         crate::logging::lifecycle("profiles", "profile_starting", None);
-                        let result = match &entry.definition.data_directory {
-                            Some(directory) => {
-                                Automation::embedded_with_files(
-                                    binary.as_deref().ok_or_else(|| {
-                                        Error::Invalid("Engine binary unavailable".into())
-                                    })?,
-                                    directory,
-                                    files.as_deref(),
-                                    self.timeout,
-                                )
-                                .await
-                            }
-                            None => Err(Error::Invalid("Profile has no data directory".into())),
-                        };
+                        let result = Automation::embedded_with_files(
+                            &binary,
+                            &entry.definition.data_directory,
+                            files.as_deref(),
+                            self.timeout,
+                        )
+                        .await;
                         if result.is_ok() {
                             crate::logging::lifecycle("profiles", "profile_ready", None);
                         }
@@ -176,17 +165,14 @@ impl Profiles {
             .await
             .iter()
             .filter(|(id, _)| crate::identity::check_profile(id).is_ok())
-            .map(|(id, entry)| {
-                let native = entry.definition.data_directory.is_some();
-                ProfileInfo {
-                    id: id.clone(),
-                    name: entry.definition.name.clone(),
-                    connected: entry.browser.initialized(),
-                    is_default: id == &self.default_id,
-                    background_tabs: native,
-                    concurrent_tabs: native,
-                    local_files: native,
-                }
+            .map(|(id, entry)| ProfileInfo {
+                id: id.clone(),
+                name: entry.definition.name.clone(),
+                connected: entry.browser.initialized(),
+                is_default: id == &self.default_id,
+                background_tabs: true,
+                concurrent_tabs: true,
+                local_files: true,
             })
             .collect();
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
@@ -203,11 +189,6 @@ impl Profiles {
                 "At most 32 profiles may be configured".into(),
             ));
         }
-        if config.engine_binary.is_none() {
-            return Err(Error::Invalid(
-                "Profile creation requires engineBinary and dataRoot".into(),
-            ));
-        }
         let root = config
             .data_root
             .as_deref()
@@ -219,7 +200,7 @@ impl Profiles {
         let definition = ProfileDefinition {
             id: id.clone(),
             name: name.trim().into(),
-            data_directory: Some(directory),
+            data_directory: directory,
             services: Vec::new(),
         };
         let mut updated = config.clone();
@@ -374,25 +355,49 @@ mod tests {
         let root = std::env::temp_dir().join(format!("browser-profiles-{}", uuid::Uuid::new_v4()));
         ProfileConfig {
             default_profile_id: "personal".into(),
-            engine_binary: Some(std::env::current_exe().unwrap()),
+            engine_binary: std::env::current_exe().unwrap(),
             data_root: None,
             files_root: None,
             profiles: vec![
                 ProfileDefinition {
                     id: "personal".into(),
                     name: "Personal".into(),
-                    data_directory: Some(root.join("personal")),
+                    data_directory: root.join("personal"),
                     services: Vec::new(),
                 },
                 ProfileDefinition {
                     id: "work".into(),
                     name: "Work".into(),
-                    data_directory: Some(root.join("work")),
+                    data_directory: root.join("work"),
                     services: Vec::new(),
                 },
             ],
         }
     }
+    #[test]
+    fn catalog_requires_an_engine_and_private_profile_storage() {
+        let config = serde_json::json!({
+            "defaultProfileId": "work", "engineBinary": "engine",
+            "profiles": [{"id": "work", "name": "Work", "dataDirectory": "profile"}],
+        });
+        assert!(serde_json::from_value::<ProfileConfig>(config.clone()).is_ok());
+        let mut missing_engine = config.clone();
+        missing_engine
+            .as_object_mut()
+            .unwrap()
+            .remove("engineBinary");
+        assert!(serde_json::from_value::<ProfileConfig>(missing_engine).is_err());
+        let mut missing_storage = config.clone();
+        missing_storage["profiles"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("dataDirectory");
+        assert!(serde_json::from_value::<ProfileConfig>(missing_storage).is_err());
+        let mut null_storage = config;
+        null_storage["profiles"][0]["dataDirectory"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<ProfileConfig>(null_storage).is_err());
+    }
+
     #[test]
     fn rejects_duplicate_engines_and_unknown_defaults() {
         let mut duplicate = config();
@@ -408,7 +413,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("profiles.json");
         let mut initial = config();
-        initial.engine_binary = Some(root.join("engine"));
+        initial.engine_binary = root.join("engine");
         initial.data_root = Some(root.join("data"));
         initialize_catalog(&path, &initial).unwrap();
         let profiles =
@@ -440,13 +445,7 @@ mod tests {
                 std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600
             );
-            let directory = saved
-                .profiles
-                .last()
-                .unwrap()
-                .data_directory
-                .as_ref()
-                .unwrap();
+            let directory = saved.profiles.last().unwrap().data_directory.as_path();
             assert_eq!(
                 std::fs::metadata(directory).unwrap().permissions().mode() & 0o777,
                 0o700
@@ -471,6 +470,7 @@ mod tests {
         assert!(list.iter().all(|p| !p.connected));
         let encoded = serde_json::to_string(&list).unwrap();
         assert!(!encoded.contains("localhost"));
-        assert!(!encoded.contains("webdriverUrl"));
+        assert!(!encoded.contains("dataDirectory"));
+        assert!(!encoded.contains("engineBinary"));
     }
 }

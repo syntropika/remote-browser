@@ -243,6 +243,12 @@ pub fn fault(
 }
 fn operation(value: &str) -> &'static str {
     match value {
+        "extensions" => "extensions",
+        "extension_set_enabled" => "extension_set_enabled",
+        "extension_remove" => "extension_remove",
+        "extension_options" => "extension_options",
+        "extension_installs" => "extension_installs",
+        "extension_install_decide" => "extension_install_decide",
         "browser_files" => "browser_files",
         "browser_upload" => "browser_upload",
         "browser_download" => "browser_download",
@@ -325,6 +331,10 @@ fn normal_level(op: &str) -> Level {
     if matches!(
         op,
         "navigate"
+            | "extension_set_enabled"
+            | "extension_remove"
+            | "extension_options"
+            | "extension_install_decide"
             | "open"
             | "close"
             | "select"
@@ -373,7 +383,6 @@ pub fn outcome(error: Option<&Error>) -> &'static str {
         Some(Error::Invalid(_)) => "invalid",
         Some(Error::Json(_)) => "invalid_request",
         Some(Error::Io(_)) => "io_error",
-        Some(Error::Transport(_)) => "transport_error",
         Some(Error::Protocol(_)) => "protocol_error",
     }
 }

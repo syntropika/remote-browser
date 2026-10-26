@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "cefVersion": "154.0.34+g14c5a08+chromium-154.0.8037.98",
+  "cefCommit": "14c5a089e8452874cb1a556dc3fde26ed2d87723",
+  "sourceCommit": "1e01fd1347b11c6b5e847a44275ef241bffb9177",
+  "release": "https://github.com/syntropika/remote-browser/releases/tag/cef-154.0.34-rb.1",
+  "platforms": {
+    "linux-x64": {
+      "url": "https://github.com/syntropika/remote-browser/releases/download/cef-154.0.34-rb.1/cef_binary_154.0.34%2Bg14c5a08%2Bchromium-154.0.8037.98_linux64_remote_browser.tar.gz",
+      "fileName": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_linux64_remote_browser.tar.gz",
+      "archiveRoot": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_linux64_remote_browser",
+      "size": 293493718,
+      "sha256": "85152c24ff5358b8882490e9e774a585fec11df2a709b778ac9132438acaf29b",
+      "sha1": "a54c97585f10ae487e9b3be0c4be2386828d3652",
+      "librarySha256": "be2719555b419656f01aa974bb7771ea6f5d824d3cbfd3a31983434a71da1896"
+    }
+  }
+}

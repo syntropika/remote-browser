@@ -17,6 +17,7 @@ struct Job {
     id: String,
     tab: String,
     client: String,
+    lease: Option<String>,
     stop: Arc<Notify>,
     task: JoinHandle<Result<Value>>,
 }
@@ -34,7 +35,23 @@ impl Media {
         args: Value,
         human: bool,
     ) -> Result<Value> {
+        if !human {
+            browser
+                .engine_request("validate_lease", Some(tab), Value::Null, false)
+                .await?;
+        }
         let mut job = self.job.lock().await;
+        if !human
+            && let Some(active) = job.as_ref()
+            && !active.task.is_finished()
+            && (active.client != crate::identity::current().id
+                || active.tab != tab
+                || active.lease.as_deref() != browser.lease_id())
+        {
+            return Err(Error::Invalid(
+                "This recording belongs to another reservation".into(),
+            ));
+        }
         if op == "record_start" {
             if job.as_ref().is_some_and(|job| !job.task.is_finished()) {
                 return Err(Error::Busy);
@@ -134,6 +151,7 @@ impl Media {
             let actor = client.id.clone();
             let tab = tab.to_owned();
             let selected = tab.clone();
+            let lease = browser.lease_id().map(str::to_owned);
             let task = tokio::spawn(crate::identity::scope(client, async move {
                 let started = tokio::time::Instant::now();
                 let mut frames = 0;
@@ -141,20 +159,24 @@ impl Media {
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     tokio::select! {_=signal.notified()=>break,_=tokio::time::sleep_until(started+Duration::from_secs(seconds))=>break,_=tick.tick()=>{}}
-                    let target = match browser
-                        .engine_request("tabs", None, Value::Null, true)
-                        .await
-                    {
-                        Ok(tabs) => tabs
-                            .as_array()
-                            .and_then(|tabs| tabs.iter().find(|tab| tab["active"] == true))
-                            .and_then(|tab| tab["id"].as_str())
-                            .unwrap_or(&selected)
-                            .to_owned(),
-                        Err(_) => break,
+                    let target = if !human {
+                        selected.clone()
+                    } else {
+                        match browser
+                            .engine_request("tabs", None, Value::Null, true)
+                            .await
+                        {
+                            Ok(tabs) => tabs
+                                .as_array()
+                                .and_then(|tabs| tabs.iter().find(|tab| tab["active"] == true))
+                                .and_then(|tab| tab["id"].as_str())
+                                .unwrap_or(&selected)
+                                .to_owned(),
+                            Err(_) => break,
+                        }
                     };
                     let encoded = match browser
-                        .engine_request("screenshot", Some(&target), Value::Null, true)
+                        .engine_request("screenshot", Some(&target), Value::Null, human)
                         .await
                     {
                         Ok(Value::String(encoded)) => encoded,
@@ -196,6 +218,7 @@ impl Media {
                 id: id.clone(),
                 tab: tab.clone(),
                 client: actor,
+                lease,
                 stop,
                 task,
             });

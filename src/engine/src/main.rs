@@ -8,6 +8,16 @@
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use cef::args::Args;
+mod agent_actions;
+mod browser_lifecycle;
+mod cdp;
+mod extension_installs;
+mod extensions;
+mod operations;
+mod pointer;
+mod session_health;
+use operations::Navigation;
+
 use cef::*;
 use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -16,7 +26,7 @@ use remote_browser_native::reservations::{ReservationInfo, Reservations};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{BufRead, Write};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -115,6 +125,10 @@ struct Call {
     human: bool,
     #[serde(default)]
     args: Value,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    profile_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -177,7 +191,6 @@ struct Shared {
     size: Mutex<(i32, i32)>,
     /// Counts frames, so an operation can wait for the page it asked for to be drawn.
     paints: AtomicU64,
-    results: Mutex<HashMap<i32, (bool, Vec<u8>)>>,
     url: Mutex<String>,
     title: Mutex<String>,
     /// Counts the pages this tab has been on, so a snapshot of an earlier one is known to
@@ -274,29 +287,6 @@ wrap_display_handler! {
     }
 }
 
-wrap_dev_tools_message_observer! {
-    struct Protocol {
-        shared: Arc<Shared>,
-    }
-
-    impl DevToolsMessageObserver {
-        fn on_dev_tools_method_result(
-            &self,
-            _browser: Option<&mut Browser>,
-            message_id: ::std::os::raw::c_int,
-            success: ::std::os::raw::c_int,
-            result: Option<&[u8]>,
-        ) {
-            let payload = result.map(<[u8]>::to_vec).unwrap_or_default();
-            self.shared
-                .results
-                .lock()
-                .unwrap()
-                .insert(message_id, (success != 0, payload));
-        }
-    }
-}
-
 wrap_app! {
     struct Offscreen;
 
@@ -306,16 +296,15 @@ wrap_app! {
             _process_type: Option<&CefString>,
             command_line: Option<&mut CommandLine>,
         ) {
-            // Every surface this engine paints is off screen, so Chromium is told to use
-            // no window system. Left to choose, it connects to the desktop of whoever
-            // started the engine, which it does not need and cannot rely on.
-            if let Some(command_line) = command_line
-                && command_line.has_switch(Some(&CefString::from("ozone-platform"))) != 1
-            {
-                command_line.append_switch_with_value(
-                    Some(&CefString::from("ozone-platform")),
-                    Some(&CefString::from("headless")),
-                );
+            if let Some(command_line) = command_line {
+                if command_line.has_switch(Some(&CefString::from("type"))) != 1 {
+                    command_line.append_switch_with_value(Some(&CefString::from("remote-debugging-port")), Some(&CefString::from("0")));
+                    command_line.append_switch_with_value(Some(&CefString::from("remote-debugging-address")), Some(&CefString::from("127.0.0.1")));
+                }
+                // Off-screen surfaces do not require a desktop window system.
+                if command_line.has_switch(Some(&CefString::from("ozone-platform"))) != 1 {
+                    command_line.append_switch_with_value(Some(&CefString::from("ozone-platform")), Some(&CefString::from("headless")));
+                }
             }
         }
     }
@@ -391,7 +380,9 @@ wrap_client! {
     struct Surfaced {
         shared: Arc<Shared>,
         picker: Rc<RefCell<Option<FileDialogCallback>>>,
+        dialog: Rc<RefCell<Option<agent_actions::PendingDialog>>>,
         downloads: Option<std::path::PathBuf>,
+        browsers: browser_lifecycle::Browsers,
     }
 
     impl Client {
@@ -407,8 +398,14 @@ wrap_client! {
             Some(Picker::new(self.picker.clone()))
         }
 
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> { Some(agent_actions::Dialogs::new(self.dialog.clone())) }
+
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(Downloads::new(self.downloads.clone()))
+        }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.browsers.handler())
         }
     }
 }
@@ -457,21 +454,35 @@ struct Surfacing {
     held: Option<Held>,
     /// Set while the page is waiting for files, which it asked for with a file dialog.
     picker: Rc<RefCell<Option<FileDialogCallback>>>,
+    dialog: Rc<RefCell<Option<agent_actions::PendingDialog>>>,
     /// A tab a person took; agent operations on it are refused until they hand it back.
     human: bool,
     pointer: (i32, i32),
+    clicks: pointer::Clicks,
     /// Text the dashboard put on this profile's clipboard, waiting to be pasted.
     pasteboard: String,
-    _registration: Option<Registration>,
+    target: String,
 }
 
 impl Surfacing {
-    fn open(id: String, size: (i32, i32), downloads: Option<std::path::PathBuf>) -> Option<Self> {
+    fn open(
+        id: String,
+        size: (i32, i32),
+        downloads: Option<std::path::PathBuf>,
+        browsers: browser_lifecycle::Browsers,
+    ) -> Option<Self> {
         let shared = Arc::new(Shared::default());
         *shared.size.lock().unwrap() = size;
         let picker = Rc::new(RefCell::new(None));
+        let dialog = Rc::new(RefCell::new(None));
         let window_info = WindowInfo::default().set_as_windowless(0);
-        let mut client = Surfaced::new(shared.clone(), picker.clone(), downloads);
+        let mut client = Surfaced::new(
+            shared.clone(),
+            picker.clone(),
+            dialog.clone(),
+            downloads,
+            browsers,
+        );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
@@ -493,24 +504,23 @@ impl Surfacing {
             host.was_resized();
             host.set_focus(1);
         }
-        let registration = browser.host().and_then(|host| {
-            let mut observer = Protocol::new(shared.clone());
-            host.add_dev_tools_message_observer(Some(&mut observer))
-        });
+        let target = cdp::identify(&browser).ok()?;
         Some(Self {
             id,
             browser,
             shared,
             held: None,
             picker,
+            dialog,
             human: false,
             pointer: (size.0 / 2, size.1 / 2),
+            clicks: pointer::Clicks::default(),
             pasteboard: String::new(),
-            _registration: registration,
+            target,
         })
     }
 
-    fn describe(&self, active: bool, reservation: Option<ReservationInfo>) -> Value {
+    fn describe(&self, active: bool, reservation: Option<ReservationInfo>, busy: bool) -> Value {
         // A page writes its own title and address, and may write a great deal of them.
         let brief = |value: &str| -> String { value.chars().take(1024).collect() };
         json!({
@@ -525,19 +535,22 @@ impl Surfacing {
             "url": brief(&self.shared.url.lock().unwrap()),
             "title": brief(&self.shared.title.lock().unwrap()),
             "reservation": reservation,
-            "busy": false,
+            "busy": busy,
         })
     }
 }
 
 struct Engine {
+    cdp: cdp::Adapter,
+    installs: Option<extension_installs::InstallBridge>,
+    extensions: Option<extensions::Manager>,
+    browsers: browser_lifecycle::Browsers,
     tabs: Vec<Surfacing>,
     active: usize,
     next_tab: u32,
-    next_message: i32,
     /// The profile's file workspace: what a page may upload and what it downloaded.
     files: Option<Files>,
-    /// Which client is working on which tab, and until when.
+    /// Which client exclusively holds each reserved tab.
     reservations: Reservations,
     /// Counts snapshots, so a reference from an earlier one is recognised as stale.
     next_snapshot: u64,
@@ -546,6 +559,7 @@ struct Engine {
     surface: (i32, i32),
     /// The calls waiting to be served, so work that can yield sees one coming.
     inbox: Arc<Inbox>,
+    navigations: Vec<Navigation>,
 }
 
 impl Engine {
@@ -553,6 +567,10 @@ impl Engine {
     /// Closes one tab and forgets what it held. A caller has checked that it may go: the
     /// engine always keeps one.
     fn discard(&mut self, at: usize) {
+        self.cdp.forget(&self.tabs[at].id);
+        if let Some(installs) = &self.installs {
+            installs.cancel(self.tabs[at].browser.identifier());
+        }
         if let Some(host) = self.tabs[at].browser.host() {
             host.close_browser(1);
         }
@@ -564,26 +582,13 @@ impl Engine {
 
     fn reserve(&mut self, call: &Call, tab: &str) -> Result<Value, String> {
         let client = call.client_id.as_deref().unwrap_or("stdio");
-        let now = Instant::now();
-        let ttl = call.args["ttlMs"].as_u64().unwrap_or(300_000);
         match call.op.as_str() {
             "reserve" => {
                 let task = call.args["task"].as_str().unwrap_or_default();
                 let agent = call.args["agentName"].as_str().unwrap_or(task);
                 let lease = self
                     .reservations
-                    .reserve_named_for(tab, task, agent, ttl, client, now)
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(lease).map_err(|error| error.to_string())
-            }
-            "renew" => {
-                let token = call
-                    .lease_id
-                    .as_deref()
-                    .ok_or("renew needs the tab's leaseId")?;
-                let lease = self
-                    .reservations
-                    .renew_for(tab, token, ttl, client, now)
+                    .reserve_named_for(tab, task, agent, client)
                     .map_err(|error| error.to_string())?;
                 serde_json::to_value(lease).map_err(|error| error.to_string())
             }
@@ -593,7 +598,7 @@ impl Engine {
                     .as_deref()
                     .ok_or("release needs the tab's leaseId")?;
                 self.reservations
-                    .release_for(tab, token, client, now)
+                    .release_for(tab, token, client)
                     .map_err(|error| error.to_string())?;
                 Ok(Value::Null)
             }
@@ -641,8 +646,14 @@ impl Engine {
             .files
             .as_ref()
             .map(|files| files.root().join("downloads"));
-        let tab = Surfacing::open(id.clone(), self.surface, downloads)
+        let tab = Surfacing::open(id.clone(), self.surface, downloads, self.browsers.clone())
             .ok_or("the tab could not be created")?;
+        if let Err(error) = self.cdp.bind(&id, &tab.target) {
+            if let Some(host) = tab.browser.host() {
+                host.close_browser(1);
+            }
+            return Err(error);
+        }
         let painted = tab.shared.clone();
         self.tabs.push(tab);
         // A browser paints its first frame a moment after it exists, and until it does its
@@ -652,58 +663,28 @@ impl Engine {
         Ok(Value::String(id))
     }
 
-    /// Sends one DevTools method to a tab and waits for the result that carries its id.
+    /// Use the stable Chromiumoxide session for this engine-owned tab.
     fn protocol(&mut self, at: usize, method: &str, params: Value) -> Result<Value, String> {
-        let host = self.tabs[at].browser.host().ok_or("the tab has no host")?;
-        self.next_message += 1;
-        let id = self.next_message;
-        let message = json!({"id": id, "method": method, "params": params});
-        let bytes = serde_json::to_vec(&message).map_err(|error| error.to_string())?;
-        if host.send_dev_tools_message(Some(&bytes)) != 1 {
-            return Err("the tab refused the protocol message".into());
-        }
-        let shared = self.tabs[at].shared.clone();
-        let arrived = pump_until(|| shared.results.lock().unwrap().contains_key(&id));
-        let Some((success, payload)) = shared.results.lock().unwrap().remove(&id) else {
-            return Err(if arrived {
-                "the result was lost"
-            } else {
-                "uncertain"
-            }
-            .into());
-        };
-        let result: Value = serde_json::from_slice(&payload).unwrap_or(Value::Null);
-        if success {
-            Ok(result)
-        } else {
-            Err(result.to_string())
-        }
+        self.cdp.execute(&self.tabs[at].id, method, params)
     }
 
-    fn navigate(&mut self, at: usize, url: &str) -> Result<Value, String> {
+    fn navigate(&mut self, at: usize, url: &str, id: u64) -> Result<Value, String> {
         let parsed = url::Url::parse(url).map_err(|_| "the URL is not valid".to_string())?;
         if !matches!(parsed.scheme(), "http" | "https" | "about") {
             return Err("only HTTP(S) and about: can be opened".into());
         }
         self.release(at);
+        self.tabs[at].clicks.reset();
         let frame = self.tabs[at]
             .browser
             .main_frame()
             .ok_or("the tab has no frame")?;
         frame.load_url(Some(&CefString::from(url)));
-        let browser = self.tabs[at].browser.clone();
-        if !pump_until(|| browser.is_loading() == 0) {
-            return Err("uncertain".into());
-        }
-        // Loading ends before the first frame of the new page is drawn, and a reader of the
-        // surface right afterwards would otherwise be handed the page that was replaced.
-        let shared = self.tabs[at].shared.clone();
-        let drawn = shared.paints.load(Ordering::Acquire);
-        let deadline = Instant::now() + PAINT_LIMIT;
-        while Instant::now() < deadline && shared.paints.load(Ordering::Acquire) == drawn {
-            do_message_loop_work();
-            std::thread::sleep(Duration::from_millis(4));
-        }
+        self.navigations.push(Navigation::new(
+            id,
+            self.tabs[at].id.clone(),
+            Instant::now(),
+        ));
         Ok(Value::Null)
     }
 
@@ -1068,19 +1049,29 @@ impl Engine {
         if let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) {
             self.tabs[at].pointer = (x as i32, y as i32);
         }
-        match args["kind"].as_str().unwrap_or_default() {
+        let kind = args["kind"].as_str().unwrap_or_default();
+        if matches!(kind, "down" | "click") {
+            host.set_focus(1);
+            let position = self.tabs[at].pointer;
+            self.tabs[at].clicks.press(position, Instant::now());
+        }
+        let count = self.tabs[at].clicks.count();
+        match kind {
             "move" => host.send_mouse_move_event(Some(&point(args)), 0),
             "leave" => host.send_mouse_move_event(Some(&point(args)), 1),
-            "down" => host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 0, 1),
-            "up" => host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 1, 1),
+            "down" => {
+                host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 0, count)
+            }
+            "up" => {
+                host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 1, count)
+            }
             "click" => {
                 let event = point(args);
                 host.send_mouse_move_event(Some(&event), 0);
-                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 0, 1);
-                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 1, 1);
+                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 0, count);
+                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 1, count);
             }
-            // The press belongs to the pointer that started it; when the dashboard can no
-            // longer see the release, the page is told the press was cancelled.
+            // Capture loss alone does not provide full mouse cancellation.
             "cancel" => host.send_capture_lost_event(),
             // A key press is the three events a keyboard produces: the press, the text it
             // writes, and the release. Which key was pressed and which text it writes are
@@ -1149,6 +1140,17 @@ impl Engine {
         let acts = matches!(
             call.op.as_str(),
             "navigate"
+                | "agent_click"
+                | "agent_type"
+                | "agent_hover"
+                | "agent_drag"
+                | "agent_select"
+                | "agent_press"
+                | "agent_evaluate"
+                | "agent_dialog"
+                | "js_dialog"
+                | "agent_upload"
+                | "cdp"
                 | "evaluate"
                 | "input"
                 | "reload"
@@ -1164,40 +1166,152 @@ impl Engine {
                 | "download"
                 | "choose_files"
         );
-        if acts {
+        if (acts || call.op == "release")
+            && !matches!(call.op.as_str(), "agent_dialog" | "js_dialog")
+            && self
+                .navigations
+                .iter()
+                .any(|pending| pending.tab == self.tabs[at].id)
+        {
+            return Err("busy".into());
+        }
+        if acts || call.lease_id.is_some() {
             let tab = self.tabs[at].id.clone();
             let taken = self.tabs[at].human;
             if call.human {
                 // A tab an agent reserved stays the agent's until the person takes it,
                 // which is what the dashboard's control button is for.
-                if !taken && self.reservations.info(&tab, Instant::now()).is_some() {
+                if !taken && self.reservations.info(&tab).is_some() {
                     return Err("This tab is reserved; take control of it first".into());
                 }
             } else {
-                if taken {
-                    return Err("humanControl".into());
-                }
                 self.reservations
                     .check_for(
                         &tab,
                         call.lease_id.as_deref(),
                         call.client_id.as_deref().unwrap_or("stdio"),
-                        Instant::now(),
                     )
                     .map_err(|error| error.to_string())?;
+                if taken {
+                    return Err("humanControl".into());
+                }
             }
         }
 
+        if let Some(result) = self.agent_action(at, call) {
+            return result;
+        }
         match call.op.as_str() {
+            "diagnostics" => {
+                let kind = call.args["kind"]
+                    .as_str()
+                    .ok_or("diagnostics needs a kind")?;
+                let after = call.args["after"].as_u64().unwrap_or(0);
+                let limit = call.args["limit"].as_u64().unwrap_or(50).clamp(1, 100) as usize;
+                self.cdp.events(&self.tabs[at].id, kind, after, limit)
+            }
+            "extensions" => match &self.extensions {
+                Some(manager) => {
+                    manager.request(self.tabs[at].browser.identifier(), json!({"op": "list"}))
+                }
+                None => Ok(json!({"available": false, "extensions": []})),
+            },
+            "extension_set_enabled" | "extension_remove" | "extension_options" => {
+                if !call.human {
+                    return Err("Extension management requires the dashboard".into());
+                }
+                let id = call.args["id"]
+                    .as_str()
+                    .ok_or("An extension ID is required")?;
+                let request = match call.op.as_str() {
+                    "extension_set_enabled" => json!({
+                        "op": "set_enabled", "id": id,
+                        "enabled": call.args["enabled"].as_bool()
+                            .ok_or("An explicit enabled state is required")?,
+                    }),
+                    "extension_remove" => {
+                        if call.args["confirmed"].as_bool() != Some(true) {
+                            return Err("Confirm removal of this extension first".into());
+                        }
+                        json!({"op": "remove", "id": id, "confirmed": true})
+                    }
+                    _ => json!({"op": "options", "id": id}),
+                };
+                let result = self
+                    .extensions
+                    .as_ref()
+                    .ok_or("This CEF build does not support extension management")?
+                    .request(self.tabs[at].browser.identifier(), request)?;
+                if call.op == "extension_options" {
+                    let url = result["url"]
+                        .as_str()
+                        .ok_or("This extension has no options page")?;
+                    let parsed =
+                        url::Url::parse(url).map_err(|_| "Invalid extension options URL")?;
+                    if parsed.scheme() != "chrome-extension" || parsed.host_str() != Some(id) {
+                        return Err("Invalid extension options URL".into());
+                    }
+                    let opened = self.open()?;
+                    let index = self.index(opened.as_str())?;
+                    let frame = self.tabs[index]
+                        .browser
+                        .main_frame()
+                        .ok_or("The options tab has no frame")?;
+                    frame.load_url(Some(&CefString::from(url)));
+                    self.settle(index)?;
+                    return Ok(opened);
+                }
+                Ok(result)
+            }
+            "extension_installs" => {
+                let Some(installs) = &self.installs else {
+                    return Ok(json!({"available": false, "requests": []}));
+                };
+                let mut requests = Vec::new();
+                for pending in installs.pending().map_err(|error| error.to_string())? {
+                    let Some(tab) = self
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.browser.identifier() == pending.browser_id)
+                    else {
+                        installs.cancel(pending.browser_id);
+                        continue;
+                    };
+                    requests.push(json!({
+                        "id": pending.id, "tabId": tab.id,
+                        "extensionId": pending.extension_id, "name": pending.name,
+                        "version": pending.version, "origin": pending.origin,
+                        "permissions": pending.permissions,
+                        "secondsRemaining": pending.seconds_remaining,
+                    }));
+                }
+                Ok(json!({"available": true, "requests": requests}))
+            }
+            "extension_install_decide" => {
+                if !call.human {
+                    return Err("Extension installation decisions require the dashboard".into());
+                }
+                let id = call.args["id"]
+                    .as_str()
+                    .ok_or("An installation request id is required")?;
+                let allow = call.args["allow"]
+                    .as_bool()
+                    .ok_or("An explicit installation decision is required")?;
+                let installs = self
+                    .installs
+                    .as_ref()
+                    .ok_or("This CEF build does not support extension installation decisions")?;
+                installs
+                    .decide(id, self.tabs[at].browser.identifier(), allow)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"decision": if allow { "accepted" } else { "cancelled" }}))
+            }
             "status" => Ok(json!({"owner": "agent", "uncertain": false})),
             "tabs" => {
-                // Reading a reservation prunes the expired ones, so the listing is built
-                // from what is still held.
-                let now = Instant::now();
                 let ids: Vec<String> = self.tabs.iter().map(|tab| tab.id.clone()).collect();
                 let mut held: Vec<Option<ReservationInfo>> = Vec::new();
                 for id in &ids {
-                    held.push(self.reservations.info(id, now));
+                    held.push(self.reservations.info(id));
                 }
                 let active = self.active;
                 Ok(Value::Array(
@@ -1206,25 +1320,51 @@ impl Engine {
                         .enumerate()
                         .zip(held)
                         .map(|((index, tab), reservation)| {
-                            tab.describe(index == active, reservation)
+                            let mut description = tab.describe(
+                                index == active,
+                                reservation,
+                                self.navigations.iter().any(|pending| pending.tab == tab.id),
+                            );
+                            if call.human {
+                                description["jsDialog"] = tab
+                                    .dialog
+                                    .borrow()
+                                    .as_ref()
+                                    .map(agent_actions::PendingDialog::describe)
+                                    .unwrap_or(Value::Null);
+                            }
+                            description
                         })
                         .collect(),
                 ))
             }
             "open" => self.open(),
-            "reserve" | "renew" => {
-                let tab = self.tabs[at].id.clone();
-                self.reserve(call, &tab)
+            "reserve" => {
+                if self.tabs[at].human && call.tab_id.is_some() {
+                    return Err("humanControl".into());
+                }
+                let tab = if call.tab_id.is_none() {
+                    self.open()?
+                        .as_str()
+                        .ok_or("the tab could not be created")?
+                        .to_owned()
+                } else {
+                    self.tabs[at].id.clone()
+                };
+                match self.reserve(call, &tab) {
+                    Ok(lease) => Ok(lease),
+                    Err(error) => {
+                        if call.tab_id.is_none() {
+                            let index = self.index(Some(&tab))?;
+                            self.discard(index);
+                        }
+                        Err(error)
+                    }
+                }
             }
             "release" => {
                 let tab = self.tabs[at].id.clone();
                 self.reserve(call, &tab)?;
-                // An agent is finished with a tab when it releases it, so the tab goes rather
-                // than piling up behind the person's own. One the person took over stays, and
-                // so does the last one, which has nowhere to leave the engine.
-                if self.tabs.len() > 1 && !self.tabs[at].human {
-                    self.discard(at);
-                }
                 Ok(Value::Null)
             }
             // The dashboard calls this "view" and the automation layer calls it "select";
@@ -1241,6 +1381,8 @@ impl Engine {
                 Ok(Value::Null)
             }
             "take" => {
+                self.reservations.remove(&self.tabs[at].id);
+                self.release(at);
                 self.tabs[at].human = true;
                 Ok(Value::Null)
             }
@@ -1250,7 +1392,7 @@ impl Engine {
             }
             "navigate" => {
                 let url = call.args["url"].as_str().ok_or("navigate needs a url")?;
-                self.navigate(at, url)
+                self.navigate(at, url, call.id)
             }
             "reload" => {
                 self.release(at);
@@ -1267,8 +1409,7 @@ impl Engine {
                 self.tabs[at].browser.go_forward();
                 self.settle(at)
             }
-            // A function body with an explicit return, which is the contract the tools
-            // document and what WebDriver's execute_script took.
+            // Tools accept a JavaScript function body with an explicit JSON return.
             "evaluate" => {
                 let script = call.args["script"]
                     .as_str()
@@ -1453,18 +1594,7 @@ impl Engine {
                 pump_for(SETTLE);
                 Ok(json!({"width": width, "height": height}))
             }
-            // Session assessment belongs to a later pass; saying so is better than failing
-            // the dashboard's periodic check with an unknown operation.
-            "health" => Ok(json!({
-                "state": "unknown",
-                "checkedAt": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|since| since.as_secs())
-                    .unwrap_or_default(),
-                "credentialExpiresAt": Value::Null,
-                "secondsRemaining": Value::Null,
-                "evidence": "This engine does not assess sessions yet",
-            })),
+            "health" => self.session_health(at, &call.args),
             // A capture belongs in the profile's workspace, where the dashboard and the
             // agent both find it. A plain path is still accepted for running by hand.
             "save_screenshot" => {
@@ -1690,7 +1820,12 @@ fn claim(profile_root: &str) -> std::io::Result<std::fs::File> {
         .truncate(false)
         .open(directory.join("engine.lock"))?;
     lock.try_lock_exclusive()?;
-    for leftover in ["SingletonLock", "SingletonCookie", "SingletonSocket"] {
+    for leftover in [
+        "SingletonLock",
+        "SingletonCookie",
+        "SingletonSocket",
+        "DevToolsActivePort",
+    ] {
         let path = directory.join(leftover);
         if std::fs::symlink_metadata(&path).is_ok() {
             std::fs::remove_file(&path)?;
@@ -1788,27 +1923,52 @@ fn main() {
         None => None,
     };
     let downloads = files.as_ref().map(|files| files.root().join("downloads"));
-    let Some(first) = Surfacing::open("tab-1".to_string(), VIEWPORT, downloads) else {
+    let cdp = match cdp::Adapter::start(std::path::Path::new(&profile_root)) {
+        Ok(cdp) => cdp,
+        Err(error) => {
+            eprintln!("CDP startup failed: {error}");
+            shutdown();
+            std::process::exit(1);
+        }
+    };
+    let browsers = browser_lifecycle::Browsers::default();
+    let Some(first) = Surfacing::open("tab-1".to_string(), VIEWPORT, downloads, browsers.clone())
+    else {
         eprintln!("the first tab could not be created");
+        drop(cdp);
         shutdown();
         std::process::exit(1);
     };
+    if let Err(error) = cdp.bind(&first.id, &first.target) {
+        eprintln!("CDP tab binding failed: {error}");
+        drop(cdp);
+        browsers.close_all();
+        drop(first);
+        pump_within(Duration::from_secs(8), || browsers.all_closed());
+        shutdown();
+        std::process::exit(1);
+    }
     let inbox = reader();
     let mut engine = Engine {
+        cdp,
+        installs: extension_installs::InstallBridge::discover(),
+        extensions: extensions::Manager::discover(),
+        browsers: browsers.clone(),
         tabs: vec![first],
         active: 0,
         next_tab: 1,
-        next_message: 0,
         files,
         reservations: Reservations::default(),
         next_snapshot: 0,
         surface: VIEWPORT,
         inbox: inbox.clone(),
+        navigations: Vec::new(),
     };
 
     eprintln!("engine ready");
     loop {
         do_message_loop_work();
+        engine.poll_navigations();
         match inbox.take() {
             Some(line) => match serde_json::from_str::<Call>(&line) {
                 Ok(call) if call.op == "shutdown" => {
@@ -1816,8 +1976,7 @@ fn main() {
                     break;
                 }
                 Ok(call) => {
-                    let outcome = engine.serve(&call);
-                    reply(call.id, outcome);
+                    engine.dispatch(&call);
                 }
                 Err(error) => eprintln!("unreadable call: {error}"),
             },
@@ -1825,5 +1984,17 @@ fn main() {
             None => std::thread::sleep(Duration::from_millis(2)),
         }
     }
+    if let Some(installs) = &engine.installs {
+        installs.cancel(0);
+    }
+    browsers.close_all();
+    // Release browser and DevTools references before CEF's OnBeforeClose callbacks.
+    drop(engine);
+    if !pump_within(Duration::from_secs(8), || browsers.all_closed()) {
+        eprintln!("the engine could not close every browser before shutdown");
+        std::process::exit(1);
+    }
+    drop(browsers);
     shutdown();
+    remote_browser_native::logging::flush();
 }

@@ -31,7 +31,13 @@ jobs:
         run: bun run format:check && bun run typecheck && bun run lint
       - name: Build the dashboard
         run: bun run build
+      - name: Test Bun tooling
+        run: bun run test:unit
       - name: Test the host
-        run: cargo test --manifest-path src/host/Cargo.toml
+        run: bun run test:host
+      - name: Test the engine
+        run: bun run test:engine --release
       - name: Lint the host
-        run: cargo clippy --manifest-path src/host/Cargo.toml --all-targets -- -D warnings
+        run: bun run lint:host
+      - name: Lint the engine
+        run: bun run lint:engine --release

@@ -1,7 +1,10 @@
 //! Local browser automation with an engine boundary and an MCP adapter.
+pub mod access;
+mod agent;
 pub mod api_keys;
 pub mod automation;
 pub mod cli;
+mod code_mode;
 pub mod dashboard;
 pub mod files;
 pub mod handoff;
@@ -12,16 +15,14 @@ pub mod logging;
 pub mod mcp;
 pub mod media;
 pub mod native;
+pub mod native_extensions;
 pub mod profiles;
 pub mod reservations;
-pub mod snapshot;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
     Invalid(String),
-    #[error("Engine transport failed; completion is unknown. Restart the MCP server: {0}")]
-    Transport(#[from] reqwest::Error),
     #[error("Browser completion is unknown. Restart the MCP server before further actions")]
     Uncertain,
     #[error("The human has control. Resume automation from the host application when finished")]

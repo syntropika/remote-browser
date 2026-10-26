@@ -108,6 +108,13 @@ fn observation(op: &str) -> bool {
     matches!(
         op,
         "status"
+            | "validate_lease"
+            | "agent_text"
+            | "agent_wait"
+            | "agent_screenshot"
+            | "diagnostics"
+            | "extensions"
+            | "extension_installs"
             | "tabs"
             | "screenshot"
             | "snapshot"
@@ -275,6 +282,9 @@ impl NativeClient {
             lease_id: lease.map(str::to_owned),
         }
     }
+    pub(crate) fn lease_id(&self) -> Option<&str> {
+        self.lease_id.as_deref()
+    }
     pub fn with_profile(mut self, id: &str) -> Self {
         self.profile_id = Some(id.into());
         self
@@ -308,6 +318,8 @@ impl NativeClient {
         }
         let result = self.engine_request(op, tab, args.clone(), human).await;
         if !human
+            && self.lease_id.is_none()
+            && op != "reserve"
             && self.state.handoffs.available()
             && matches!(result, Err(Error::HumanControl))
             && let Some(tab) = tab
@@ -527,18 +539,17 @@ mod tests {
         let binary = root.join("fixture");
         std::fs::write(
             &binary,
-            r#"#!/usr/bin/env python3
-import sys,json,os
-for line in sys.stdin:
- r=json.loads(line)
- if r['op']=='oversized':
-  try:
-   sys.stdout.write('x'*(8*1024*1024+1));sys.stdout.flush()
-  except BrokenPipeError:os._exit(0)
-  continue
- try:print(json.dumps({'id':r['id'],'value':{'ok':True}}),flush=True)
- except BrokenPipeError:os._exit(0)
- if r['op']=='shutdown':break
+            r#"#!/usr/bin/env bun
+import { createInterface } from 'node:readline';
+import { writeSync } from 'node:fs';
+for await (const line of createInterface({input:process.stdin})) {
+ const r=JSON.parse(line);
+ try {
+  if(r.op==='oversized') { writeSync(1,'x'.repeat(8*1024*1024+1));continue; }
+  writeSync(1,JSON.stringify({id:r.id,value:{ok:true}})+'\n');
+ } catch { process.exit(0); }
+ if(r.op==='shutdown')break;
+}
 "#,
         )
         .unwrap();
@@ -566,15 +577,15 @@ for line in sys.stdin:
         let binary = root.join("fixture");
         std::fs::write(
             &binary,
-            r#"#!/usr/bin/env python3
-import sys,json
-for line in sys.stdin:
- r=json.loads(line)
- if r['op']=='wait':
-  open(sys.argv[2]+'/received','w').close()
-  continue
- print(json.dumps({'id':r['id'],'value':{'ok':True}}),flush=True)
- if r['op']=='shutdown':break
+            r#"#!/usr/bin/env bun
+import { createInterface } from 'node:readline';
+import { writeFileSync,writeSync } from 'node:fs';
+for await (const line of createInterface({input:process.stdin})) {
+ const r=JSON.parse(line);
+ if(r.op==='wait') { writeFileSync(process.argv[3]+'/received','');continue; }
+ writeSync(1,JSON.stringify({id:r.id,value:{ok:true}})+'\n');
+ if(r.op==='shutdown')break;
+}
 "#,
         )
         .unwrap();

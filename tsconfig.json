@@ -10,5 +10,14 @@
     "types": ["bun"],
     "noEmit": true
   },
-  "include": ["ui/**/*.ts", "ui/**/*.tsx", "scripts/**/*.ts"]
+  "include": [
+    "ui/**/*.ts",
+    "ui/**/*.tsx",
+    "scripts/**/*.ts",
+    "src/host/tests/**/*.ts",
+    "src/host/tools/**/*.ts",
+    "src/engine/cef/*.ts",
+    "test/**/*.ts",
+    "src/host/code/**/*.ts"
+  ]
 }

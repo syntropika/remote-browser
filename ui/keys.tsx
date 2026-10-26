@@ -121,12 +121,14 @@ export function Keys({ profiles, endpoint }: { profiles: Profile[]; endpoint: st
         description="Streamable HTTP with the header Authorization: Bearer <API_KEY>."
         title="Connect over MCP"
       >
-        <Row description="The address an agent connects to" title="Server URL">
-          <Input aria-label="Server URL" className="w-80 font-mono" readOnly value={endpoint} />
-          <Button onPress={copy(endpoint, "Server URL")} size="sm" variant="secondary">
-            Copy
-          </Button>
-        </Row>
+        <FormRow description="The address an agent connects to" title="Server URL">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Input aria-label="Server URL" className="min-w-0 flex-1" readOnly value={endpoint} />
+            <Button onPress={copy(endpoint, "Server URL")} size="sm" variant="secondary">
+              Copy
+            </Button>
+          </div>
+        </FormRow>
       </Group>
 
       <Group
@@ -150,10 +152,10 @@ export function Keys({ profiles, endpoint }: { profiles: Profile[]; endpoint: st
             })();
           }}
         >
-          <Row description="How you will recognise this client" title="Key name">
+          <FormRow description="How you will recognise this client" title="Key name">
             <Input
               aria-label="Key name"
-              className="w-64"
+              className="w-full"
               maxLength={64}
               onChange={(event) => {
                 setName(event.target.value);
@@ -161,7 +163,7 @@ export function Keys({ profiles, endpoint }: { profiles: Profile[]; endpoint: st
               placeholder="e.g. Work laptop"
               value={name}
             />
-          </Row>
+          </FormRow>
           <FormRow
             description="A key reaches every session, or one of them, and the websites it is signed in to."
             title="Session access"

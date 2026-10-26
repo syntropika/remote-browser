@@ -11,6 +11,7 @@ export default defineConfig({
     "**/*.toml",
     "**/target/**",
     "src/host/ui/app.js",
+    "src/host/code/page.js",
     "src/host/ui/app.css",
   ],
 });

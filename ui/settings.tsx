@@ -2,17 +2,22 @@
 import { Button, Chip, Input, Spinner } from "@heroui/react";
 import { useEffect, useState } from "react";
 
+import { AccessSettings } from "./access.js";
 import { failure } from "./api.js";
 import { asyncHandler } from "./async-boundary.js";
+import { ExtensionManager } from "./extension-manager.js";
 import { Icon } from "./icons.js";
-import { Keys } from "./keys.js";
 import type { Policy, Profile } from "./model.js";
 import { origin } from "./model.js";
+import { McpSettings, NativeExtensionList, useNativeExtensions } from "./native-extensions.js";
 import { FormRow, Group, Row } from "./rows.js";
 
-type Section = "sessions" | "keys" | "checks" | "display" | "access";
+export type SettingsSection = "sessions" | "extensions" | "mcp" | "checks" | "display" | "access";
 
 type Props = {
+  initialSection: SettingsSection;
+  onOpenTab: (id: string, profile: string) => void;
+  onStore: (profile: string) => Promise<void>;
   profiles: Profile[];
   profileId: string;
   endpoint: string;
@@ -28,7 +33,7 @@ type Props = {
   onClose: () => void;
 };
 
-const SECTIONS: { id: Section; label: string; icon: string; blurb: string }[] = [
+const SECTIONS: { id: SettingsSection; label: string; icon: string; blurb: string }[] = [
   {
     id: "sessions",
     label: "Sessions",
@@ -36,10 +41,16 @@ const SECTIONS: { id: Section; label: string; icon: string; blurb: string }[] = 
     blurb: "Separate browsers, each with its own sign-ins",
   },
   {
-    id: "keys",
-    label: "API keys",
+    id: "extensions",
+    label: "Extensions",
+    icon: "extensions",
+    blurb: "Browser features and extensions installed in this session",
+  },
+  {
+    id: "mcp",
+    label: "MCP",
     icon: "key",
-    blurb: "How agents reach this browser",
+    blurb: "Agent connections and API keys",
   },
   {
     id: "checks",
@@ -57,11 +68,14 @@ const SECTIONS: { id: Section; label: string; icon: string; blurb: string }[] = 
     id: "access",
     label: "Access",
     icon: "lock",
-    blurb: "How this browser and its keys are reached",
+    blurb: "Protect this browser with a login",
   },
 ];
 
 export function Settings({
+  initialSection,
+  onOpenTab,
+  onStore,
   profiles,
   profileId,
   endpoint,
@@ -74,7 +88,10 @@ export function Settings({
   onReconnect,
   onClose,
 }: Props) {
-  const [section, setSection] = useState<Section>("sessions");
+  const native = useNativeExtensions();
+  const mcp = native.entries.find((entry) => entry.id === "mcp");
+  const access = native.entries.find((entry) => entry.id === "access");
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [policy, setPolicy] = useState<Policy>({
     origin: "",
     cookieNames: [],
@@ -97,24 +114,50 @@ export function Settings({
     });
   }, [policies, url]);
 
+  useEffect(() => {
+    if (
+      !native.loading &&
+      ((section === "mcp" && !mcp?.installed) || (section === "access" && !access?.installed))
+    ) {
+      setSection("extensions");
+    }
+  }, [native.loading, section, mcp?.installed, access?.installed]);
+
   const current = SECTIONS.find((entry) => entry.id === section);
 
   return (
-    <section aria-label="Settings" className="bg-card absolute inset-0 z-30 flex">
-      <aside className="flex w-64 shrink-0 flex-col gap-1 p-3">
-        <Button className="justify-start" onPress={onClose} size="sm" variant="ghost">
+    <section
+      aria-label="Settings"
+      className="bg-card absolute inset-0 z-30 flex flex-col sm:flex-row"
+    >
+      <aside className="flex w-full shrink-0 flex-col gap-1 p-2 sm:w-64 sm:p-3">
+        <Button
+          aria-label="Back to browser"
+          className="justify-start"
+          onPress={onClose}
+          size="sm"
+          variant="ghost"
+        >
           <Icon name="back" />
-          Back to browser
+          <span>Back to browser</span>
         </Button>
-        <h1 className="px-3 pt-4 pb-2 text-lg font-semibold tracking-tight">Settings</h1>
-        <nav aria-label="Settings sections" className="flex flex-col gap-0.5">
-          {SECTIONS.map((entry) => (
+        <h1 className="sr-only text-lg font-semibold tracking-tight sm:not-sr-only sm:px-3 sm:pt-4 sm:pb-2">
+          Settings
+        </h1>
+        <nav aria-label="Settings sections" className="flex gap-0.5 overflow-x-auto sm:flex-col">
+          {SECTIONS.filter(
+            (entry) =>
+              (entry.id !== "mcp" || mcp?.installed) &&
+              (entry.id !== "access" || access?.installed),
+          ).map((entry) => (
             <button
               aria-current={entry.id === section}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+              aria-label={entry.label}
+              title={entry.label}
+              className={`flex min-h-11 shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap transition-colors ${
                 entry.id === section
-                  ? "border-accent text-ink border-l-2 bg-white/10 font-medium"
-                  : "text-ink-dim hover:bg-raised border-l-2 border-transparent"
+                  ? "text-ink bg-white/10 font-medium"
+                  : "text-ink-dim hover:bg-raised"
               }`}
               key={entry.id}
               onClick={() => {
@@ -123,21 +166,42 @@ export function Settings({
               type="button"
             >
               <Icon name={entry.icon} />
-              {entry.label}
+              <span>{entry.label}</span>
             </button>
           ))}
         </nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="shrink-0 px-8 py-4">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="shrink-0 px-4 py-4 sm:px-8">
           <h2 className="text-xl font-semibold tracking-tight">{current?.label}</h2>
           <p className="text-ink-faint text-sm">{current?.blurb}</p>
         </header>
         {/* The page the sections write on: a darker canvas whose corner is rounded where the
             sidebar and the header meet it, the way the reference browser lays its settings out. */}
         <div className="bg-page min-h-0 flex-1 overflow-auto rounded-tl-3xl">
-          <div className="mx-auto flex max-w-3xl flex-col gap-7 px-8 py-7">
+          <div className="mx-auto flex max-w-3xl flex-col gap-7 px-4 py-5 sm:px-8 sm:py-7">
+            {section === "extensions" ? (
+              <>
+                <NativeExtensionList
+                  state={native}
+                  onSettings={(id) => {
+                    if (id === "mcp" || id === "access") {
+                      setSection(id);
+                    }
+                  }}
+                />
+                <ExtensionManager
+                  key={profileId}
+                  onOpenTab={onOpenTab}
+                  onStore={onStore}
+                  profileId={profileId}
+                  profileName={
+                    profiles.find((profile) => profile.id === profileId)?.name || "this session"
+                  }
+                />
+              </>
+            ) : null}
             {section === "sessions" ? (
               <>
                 <Group
@@ -185,7 +249,9 @@ export function Settings({
               </>
             ) : null}
 
-            {section === "keys" ? <Keys endpoint={endpoint} profiles={profiles} /> : null}
+            {section === "mcp" && mcp?.installed ? (
+              <McpSettings entry={mcp} endpoint={endpoint} profiles={profiles} />
+            ) : null}
 
             {section === "checks" ? (
               <>
@@ -327,26 +393,8 @@ export function Settings({
               </Group>
             ) : null}
 
-            {section === "access" ? (
-              <Group
-                description="This browser has no account and no sign-in. The dashboard is local, and an agent carries a key."
-                title="Access"
-              >
-                <Row
-                  description="The dashboard listens on this machine only and asks for no credential, so anything running here can open it."
-                  title="This browser's address"
-                >
-                  <Chip color="success" variant="soft">
-                    Open locally
-                  </Chip>
-                </Row>
-                <Row
-                  description="An agent connects over MCP with an API key, scoped to every session or one of them. A key is checked on every request."
-                  title="How agents get in"
-                >
-                  <Chip variant="soft">Keys</Chip>
-                </Row>
-              </Group>
+            {section === "access" && access?.installed ? (
+              <AccessSettings entry={access} onSaved={native.reload} />
             ) : null}
           </div>
         </div>

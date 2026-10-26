@@ -7,7 +7,7 @@ export default defineConfig({
   extends: [core],
   jsPlugins: antiSlop.jsPlugins,
   // The committed native bundle is generated from the checked UI sources.
-  ignorePatterns: [...core.ignorePatterns, "src/host/ui/app.js"],
+  ignorePatterns: [...core.ignorePatterns, "src/host/ui/app.js", "src/host/code/page.js"],
   options: { typeAware: true },
   rules: {
     "func-style": "off",
@@ -41,10 +41,6 @@ export default defineConfig({
     "promise/prefer-await-to-callbacks": "off",
     "no-await-in-loop": "off",
     "no-bitwise": "off",
-    // Effect generators keep their service receiver and anonymous generator syntax.
-    "func-names": "off",
-    "typescript/no-this-alias": "off",
-    "unicorn/no-this-assignment": "off",
     // Domain errors and their services belong together in the same module.
     "max-classes-per-file": "off",
     // Prefer explicit domain invariants over syntax-only restrictions.
@@ -73,22 +69,25 @@ export default defineConfig({
     "promise/no-multiple-resolved": "off",
     // Positional protocol fields and the first response in a fixture stay explicit.
     "prefer-destructuring": ["error", { array: false, object: true }],
-    // Effect's named self receiver is part of its generator API, not Array iteration.
-    "unicorn/no-array-method-this-argument": "off",
   },
   overrides: [
     ...core.overrides,
     {
       files: ["**/*.{test,spec}.{ts,tsx,js,mjs}"],
       // Async fixture adapters preserve rejection semantics without fake awaits.
-      // node:test owns test registration promises and controls teardown scheduling.
       rules: { "typescript/require-await": "off", "typescript/no-floating-promises": "off" },
     },
     {
       // Synthetic fixtures intentionally model partial native and transport objects.
       // Their runtime assertions validate behavior; production code retains typed checks.
-      files: ["test/**/*.ts", "scripts/integration.ts"],
+      files: [
+        "test/**/*.ts",
+        "scripts/integration.ts",
+        "src/host/tests/**/*.ts",
+        "src/host/tools/**/*.ts",
+      ],
       rules: {
+        "typescript/no-explicit-any": "off",
         "typescript/no-unsafe-assignment": "off",
         "typescript/no-unsafe-member-access": "off",
         "typescript/no-unsafe-call": "off",
@@ -108,23 +107,9 @@ export default defineConfig({
       },
     },
     {
-      files: ["ui/{app,contracts}.ts"],
-      // The gateway serves pinned noVNC modules from this absolute browser URL.
-      rules: { "import/no-absolute-path": "off" },
-    },
-    {
-      files: ["scripts/runtime.ts"],
-      // Effect generators return failed effects early and complete successfully with void.
-      rules: { "typescript/consistent-return": "off" },
-    },
-    {
       files: ["test/**/*.ts"],
       // Fixtures mimic Node EventEmitter APIs and deliberately exercise hostile inputs.
       rules: { "unicorn/prefer-event-target": "off", "no-script-url": "off" },
-    },
-    {
-      files: ["test/playwright-code-mode.test.ts"],
-      rules: { "typescript/only-throw-error": "off", "no-throw-literal": "off" },
     },
   ],
 });
