@@ -1,7 +1,5 @@
 import { cli, assert, Runtime, serve, temporary, sleep, deadline } from "./harness.js";
 
-export { Runtime } from "./harness.js";
-
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
   let began!: () => void;

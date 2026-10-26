@@ -8,7 +8,7 @@ ownership` or `docs: clarify setup`.
 
 ## Layout
 
-- `src/host/` — the Rust host: dashboard, MCP, accounts, API keys, sessions, reservations.
+- `src/host/` — the Rust host: dashboard, native Access/MCP modules, API keys, sessions, reservations.
 - `src/engine/` — the Rust engine: one process per session, Chromium through CEF.
 - `ui/` — the dashboard, React and TypeScript, with the HTML shell it loads.
 - `scripts/build-ui.ts` — the bundle: Bun for the script, Tailwind for the stylesheet.
@@ -24,7 +24,7 @@ Use Bun 1.3 and Rust 1.88 or newer, and install the locked dependencies:
 
 ```sh
 bun install --frozen-lockfile
-bun run check   # formatting, TypeScript, lint rules and the host's tests
+bun run check   # formatting, TypeScript, lint, Bun tests and Rust host/engine tests
 bun run build
 ```
 
@@ -34,11 +34,18 @@ Ultracite's core rules and assertion safety checks; the exceptions are documente
 `oxlint.config.ts`. Formatting uses double quotes, a 100-character line width, sorted imports
 and trailing commas. Markdown and TOML remain manually formatted.
 
-For the engine and the host together, run `cargo clippy --all-targets` in each crate and the
-smoke tests that cover what you changed. Never run them against a real profile: they create
+Use `bun run lint:host` and `bun run lint:engine --release` for Rust Clippy with warnings
+denied. The engine commands prepare the pinned CEF runtime; other platforms require a
+matching `CEF_PATH`. Run the integration suites that cover what you changed. Never run
+them against a real profile: they create
 accounts, open pages and write files.
 
 Preserve the sandbox, the human and agent control lease, and the authenticated account, key
 and file endpoints. Never commit API keys, browser profiles, account records, screenshots,
 recordings or real website data. Use synthetic fixtures in tests. Report security issues
 privately as described in [SECURITY.md](SECURITY.md).
+
+Test internal Rust rules alongside their modules: profile contracts, access, permissions,
+reservations, session assessment, native ABI boundaries, navigation completion and human
+click sequences. Bun tests cover TypeScript build tools and fixture adapters. Integration
+suites stay in TypeScript and verify the running host, CEF engine and current React UI.

@@ -114,49 +114,38 @@ impl Automation {
         ) {
             return Err(Error::Invalid("Unknown browser control".into()));
         }
-        {
-            let browser = &self.0;
-            browser.request(op, Some(tab), args, false).await
-        }
+        self.0.request(op, Some(tab), args, false).await
     }
     pub async fn status(&self) -> Status {
-        {
-            let browser = &self.0;
-            let status = browser.request("status", None, Value::Null, false).await;
-            Status {
-                owner: Owner::Agent,
-                uncertain: browser.uncertain()
-                    || status
-                        .map(|value| value["uncertain"].as_bool().unwrap_or(true))
-                        .unwrap_or(true),
-            }
+        let status = self.0.request("status", None, Value::Null, false).await;
+        Status {
+            owner: Owner::Agent,
+            uncertain: self.0.uncertain()
+                || status
+                    .map(|value| value["uncertain"].as_bool().unwrap_or(true))
+                    .unwrap_or(true),
         }
     }
     pub async fn close(&self) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser.close().await
-        }
+        self.0.close().await
     }
     pub async fn set_owner(&self, owner: Owner) {
-        {
-            let browser = &self.0;
-            if let Ok(tabs) = browser.request("tabs", None, Value::Null, true).await {
-                for tab in tabs.as_array().into_iter().flatten() {
-                    if let Some(id) = tab["id"].as_str() {
-                        let _ = browser
-                            .request(
-                                if owner == Owner::Human {
-                                    "take"
-                                } else {
-                                    "return"
-                                },
-                                Some(id),
-                                Value::Null,
-                                true,
-                            )
-                            .await;
-                    }
+        if let Ok(tabs) = self.0.request("tabs", None, Value::Null, true).await {
+            for tab in tabs.as_array().into_iter().flatten() {
+                if let Some(id) = tab["id"].as_str() {
+                    let _ = self
+                        .0
+                        .request(
+                            if owner == Owner::Human {
+                                "take"
+                            } else {
+                                "return"
+                            },
+                            Some(id),
+                            Value::Null,
+                            true,
+                        )
+                        .await;
                 }
             }
         }
@@ -175,10 +164,7 @@ impl Automation {
         ) {
             return Err(Error::Invalid("Unknown file action".into()));
         }
-        {
-            let browser = &self.0;
-            browser.request(op, tab, args, false).await
-        }
+        self.0.request(op, tab, args, false).await
     }
     pub async fn human_action(&self, op: &str, tab: Option<&str>, args: Value) -> Result<Value> {
         if !matches!(
@@ -225,25 +211,19 @@ impl Automation {
         ) {
             return Err(Error::Invalid("Unknown host action".into()));
         }
-        {
-            let browser = &self.0;
-            browser.request(op, tab, args, true).await
-        }
+        self.0.request(op, tab, args, true).await
     }
     pub async fn reserve(&self, tab: &str, task: &str, ttl_ms: u64) -> Result<Lease> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser
-                    .request(
-                        "reserve",
-                        Some(tab),
-                        json!({"task":task,"ttlMs":ttl_ms}),
-                        false,
-                    )
-                    .await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0
+                .request(
+                    "reserve",
+                    Some(tab),
+                    json!({"task":task,"ttlMs":ttl_ms}),
+                    false,
+                )
+                .await?,
+        )?)
     }
     pub async fn reserve_named(
         &self,
@@ -252,170 +232,122 @@ impl Automation {
         agent_name: &str,
         ttl_ms: u64,
     ) -> Result<Lease> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser
-                    .request(
-                        "reserve",
-                        Some(tab),
-                        json!({"task":task,"agentName":agent_name,"ttlMs":ttl_ms}),
-                        false,
-                    )
-                    .await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0
+                .request(
+                    "reserve",
+                    Some(tab),
+                    json!({"task":task,"agentName":agent_name,"ttlMs":ttl_ms}),
+                    false,
+                )
+                .await?,
+        )?)
     }
     pub async fn renew(&self, tab: &str, lease_id: &str, ttl_ms: u64) -> Result<Lease> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser
-                    .with_lease(Some(lease_id))
-                    .request("renew", Some(tab), json!({"ttlMs":ttl_ms}), false)
-                    .await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0
+                .with_lease(Some(lease_id))
+                .request("renew", Some(tab), json!({"ttlMs":ttl_ms}), false)
+                .await?,
+        )?)
     }
     pub async fn release(&self, tab: &str, lease_id: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .with_lease(Some(lease_id))
-                .request("release", Some(tab), Value::Null, false)
-                .await?;
-            Ok(())
-        }
+        self.0
+            .with_lease(Some(lease_id))
+            .request("release", Some(tab), Value::Null, false)
+            .await?;
+        Ok(())
     }
     pub async fn tabs(&self) -> Result<Vec<Tab>> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser.request("tabs", None, Value::Null, false).await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0.request("tabs", None, Value::Null, false).await?,
+        )?)
     }
     pub async fn open_tab(&self) -> Result<String> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser.request("open", None, Value::Null, false).await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0.request("open", None, Value::Null, false).await?,
+        )?)
     }
     pub async fn select_tab(&self, tab: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .request("select", Some(tab), Value::Null, false)
-                .await?;
-            Ok(())
-        }
+        self.0
+            .request("select", Some(tab), Value::Null, false)
+            .await?;
+        Ok(())
     }
     pub async fn close_tab(&self, tab: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .request("close", Some(tab), Value::Null, false)
-                .await?;
-            Ok(())
-        }
+        self.0
+            .request("close", Some(tab), Value::Null, false)
+            .await?;
+        Ok(())
     }
     pub async fn navigate(&self, tab: &str, url: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .request("navigate", Some(tab), json!({"url":url}), false)
-                .await?;
-            Ok(())
-        }
+        self.0
+            .request("navigate", Some(tab), json!({"url":url}), false)
+            .await?;
+        Ok(())
     }
     pub async fn snapshot(&self, tab: &str, max_elements: usize) -> Result<Snapshot> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser
-                    .request(
-                        "snapshot",
-                        Some(tab),
-                        json!({"maxElements":max_elements}),
-                        false,
-                    )
-                    .await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0
+                .request(
+                    "snapshot",
+                    Some(tab),
+                    json!({"maxElements":max_elements}),
+                    false,
+                )
+                .await?,
+        )?)
     }
     pub async fn click(&self, tab: &str, reference: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .request("click", Some(tab), json!({"reference":reference}), false)
-                .await?;
-            Ok(())
-        }
+        self.0
+            .request("click", Some(tab), json!({"reference":reference}), false)
+            .await?;
+        Ok(())
     }
     pub async fn fill(&self, tab: &str, reference: &str, text: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .request(
-                    "fill",
-                    Some(tab),
-                    json!({"reference":reference,"text":text}),
-                    false,
-                )
-                .await?;
-            Ok(())
-        }
+        self.0
+            .request(
+                "fill",
+                Some(tab),
+                json!({"reference":reference,"text":text}),
+                false,
+            )
+            .await?;
+        Ok(())
     }
     pub async fn press(&self, tab: &str, reference: &str, key: &str) -> Result<()> {
-        {
-            let browser = &self.0;
-            browser
-                .request(
-                    "press",
-                    Some(tab),
-                    json!({"reference":reference,"key":key}),
-                    false,
-                )
-                .await?;
-            Ok(())
-        }
+        self.0
+            .request(
+                "press",
+                Some(tab),
+                json!({"reference":reference,"key":key}),
+                false,
+            )
+            .await?;
+        Ok(())
     }
     pub async fn scroll(&self, tab: &str, x: i32, y: i32) -> Result<Value> {
-        {
-            let browser = &self.0;
-            browser
-                .request("scroll", Some(tab), json!({"x":x,"y":y}), false)
-                .await
-        }
+        self.0
+            .request("scroll", Some(tab), json!({"x":x,"y":y}), false)
+            .await
     }
     pub async fn evaluate(&self, tab: &str, script: &str) -> Result<Value> {
-        {
-            let browser = &self.0;
-            browser
-                .request("evaluate", Some(tab), json!({"script":script}), false)
-                .await
-        }
+        self.0
+            .request("evaluate", Some(tab), json!({"script":script}), false)
+            .await
     }
     pub async fn session_health(&self, tab: &str, policy: &HealthPolicy) -> Result<SessionHealth> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser
-                    .request("health", Some(tab), serde_json::to_value(policy)?, false)
-                    .await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0
+                .request("health", Some(tab), serde_json::to_value(policy)?, false)
+                .await?,
+        )?)
     }
     pub async fn screenshot(&self, tab: &str) -> Result<String> {
-        {
-            let browser = &self.0;
-            Ok(serde_json::from_value(
-                browser
-                    .request("screenshot", Some(tab), Value::Null, false)
-                    .await?,
-            )?)
-        }
+        Ok(serde_json::from_value(
+            self.0
+                .request("screenshot", Some(tab), Value::Null, false)
+                .await?,
+        )?)
     }
 }

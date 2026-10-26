@@ -16,14 +16,11 @@ pub mod native;
 pub mod native_extensions;
 pub mod profiles;
 pub mod reservations;
-pub mod snapshot;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
     Invalid(String),
-    #[error("Engine transport failed; completion is unknown. Restart the MCP server: {0}")]
-    Transport(#[from] reqwest::Error),
     #[error("Browser completion is unknown. Restart the MCP server before further actions")]
     Uncertain,
     #[error("The human has control. Resume automation from the host application when finished")]

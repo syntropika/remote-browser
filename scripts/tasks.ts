@@ -2,29 +2,40 @@
 import process from "node:process";
 
 const [task, ...args] = process.argv.slice(2);
-const commands = new Map<string, string[]>([
-  ["build:host", ["cargo", "build", "--locked", "--manifest-path", "src/host/Cargo.toml"]],
-  ["test:host", ["cargo", "test", "--locked", "--manifest-path", "src/host/Cargo.toml"]],
-  [
-    "lint:host",
-    [
-      "cargo",
-      "clippy",
-      "--locked",
-      "--manifest-path",
-      "src/host/Cargo.toml",
-      "--all-targets",
-      "--",
-      "-D",
-      "warnings",
-    ],
-  ],
+const [operation, component] = (task || "").split(":");
+const operations = new Map([
+  ["build", "build"],
+  ["test", "test"],
+  ["lint", "clippy"],
 ]);
-const command = commands.get(task);
-if (!command) {
+const verb = operations.get(operation);
+if (!verb || !["host", "engine"].includes(component)) {
   throw new Error(`Unknown native task: ${task}`);
 }
-process.exitCode = await Bun.spawn([...command, ...args], {
+let { env } = process;
+if (component === "engine") {
+  const preparation = Bun.spawn([process.execPath, "run", "scripts/prepare-cef.ts"], {
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const runtime = (await new Response(preparation.stdout).text()).trim();
+  if ((await preparation.exited) !== 0 || !runtime) {
+    throw new Error("CEF preparation failed");
+  }
+  env = { ...env, CEF_PATH: runtime };
+}
+const command = [
+  "cargo",
+  verb,
+  "--locked",
+  "--manifest-path",
+  `src/${component}/Cargo.toml`,
+  ...(operation === "lint" ? ["--all-targets"] : []),
+  ...args,
+  ...(operation === "lint" ? ["--", "-D", "warnings"] : []),
+];
+process.exitCode = await Bun.spawn(command, {
+  env,
   stdin: "inherit",
   stdout: "inherit",
   stderr: "inherit",

@@ -12,6 +12,14 @@ import type { Wire } from "../tests/harness.js";
 const { join } = filePath;
 
 export type Point = readonly [number, number];
+export type DisplayRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  surfaceWidth: number;
+  surfaceHeight: number;
+};
 
 export class Browser {
   session: string | undefined;
@@ -138,21 +146,31 @@ export class Browser {
   }
 }
 
-export async function waitForDisplay(browser: Browser) {
-  await wait(
-    () => browser.evaluate("document.getElementById('connection')?.textContent"),
-    (v) => v === "Display connected",
+export async function waitForDisplay(browser: Browser): Promise<DisplayRect> {
+  return wait<DisplayRect>(
+    () =>
+      browser.evaluate(`(() => {
+      const display = document.querySelector('section[aria-label="Browser display"]');
+      const canvas = display?.querySelector('canvas[aria-label="Browser page"]');
+      if (!canvas || display.getAttribute('aria-busy') !== 'false') return null;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const available = display.getBoundingClientRect();
+      const width = Math.max(320, Math.min(3840, Math.round(available.width)));
+      const height = Math.max(240, Math.min(2160, Math.round(available.height)));
+      if (Math.abs(canvas.width - width) > 2 || Math.abs(canvas.height - height) > 2) return null;
+      return {left:rect.left, top:rect.top, width:rect.width, height:rect.height,
+        surfaceWidth:canvas.width, surfaceHeight:canvas.height};
+    })()`),
+    Boolean,
     40_000,
-  );
-  return browser.evaluate(
-    "JSON.parse(JSON.stringify(document.getElementById('view').getBoundingClientRect()))",
   );
 }
 
-export function mapper(rect: Wire, width = 1024, height = 768) {
+export function mapper(rect: DisplayRect) {
   return (x: number, y: number): Point => [
-    rect.left + (x * rect.width) / width,
-    rect.top + (y * rect.height) / height,
+    rect.left + (x * rect.width) / rect.surfaceWidth,
+    rect.top + (y * rect.height) / rect.surfaceHeight,
   ];
 }
 
@@ -196,7 +214,7 @@ export async function press(
 
 export async function interact(
   browser: Browser,
-  rect: Wire,
+  rect: DisplayRect,
   target: Point,
   seed = 1,
   approach: Point = [380, 210],

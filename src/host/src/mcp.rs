@@ -657,7 +657,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "browser_session_health",
-            "Read session health for a configured service origin. Authentication is inferred only from configured visible markers. Only selected authentication cookie expiry metadata is returned; values are never exposed. Cookie expiry does not guarantee session validity. This call selects the target tab with the current WebDriver adapter.",
+            "Read session health for the requested tab and configured service origin. Authentication is inferred only from configured visible markers. Only selected authentication cookie expiry metadata is returned; values are never exposed. Cookie expiry does not guarantee session validity.",
             json!({"tabId":tab,"policy":{"type":"object","properties":{"origin":{"type":"string","maxLength":8192},"cookieNames":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":256}},"authenticatedSelector":{"type":"string","minLength":1,"maxLength":2048},"loginSelector":{"type":"string","minLength":1,"maxLength":2048},"warningSeconds":{"type":"integer","minimum":0,"maximum":2592000,"default":86400}},"required":["origin","cookieNames"],"additionalProperties":false}}),
             &["tabId", "policy"],
             true,
@@ -720,7 +720,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "browser_evaluate",
-            "Execute a synchronous JavaScript function body in the page, with an explicit return of JSON. It may mutate the page and invalidates references. Maximum script and result size: 32 KiB. Does not expose Node.js or Playwright.",
+            "Execute a synchronous JavaScript function body in the page, with an explicit return of JSON. It may mutate the page and invalidates references. Maximum script and result size: 32 KiB. Runs in the page's browser context.",
             json!({"tabId":tab,"script":{"type":"string","minLength":1,"maxLength":32768}}),
             &["tabId", "script"],
             false,
@@ -863,17 +863,38 @@ mod tests {
     }
 
     #[test]
-    fn catalog_does_not_expose_control_override_or_cdp() {
+    fn catalog_exposes_only_supported_operations_with_closed_schemas() {
         let tools = tools();
         assert!(
             tools
                 .iter()
                 .all(|tool| tool.input_schema["additionalProperties"] == false)
         );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.name.contains("cdp") || tool.name.contains("playwright"))
+        let names: std::collections::BTreeSet<_> =
+            tools.iter().map(|tool| tool.name.as_ref()).collect();
+        assert_eq!(
+            names,
+            [
+                "browser_control",
+                "browser_files",
+                "browser_upload",
+                "browser_download",
+                "browser_profiles",
+                "browser_session_health",
+                "browser_status",
+                "browser_tabs",
+                "browser_navigate",
+                "browser_snapshot",
+                "browser_click",
+                "browser_fill",
+                "browser_press",
+                "browser_scroll",
+                "browser_evaluate",
+                "browser_screenshot",
+            ]
+            .into_iter()
+            .collect()
         );
+        assert_eq!(tools.len(), names.len());
     }
 }

@@ -20,7 +20,7 @@ pub fn default_warning() -> u64 {
 
 impl HealthPolicy {
     pub fn validate(&self) -> Result<()> {
-        let origin = reqwest::Url::parse(&self.origin)
+        let origin = url::Url::parse(&self.origin)
             .map_err(|_| Error::Invalid("Invalid service origin".into()))?;
         if !matches!(origin.scheme(), "http" | "https")
             || !origin.username().is_empty()

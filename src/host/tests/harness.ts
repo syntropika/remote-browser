@@ -412,10 +412,6 @@ export function cli(
       "protocol-only": { type: "boolean" },
       "verify-expiry": { type: "boolean" },
       chrome: { type: "string" },
-      keep: { type: "boolean" },
-      "hold-ui": { type: "boolean" },
-      output: { type: "string" },
-      results: { type: "string" },
     },
   });
   const engine = values["engine-binary"] || process.env.REMOTE_BROWSER_ENGINE_BINARY;

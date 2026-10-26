@@ -9,7 +9,7 @@ use clap::Parser;
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
-#[command(version, about = "Native browser automation MCP over stdio; no Docker")]
+#[command(version, about = "Native browser automation with a dashboard and MCP")]
 struct Args {
     /// Protected API key registry shared by dashboard management and HTTP MCP.
     #[arg(long, env = "REMOTE_BROWSER_API_KEYS_FILE")]
@@ -30,9 +30,9 @@ struct Args {
     #[arg(long)]
     profiles_config: Option<PathBuf>,
     /// Persistent profile root for a single embedded profile.
-    #[arg(long, conflicts_with = "profiles_config")]
+    #[arg(long, conflicts_with = "profiles_config", requires = "engine_binary")]
     profile_root: Option<PathBuf>,
-    /// The engine executable to run for that profile, when this binary is not one itself.
+    /// Engine executable to start for --profile-root.
     #[arg(long, env = "REMOTE_BROWSER_ENGINE_BINARY", requires = "profile_root")]
     engine_binary: Option<PathBuf>,
     /// Operation transport deadline. Engine deadlines are shorter.
@@ -51,7 +51,7 @@ struct Args {
     log_level: crate::logging::Level,
 }
 
-pub fn main(embedded_binary: Option<PathBuf>) {
+pub fn main() {
     let args = Args::parse();
     crate::logging::configure(args.log_level);
     crate::logging::lifecycle("runtime", "service_started", None);
@@ -66,7 +66,7 @@ pub fn main(embedded_binary: Option<PathBuf>) {
             std::process::exit(1);
         }
     };
-    let result = runtime.block_on(run(args, embedded_binary));
+    let result = runtime.block_on(run(args));
     // Tokio's stdin reader uses blocking I/O and cannot be cancelled while stdin stays open.
     // Session cleanup completes in run(); bound runtime teardown so SIGTERM still exits.
     runtime.shutdown_timeout(Duration::from_millis(100));
@@ -80,15 +80,12 @@ pub fn main(embedded_binary: Option<PathBuf>) {
     }
 }
 
-async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
+async fn run(args: Args) -> Result<()> {
     let use_stdio = args.mcp_stdio || args.dashboard_port.is_none();
     let (mut config, catalog) = if let Some(root) = args.profile_root {
-        let binary = args.engine_binary.or(embedded_binary).ok_or_else(|| {
-            Error::Invalid(
-                "--profile-root needs --engine-binary, or an executable with an engine inside"
-                    .into(),
-            )
-        })?;
+        let binary = args
+            .engine_binary
+            .ok_or_else(|| Error::Invalid("--profile-root needs --engine-binary".into()))?;
         std::fs::create_dir_all(&root)?;
         let root = std::fs::canonicalize(root)?;
         #[cfg(unix)]
@@ -106,20 +103,20 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
         } else {
             let config = ProfileConfig {
                 default_profile_id: "default".into(),
-                engine_binary: Some(binary.clone()),
+                engine_binary: binary.clone(),
                 data_root: Some(root.join("profiles")),
                 files_root: None,
                 profiles: vec![ProfileDefinition {
                     id: "default".into(),
                     name: "Default".into(),
-                    data_directory: Some(root.join("profiles/default")),
+                    data_directory: root.join("profiles/default"),
                     services: Vec::new(),
                 }],
             };
             crate::profiles::initialize_catalog(&catalog, &config)?;
             config
         };
-        config.engine_binary = Some(binary);
+        config.engine_binary = binary;
         // A single embedded profile keeps its files beside itself, so captures and
         // downloads have somewhere to go without another flag.
         config.files_root.get_or_insert_with(|| root.join("files"));
@@ -185,7 +182,7 @@ async fn run(args: Args, embedded_binary: Option<PathBuf>) -> Result<()> {
     } else {
         shutdown_signal().await.map_err(crate::Error::Io)
     };
-    // Save embedded profiles on engine shutdown; external browsers keep running.
+    // Close profile engines after stopping the host listeners.
     if let Some(dashboard) = dashboard {
         dashboard.abort();
     }

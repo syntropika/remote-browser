@@ -35,5 +35,9 @@ jobs:
         run: bun run test:unit
       - name: Test the host
         run: bun run test:host
+      - name: Test the engine
+        run: bun run test:engine --release
       - name: Lint the host
         run: bun run lint:host
+      - name: Lint the engine
+        run: bun run lint:engine --release

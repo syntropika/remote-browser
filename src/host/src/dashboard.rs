@@ -678,16 +678,14 @@ mod tests {
         let profiles = Profiles::new(
             crate::profiles::ProfileConfig {
                 default_profile_id: "default".into(),
-                engine_binary: Some(std::env::current_exe().unwrap()),
+                engine_binary: std::env::current_exe().unwrap(),
                 data_root: None,
                 files_root: None,
                 profiles: vec![crate::profiles::ProfileDefinition {
                     id: "default".into(),
                     name: "Default".into(),
-                    data_directory: Some(
-                        std::env::temp_dir()
-                            .join(format!("browser-dashboard-{}", uuid::Uuid::new_v4())),
-                    ),
+                    data_directory: std::env::temp_dir()
+                        .join(format!("browser-dashboard-{}", uuid::Uuid::new_v4())),
                     services: Vec::new(),
                 }],
             },

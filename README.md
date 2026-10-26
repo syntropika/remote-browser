@@ -90,8 +90,11 @@ suite against the custom distribution before treating this integration as ready.
 ## Checks
 
 ```sh
-bun run check   # formatting, TypeScript, lint rules and the host's tests
+bun run check   # formatting, TypeScript, lint, Bun tests and Rust host/engine tests
 ```
 
-The Bun integration tests under `src/host/tests/` drive both executables end to end; see the
-host's README for how to run them.
+Engine tests prepare the pinned CEF runtime; other platforms require a matching `CEF_PATH`.
+Use `bun run test:host`, `bun run test:engine --release`, `bun run lint:host` or
+`bun run lint:engine --release` for individual Rust checks. Bun executes the build tools
+and the integration tests under `src/host/tests/`, which drive both executables end to end.
+See the host's README for integration commands.

@@ -5,7 +5,7 @@ description: Operate the user's persistent browser through the connected Remote 
 
 # Remote Browser
 
-Use the connected Remote Browser MCP for tasks that depend on the user's website sessions or existing tabs. Discover the live tool schemas first: clients may prefix tool names. The server exposes sixteen individual tools, including `browser_profiles`, `browser_tabs`, `browser_snapshot` and `browser_control`; it does not expose Playwright or a debugging port. Do not replace the shared browser with another browser or bypass its ownership checks.
+Use the connected Remote Browser MCP for tasks that depend on the user's website sessions or existing tabs. Discover the live tool schemas first: clients may prefix tool names. The server exposes sixteen individual tools, including `browser_profiles`, `browser_tabs`, `browser_snapshot` and `browser_control`; all browser actions go through those tools. Do not replace the shared browser with another browser or bypass its ownership checks.
 
 ## Choose the profile and tab
 
@@ -23,7 +23,7 @@ Use `browser_snapshot` to observe text and interactive elements. Use only refere
 
 A dropdown has no tool of its own: a snapshot reports a `<select>` as a combobox but does not list its options. Click the combobox and move with the arrow keys and Enter through `browser_press`, or set the value with `browser_evaluate` and dispatch the `change` event the page listens for.
 
-`browser_navigate` opens an HTTP(S) URL. `browser_control` supports `back`, `forward` and real `reload`, profile clipboard operations, saving a screenshot and recording. `browser_scroll` moves a document by CSS pixels. There is no wait tool: to see whether something settled, take a fresh snapshot or screenshot. Use `browser_evaluate` for focused JavaScript in the page when the other tools do not cover the operation; there are no `page`, `context` or Playwright helper bindings.
+`browser_navigate` opens an HTTP(S) URL. `browser_control` supports `back`, `forward` and real `reload`, profile clipboard operations, saving a screenshot and recording. `browser_scroll` moves a document by CSS pixels. There is no wait tool: to see whether something settled, take a fresh snapshot or screenshot. Use `browser_evaluate` for focused JavaScript in the page when the other tools do not cover the operation; supply a browser JavaScript function body with an explicit JSON return.
 
 `browser_screenshot` returns an image for inspection. `browser_status` reports ownership and uncertain completion. If an action's completion is unknown, stop using the affected tab and follow the server's recovery instructions. Check the resulting page after recovery before deciding whether the action needs repeating; never replay a potentially completed submission automatically.
 

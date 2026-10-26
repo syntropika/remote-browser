@@ -13,6 +13,17 @@ pub(super) struct Navigation {
     operation: Option<remote_browser_native::logging::Operation>,
 }
 
+struct View {
+    loading: bool,
+    paints: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Completion {
+    Loaded,
+    Unknown,
+}
+
 fn finish_call(
     id: u64,
     mut operation: remote_browser_native::logging::Operation,
@@ -60,26 +71,25 @@ impl Engine {
         let mut index = 0;
         while index < self.navigations.len() {
             let pending = &mut self.navigations[index];
-            let outcome = match self.tabs.iter().find(|tab| tab.id == pending.tab) {
-                None => Some(Err("uncertain".into())),
-                Some(_) if now.duration_since(pending.started) >= OPERATION_LIMIT => {
-                    Some(Err("uncertain".into()))
-                }
-                Some(tab) if tab.browser.is_loading() == 0 => {
-                    let paints = tab.shared.paints.load(Ordering::Acquire);
-                    let (finished, drawn) = pending.paint.get_or_insert((now, paints));
-                    (paints != *drawn || now.duration_since(*finished) >= PAINT_LIMIT)
-                        .then_some(Ok(Value::Null))
-                }
-                Some(_) => {
-                    pending.paint = None;
-                    None
-                }
-            };
-            if let Some(outcome) = outcome {
+            let view = self
+                .tabs
+                .iter()
+                .find(|tab| tab.id == pending.tab)
+                .map(|tab| View {
+                    loading: tab.browser.is_loading() != 0,
+                    paints: tab.shared.paints.load(Ordering::Acquire),
+                });
+            if let Some(completion) = pending.poll(now, view) {
                 let pending = self.navigations.remove(index);
                 if let Some(operation) = pending.operation {
-                    finish_call(pending.id, operation, outcome);
+                    finish_call(
+                        pending.id,
+                        operation,
+                        match completion {
+                            Completion::Loaded => Ok(Value::Null),
+                            Completion::Unknown => Err("uncertain".into()),
+                        },
+                    );
                 }
             } else {
                 index += 1;
@@ -89,13 +99,109 @@ impl Engine {
 }
 
 impl Navigation {
-    pub(super) fn new(id: u64, tab: String) -> Self {
+    pub(super) fn new(id: u64, tab: String, started: Instant) -> Self {
         Self {
             id,
             tab,
-            started: Instant::now(),
+            started,
             paint: None,
             operation: None,
         }
+    }
+
+    fn poll(&mut self, now: Instant, view: Option<View>) -> Option<Completion> {
+        let Some(view) = view else {
+            return Some(Completion::Unknown);
+        };
+        if now.duration_since(self.started) >= OPERATION_LIMIT {
+            return Some(Completion::Unknown);
+        }
+        if view.loading {
+            self.paint = None;
+            return None;
+        }
+        let (finished, drawn) = self.paint.get_or_insert((now, view.paints));
+        (view.paints != *drawn || now.duration_since(*finished) >= PAINT_LIMIT)
+            .then_some(Completion::Loaded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn view(loading: bool, paints: u64) -> Option<View> {
+        Some(View { loading, paints })
+    }
+
+    #[test]
+    fn loading_waits_for_a_new_paint_after_document_completion() {
+        let now = Instant::now();
+        let mut navigation = Navigation::new(1, "tab-a".into(), now);
+        assert_eq!(navigation.poll(now, view(true, 3)), None);
+        assert_eq!(navigation.poll(now, view(false, 3)), None);
+        assert_eq!(
+            navigation.poll(now, view(false, 4)),
+            Some(Completion::Loaded)
+        );
+    }
+
+    #[test]
+    fn paint_wait_is_bounded_but_does_not_finish_early() {
+        let now = Instant::now();
+        let mut navigation = Navigation::new(1, "tab-a".into(), now);
+        assert_eq!(navigation.poll(now, view(false, 3)), None);
+        assert_eq!(
+            navigation.poll(now + PAINT_LIMIT - Duration::from_millis(1), view(false, 3)),
+            None
+        );
+        assert_eq!(
+            navigation.poll(now + PAINT_LIMIT, view(false, 3)),
+            Some(Completion::Loaded)
+        );
+    }
+
+    #[test]
+    fn resumed_loading_discards_a_previous_paint_wait() {
+        let now = Instant::now();
+        let mut navigation = Navigation::new(1, "tab-a".into(), now);
+        assert_eq!(navigation.poll(now, view(false, 1)), None);
+        assert_eq!(navigation.poll(now + PAINT_LIMIT, view(true, 2)), None);
+        assert_eq!(navigation.poll(now + PAINT_LIMIT, view(false, 2)), None);
+        assert_eq!(
+            navigation.poll(now + PAINT_LIMIT, view(false, 3)),
+            Some(Completion::Loaded)
+        );
+    }
+
+    #[test]
+    fn deadline_or_missing_tab_reports_unknown_even_if_a_frame_exists() {
+        let now = Instant::now();
+        let mut timed = Navigation::new(1, "tab-a".into(), now);
+        assert_eq!(
+            timed.poll(
+                now + OPERATION_LIMIT - Duration::from_millis(1),
+                view(true, 1)
+            ),
+            None
+        );
+        assert_eq!(
+            timed.poll(now + OPERATION_LIMIT, view(false, 2)),
+            Some(Completion::Unknown)
+        );
+        let mut missing = Navigation::new(2, "tab-b".into(), now);
+        assert_eq!(missing.poll(now, None), Some(Completion::Unknown));
+    }
+
+    #[test]
+    fn a_loading_tab_does_not_hold_an_independent_completion() {
+        let now = Instant::now();
+        let mut slow = Navigation::new(1, "tab-a".into(), now);
+        let mut fast = Navigation::new(2, "tab-b".into(), now);
+        assert_eq!(slow.poll(now, view(true, 1)), None);
+        assert_eq!(fast.poll(now, view(false, 1)), None);
+        assert_eq!(fast.poll(now, view(false, 2)), Some(Completion::Loaded));
+        assert_eq!(slow.poll(now, view(true, 1)), None);
     }
 }

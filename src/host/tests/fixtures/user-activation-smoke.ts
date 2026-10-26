@@ -1,4 +1,4 @@
-/** Synthetic page fixtures retained from the original regression suite. */
+/** Synthetic browser pages for integration tests. */
 export const STYLE =
   "<style>body{margin:0}button{position:absolute;left:0;top:0;width:120px;height:80px}\niframe{position:absolute;top:100px;border:0}</style>";
 

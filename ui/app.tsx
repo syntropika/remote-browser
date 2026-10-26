@@ -490,7 +490,11 @@ export function App() {
           recording={recording}
           tab={tab}
         />
-        <div className="bg-page relative min-h-0 flex-1 overflow-hidden">
+        <section
+          aria-busy={!ready}
+          aria-label="Browser display"
+          className="bg-page relative min-h-0 flex-1 overflow-hidden"
+        >
           <Display
             epoch={epoch}
             interactive={interactive}
@@ -510,7 +514,7 @@ export function App() {
               </p>
             </div>
           )}
-        </div>
+        </section>
         {note ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center">
             <Alert description={note.text} onClose={() => setNote(null)} tone={note.tone} />

@@ -16,8 +16,6 @@ import {
 
 const { join } = filePath;
 
-export { Engine } from "./harness.js";
-
 export async function run(binary: string) {
   let began!: () => void;
   let started = new Promise<void>((resolve) => {

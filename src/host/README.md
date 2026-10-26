@@ -3,7 +3,7 @@
 A Rust host with an embedded dashboard and a separate Chromium engine executable. Each
 profile runs in its own engine process with off-screen tab surfaces, persistent cookies
 and storage. Optional bundled native extensions provide MCP automation and browser login.
-It runs without Docker, Playwright or a separately installed browser.
+CEF runtime files are prepared beside the engine executable.
 
 There is a native Rust API and an MCP adapter. The engine reaches Chromium's DevTools
 protocol in process, through the embedder interface, and opens no debugging port.
@@ -74,7 +74,7 @@ An MCP client configuration can launch the host directly:
 ```
 
 Standard output carries MCP messages only. The host speaks a private stdio protocol to
-each engine process; neither opens a WebDriver listener. The dashboard listens on
+each engine process. The dashboard listens on
 loopback, rejects foreign browser origins, and limits request bodies. It is not a public hosting interface. Catalog
 files are written atomically with mode `0600`, and profile directories use mode `0700` on
 Unix. Catalog and engine locks prevent simultaneous writers. Profile data contains
@@ -120,11 +120,9 @@ Pass the returned token to every operation on the reserved tab:
 The last object is for `browser_navigate`. Use `browser_tabs` actions `renew` and
 `release` with the same profile, tab, and token. Leases last one second to five
 minutes. Expired, released, and superseded tokens fail. Listings show task names
-and expiry, never lease tokens. Only API-created tabs can be closed. There are at
-most 32 profiles and 32 tabs per embedded profile.
-Tab listings limit page titles to 4 KiB and URLs to 16 KiB on UTF-8 boundaries.
+and expiry, never lease tokens. Only API-created tabs can be closed. The catalog supports at most 32 profiles.
+Tab listings limit page titles and URLs to 1024 Unicode characters each.
 The full page URL remains inside the engine; only display metadata is shortened.
-These limits keep all 32 rows below the transport budget even with JSON escaping.
 
 Different embedded tabs accept concurrent calls. A slow navigation on one tab does
 not hold the host's operation lock for another. Calls targeting one busy tab fail
@@ -192,28 +190,23 @@ contain sensitive information. Treat page content as untrusted data.
 
 Snapshots cover the main document with basic HTML and ARIA labels; they are not a
 complete accessibility tree and do not traverse iframe or shadow-root contents.
-The dashboard displays a fixed 1024×768 viewport through periodic PNG captures.
-Its shell reuses the existing Remote Browser dark stylesheet and rounded controls:
-the page fits the available display, with a floating desktop dock and upward-opening
-profile and tab panels. Mobile places navigation above the page and a native keyboard
-input below it. Mobile zoom switches between fit and actual size; one-finger swipes
-scroll the fitted page or pan the actual-size display, and two fingers scroll the
-actual-size page. Session status and check settings are available in More options.
-The dashboard opens onto its page unless the optional Access extension requires sign-in.
-Mouse and pen input reaches the page as performed: pointer movement, hover, presses and
-releases keep their order and timing, and leaving the display ends hover. Moves queued behind
-a slower action collapse into the latest position. A press belongs to the pointer, tab and
-profile that started it: its movement and release go there even if the selected tab or profile
-changes meanwhile, and other pointers are ignored until it ends. When the dashboard can no
+The React dashboard paints engine frames onto a canvas and resizes the engine surface to
+match the available display. Frame sequence numbers allow unchanged replies and partial
+PNG updates. Mouse, keyboard, wheel and touch input use the host action API. Touch devices
+have a page keyboard field. The dashboard opens onto its page unless the optional Access
+extension requires sign-in.
+Mouse and pen input uses an ordered action queue, and leaving the display ends hover.
+Moves queued behind a slower action collapse into the latest position. Only the pointer
+that started a press can move or release it until that gesture ends. When the dashboard can no
 longer observe the release (lost pointer capture, pointer cancellation, window blur or a
 hidden page), it sends the `cancel` input kind instead of a release. The engine forwards
 CEF's capture-loss notification, but full mouse cancellation remains incomplete:
 `pointercancel`, `lostpointercapture` and button-state cleanup are not guaranteed, including
 when an agent reserves a tab during a human press. Touch keeps tap and swipe handling.
 Agent clicks remain single native clicks; no movement is synthesized for them. The `human-pointer-smoke.ts`
-regression checks the engine input. `dashboard-pointer-seam-smoke.ts`
-runs the dashboard's pointer handlers with Bun, and `dashboard-pointer-smoke.ts` drives the
-dashboard with a Chrome or Chromium executable passed as `--chrome`.
+regression checks the engine input. `dashboard-pointer-smoke.ts` drives the current React
+dashboard with a Chrome or Chromium executable passed as `--chrome`, using accessible
+display readiness and the canvas's actual surface dimensions.
 It supports basic clicking, typing, paste, named keys, scrolling, and explicit
 downloads and uploads through the managed file workspace, automatic download capture,
 profile clipboard integration, PNG capture and MP4 recording. Popup windows, browser
@@ -305,7 +298,7 @@ Use `--suite native-extensions,shutdown` to select suites, or `--list` to see th
 `REMOTE_BROWSER_HOST_BINARY` and `REMOTE_BROWSER_ENGINE_BINARY` provide defaults.
 Every suite runs sequentially with disposable profiles and bounded waits. The runner
 reports all failures and exits nonzero if any selected suite fails; missing binaries or
-required capabilities are errors. GPU, diagnostics and media suites require the matching
+required capabilities are errors. GPU and media suites require the matching
 runtime capabilities; media tests also require FFmpeg and ffprobe.
 Direct-engine synthetic fixtures explicitly select ANGLE/SwiftShader and opt into software
 WebGL so graphics and frame input do not depend on a desktop GPU. These flags apply only to
@@ -316,10 +309,8 @@ suite uses a real FIFO to exercise stderr backpressure without Bun buffering it 
 Real Chrome Web Store installation is opt-in with `--real-store`; add `--verify-expiry`
 to check the three-minute permission timeout. `--protocol-only --suite extension-install`
 checks only IPC guards and explicitly reports that no installation was tested.
-`--native-diagnostics` opts into custom native diagnostic assertions. `--chrome /path/to/chrome`
-adds the real dashboard-pointer suite using a private DevTools pipe. The historical
-`dashboard-pointer-seam` suite requires a matching inline-script dashboard via `--dashboard`;
-it does not target the current React bundle.
+`--chrome /path/to/chrome` adds the dashboard-pointer suite against the built React UI
+using a private DevTools pipe.
 
 Individual suites also run directly:
 
@@ -487,4 +478,4 @@ Attachment navigations, download links, blob/data links and POST attachment resp
 
 Human takeover blocks agent actions while preserving the reservation. When the dashboard is connected, a rejected agent action can request an acknowledged five-second handoff that the user can cancel. A cancelled action remains unexecuted. Operations with unknown completion are never retried by this handoff mechanism.
 
-No CDP or Playwright adapter is included. The updated `skills/remote-browser/SKILL.md` documents the individual native MCP tools and their ownership, permission and file contracts.
+`skills/remote-browser/SKILL.md` documents the individual MCP tools and their ownership, permission and file contracts.

@@ -12,6 +12,7 @@ mod browser_lifecycle;
 mod extension_installs;
 mod extensions;
 mod operations;
+mod pointer;
 mod session_health;
 use operations::Navigation;
 
@@ -476,7 +477,7 @@ struct Surfacing {
     /// A tab a person took; agent operations on it are refused until they hand it back.
     human: bool,
     pointer: (i32, i32),
-    last_click: Option<(Instant, (i32, i32), i32)>,
+    clicks: pointer::Clicks,
     /// Text the dashboard put on this profile's clipboard, waiting to be pasted.
     pasteboard: String,
     _registration: Option<Registration>,
@@ -527,7 +528,7 @@ impl Surfacing {
             picker,
             human: false,
             pointer: (size.0 / 2, size.1 / 2),
-            last_click: None,
+            clicks: pointer::Clicks::default(),
             pasteboard: String::new(),
             _registration: registration,
         })
@@ -716,14 +717,17 @@ impl Engine {
             return Err("only HTTP(S) and about: can be opened".into());
         }
         self.release(at);
-        self.tabs[at].last_click = None;
+        self.tabs[at].clicks.reset();
         let frame = self.tabs[at]
             .browser
             .main_frame()
             .ok_or("the tab has no frame")?;
         frame.load_url(Some(&CefString::from(url)));
-        self.navigations
-            .push(Navigation::new(id, self.tabs[at].id.clone()));
+        self.navigations.push(Navigation::new(
+            id,
+            self.tabs[at].id.clone(),
+            Instant::now(),
+        ));
         Ok(Value::Null)
     }
 
@@ -1091,19 +1095,10 @@ impl Engine {
         let kind = args["kind"].as_str().unwrap_or_default();
         if matches!(kind, "down" | "click") {
             host.set_focus(1);
-            let now = Instant::now();
             let position = self.tabs[at].pointer;
-            let count = self.tabs[at]
-                .last_click
-                .filter(|(when, previous, _)| {
-                    now.duration_since(*when) <= Duration::from_millis(500)
-                        && (position.0 - previous.0).abs() <= 4
-                        && (position.1 - previous.1).abs() <= 4
-                })
-                .map_or(1, |(_, _, count)| count % 3 + 1);
-            self.tabs[at].last_click = Some((now, position, count));
+            self.tabs[at].clicks.press(position, Instant::now());
         }
-        let count = self.tabs[at].last_click.map_or(1, |(_, _, count)| count);
+        let count = self.tabs[at].clicks.count();
         match kind {
             "move" => host.send_mouse_move_event(Some(&point(args)), 0),
             "leave" => host.send_mouse_move_event(Some(&point(args)), 1),
@@ -1414,8 +1409,7 @@ impl Engine {
                 self.tabs[at].browser.go_forward();
                 self.settle(at)
             }
-            // A function body with an explicit return, which is the contract the tools
-            // document and what WebDriver's execute_script took.
+            // Tools accept a JavaScript function body with an explicit JSON return.
             "evaluate" => {
                 let script = call.args["script"]
                     .as_str()

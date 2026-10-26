@@ -1,4 +1,4 @@
-/** Synthetic page fixtures retained from the original regression suite. */
+/** Synthetic browser pages for integration tests. */
 export const PAGE =
   '<!doctype html><style>body{margin:0}iframe{position:absolute;left:16px;top:24px;width:800px;height:650px;border:0}</style><script>\nwindow.ready=false;window.result=null;onmessage=e=>{if(e.data?.ready)ready=true;if(e.data?.trace)result=e.data};\n</script><iframe src="/frame"></iframe>';
 

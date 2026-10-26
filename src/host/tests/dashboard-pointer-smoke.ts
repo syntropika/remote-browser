@@ -1,3 +1,6 @@
+import { writeFile } from "node:fs/promises";
+import filePath from "node:path";
+
 import { Browser, mapper, waitForDisplay } from "../tools/human-pointer.js";
 import { FRAME } from "./fixtures/human-pointer-smoke.js";
 /** Real Chrome dashboard pointer regression; --chrome is required. */
@@ -14,7 +17,14 @@ export async function run(engine: string, host: string, args: Record<string, any
   );
   try {
     await temporary(async (root) => {
-      const runtime = await Runtime.launch(host, engine, root);
+      const graphicsEngine = filePath.join(root, "graphics-engine");
+      const executable = filePath.resolve(engine).replaceAll("'", "'\\''");
+      await writeFile(
+        graphicsEngine,
+        `#!/bin/sh\nexec '${executable}' --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader "$@"\n`,
+        { mode: 0o700 },
+      );
+      const runtime = await Runtime.launch(host, graphicsEngine, root);
       let browser: Browser | undefined;
       try {
         const c = runtime.client;
@@ -42,7 +52,7 @@ export async function run(engine: string, host: string, args: Record<string, any
         await browser.mouse("mouseMoved", ...toScreen(600, 500));
         await sleep(100);
         const outside = await browser.evaluate(
-          "(()=>{const r=document.getElementById('view').getBoundingClientRect();return [[r.left-8,r.top+8],[r.right+8,r.top+8],[r.left+8,r.top-8],[r.left+8,r.bottom+8]].find(([x,y])=>x>=0&&y>=0&&x<innerWidth&&y<innerHeight)})()",
+          "(()=>{const r=document.querySelector('canvas[aria-label=\"Browser page\"]').getBoundingClientRect();return [[r.left-8,r.top+8],[r.right+8,r.top+8],[r.left+8,r.top-8],[r.left+8,r.bottom+8]].find(([x,y])=>x>=0&&y>=0&&x<innerWidth&&y<innerHeight)})()",
         );
         assert(outside);
         await browser.mouse("mouseMoved", outside[0], outside[1]);

@@ -26,22 +26,14 @@ const local = [
   "user-activation",
   "webgl",
 ];
-const optional = [
-  "extension-install",
-  "extension-management",
-  "diagnostics-privacy",
-  "dashboard-pointer",
-  "dashboard-pointer-seam",
-];
+const optional = ["extension-install", "extension-management", "dashboard-pointer"];
 const { values } = parseArgs({
   options: {
     "engine-binary": { type: "string" },
     "host-binary": { type: "string" },
     suite: { type: "string" },
     chrome: { type: "string" },
-    dashboard: { type: "string" },
     "real-store": { type: "boolean" },
-    "native-diagnostics": { type: "boolean" },
     "verify-expiry": { type: "boolean" },
     "protocol-only": { type: "boolean" },
     list: { type: "boolean" },
@@ -55,7 +47,6 @@ if (values.list) {
     : [
         ...local,
         ...(values["real-store"] ? ["extension-install", "extension-management"] : []),
-        ...(values["native-diagnostics"] ? ["diagnostics-privacy"] : []),
         ...(values.chrome ? ["dashboard-pointer"] : []),
       ];
   const engine = values["engine-binary"] || process.env.REMOTE_BROWSER_ENGINE_BINARY;
@@ -91,21 +82,14 @@ if (values.list) {
     }
   }
   for (const suite of suites) {
-    const args =
-      suite === "dashboard-pointer-seam"
-        ? ["--dashboard", values.dashboard || "src/host/ui/index.html"]
-        : [
-            "--engine-binary",
-            engine,
-            ...(host ? ["--host-binary", host] : []),
-            ...(suite === "dashboard-pointer" && values.chrome ? ["--chrome", values.chrome] : []),
-            ...(suite === "extension-install" && values["verify-expiry"]
-              ? ["--verify-expiry"]
-              : []),
-            ...(suite === "extension-install" && values["protocol-only"]
-              ? ["--protocol-only"]
-              : []),
-          ];
+    const args = [
+      "--engine-binary",
+      engine,
+      ...(host ? ["--host-binary", host] : []),
+      ...(suite === "dashboard-pointer" && values.chrome ? ["--chrome", values.chrome] : []),
+      ...(suite === "extension-install" && values["verify-expiry"] ? ["--verify-expiry"] : []),
+      ...(suite === "extension-install" && values["protocol-only"] ? ["--protocol-only"] : []),
+    ];
     console.log(`Running ${suite}`);
     const child = Bun.spawn(
       [process.execPath, "run", `src/host/tests/${suite}-smoke.ts`, ...args],

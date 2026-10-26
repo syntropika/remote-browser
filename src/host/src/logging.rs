@@ -383,7 +383,6 @@ pub fn outcome(error: Option<&Error>) -> &'static str {
         Some(Error::Invalid(_)) => "invalid",
         Some(Error::Json(_)) => "invalid_request",
         Some(Error::Io(_)) => "io_error",
-        Some(Error::Transport(_)) => "transport_error",
         Some(Error::Protocol(_)) => "protocol_error",
     }
 }
