@@ -8,6 +8,36 @@ engine reports `available: false` and the dashboard does not show an install dec
 
 ## Build dependency
 
+### Reuse the compiled runtime
+
+For Linux x86-64, use the pinned experimental
+[CEF release](https://github.com/syntropika/remote-browser/releases/tag/cef-154.0.34-rb.1):
+
+```sh
+bun run build:engine --release
+```
+
+`scripts/prepare-cef.py` downloads the versioned asset, checks the SHA-256
+in `runtime.json`, safely extracts it, and prepares the flat layout expected by the
+CEF Rust crate. It retains matching resources, headers, wrapper sources, licenses,
+credits and archive metadata. The verified library is checked again on cache reuse.
+Python 3.12 or newer is required. Build flags following `build:engine` go to Cargo.
+
+To prepare the dependency for another build tool:
+
+```sh
+export CEF_PATH="$(python3 scripts/prepare-cef.py)"
+cargo build --locked --manifest-path src/engine/Cargo.toml
+```
+
+An explicit `CEF_PATH` takes precedence and must already contain `archive.json`.
+The published artifact is Linux x86-64 only. Cross builds require a matching explicit
+runtime. To publish a replacement, use a new release tag and update the manifest's
+archive/library hashes and source revision together; retain the old release for
+reproducible checkouts. Do not commit compiled CEF archives to Git.
+
+### Rebuild CEF from source
+
 Prepare the matching Chromium source checkout and initialize CEF at commit `14c5a08`,
 including its normal Chromium patches, using CEF's source-build workflow. Apply this
 integration **after** those patches and **before** generating the final build:

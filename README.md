@@ -20,17 +20,30 @@ with it.
 
 ## Build and run
 
-Rust 1.88 or newer and Bun 1.3. The first engine build downloads the CEF binary
-distribution — roughly a gigabyte — and copies its runtime files beside the executable.
+Rust 1.88 or newer, Bun 1.3, and Python 3.12 or newer. On Linux x86-64, the engine
+build command downloads the pinned extension-enabled CEF release (293 MB), verifies
+its SHA-256, and caches a flat runtime outside the checkout. Cargo copies its runtime
+files beside the executable. Chromium is already compiled.
 
 ```sh
 bun install
 bun run build                                   # the dashboard bundle the host embeds
-cargo build --release --manifest-path src/engine/Cargo.toml
+bun run build:engine --release
 cargo build --release --manifest-path src/host/Cargo.toml
 ./src/host/target/release/remote-browser-native \
   --engine-binary src/engine/target/release/remote-browser-cef-engine
 ```
+
+The runtime version, source revision, download URL and checksums are pinned in
+[`src/engine/cef/runtime.json`](src/engine/cef/runtime.json). `bun run prepare:cef`
+prepares the runtime without compiling Rust and prints its `CEF_PATH`. The cache is
+`$XDG_CACHE_HOME/remote-browser/cef` (default `~/.cache/remote-browser/cef`); later
+builds reuse it without downloading. A checksum failure stops preparation.
+
+Set `CEF_PATH` explicitly to use another existing flat CEF distribution with its
+`archive.json`. Other platforms and cross builds require an explicit matching runtime.
+Direct Cargo builds retain the CEF crate's default behavior, which downloads stock CEF
+when `CEF_PATH` is absent; use `build:engine` for the extension-enabled Linux build.
 
 The host prints the dashboard's address. Open it and the browser is yours: no account, no
 sign-in and no token. It listens on this machine only and refuses a request from any other

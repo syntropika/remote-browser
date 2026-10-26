@@ -11,6 +11,8 @@
   "type": "module",
   "scripts": {
     "build": "bun run scripts/build-ui.ts",
+    "build:engine": "python3 scripts/prepare-cef.py --build",
+    "prepare:cef": "python3 scripts/prepare-cef.py",
     "typecheck": "tsc --noEmit",
     "test": "cargo test --manifest-path src/host/Cargo.toml",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives",

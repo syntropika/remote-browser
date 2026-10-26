@@ -31,6 +31,8 @@ jobs:
         run: bun run format:check && bun run typecheck && bun run lint
       - name: Build the dashboard
         run: bun run build
+      - name: Test CEF runtime preparation
+        run: python3 scripts/test_prepare_cef.py
       - name: Test the host
         run: cargo test --manifest-path src/host/Cargo.toml
       - name: Lint the host
