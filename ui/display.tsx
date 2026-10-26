@@ -128,16 +128,23 @@ export function Display({
       }
       // A frame that covers the surface carries its size; a patch lands where it moved.
       // Assigning a size clears the canvas, so it is only assigned when it changes.
-      const resized = target.width !== frame.width || target.height !== frame.height;
-      if (frame.x === 0 && frame.y === 0) {
+      const resized = target.width !== frame.surfaceWidth || target.height !== frame.surfaceHeight;
+      if (
+        frame.x === 0 &&
+        frame.y === 0 &&
+        frame.width === frame.surfaceWidth &&
+        frame.height === frame.surfaceHeight
+      ) {
         // A full frame is the engine telling the display how big its surface is, which is how
         // a session switch corrects what the previous engine was painting.
-        surface.current = { width: frame.width, height: frame.height };
+        surface.current = { width: frame.viewWidth, height: frame.viewHeight };
         sized.current = true;
+        target.style.width = `${frame.viewWidth}px`;
+        target.style.height = `${frame.viewHeight}px`;
         if (resized) {
-          target.width = frame.width;
-          target.height = frame.height;
-          onSurface(`${frame.width} × ${frame.height}`);
+          target.width = frame.surfaceWidth;
+          target.height = frame.surfaceHeight;
+          onSurface(`${frame.surfaceWidth} × ${frame.surfaceHeight}`);
         }
       }
       target.getContext("2d")?.drawImage(image, frame.x, frame.y);
@@ -201,6 +208,10 @@ export function Display({
     }
     let timer = 0;
     let settled = true;
+    let watching = true;
+    let previous = "";
+    const pointer = window.matchMedia("(pointer: coarse)");
+    const hover = window.matchMedia("(hover: none)");
     const apply = async () => {
       const rect = box.getBoundingClientRect();
       const width = Math.round(rect.width);
@@ -208,16 +219,26 @@ export function Display({
       if (width < 320 || height < 240) {
         return;
       }
-      if (
-        Math.abs(width - surface.current.width) < 2 &&
-        Math.abs(height - surface.current.height) < 2
-      ) {
+      const metrics = {
+        width,
+        height,
+        screenWidth: window.screen.width,
+        screenHeight: window.screen.height,
+        deviceScaleFactor: window.devicePixelRatio || 1,
+        mobile: pointer.matches && hover.matches,
+      };
+      const measured = JSON.stringify(metrics);
+      if (!watching || measured === previous) {
         return;
       }
       settled = false;
       sized.current = false;
       try {
-        const applied = record(await action("resize", { width, height }, tabId, profileId));
+        const applied = record(await action("resize", metrics, tabId, profileId));
+        if (!watching) {
+          return;
+        }
+        previous = measured;
         surface.current = {
           width: count(applied.width, width),
           height: count(applied.height, height),
@@ -227,7 +248,9 @@ export function Display({
         // display asks again from the beginning.
         seq.current = 0;
       } catch (cause) {
-        onNotice(failure(cause).message);
+        if (watching) {
+          onNotice(failure(cause).message);
+        }
       } finally {
         settled = true;
       }
@@ -244,12 +267,21 @@ export function Display({
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(box);
+    window.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    pointer.addEventListener("change", schedule);
+    hover.addEventListener("change", schedule);
     schedule();
     return () => {
       observer.disconnect();
+      watching = false;
       window.clearTimeout(timer);
+      window.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      pointer.removeEventListener("change", schedule);
+      hover.removeEventListener("change", schedule);
     };
-  }, [tabId, profileId, onNotice]);
+  }, [tabId, profileId, epoch, onNotice]);
 
   // Wheel and touch listeners are registered here because a page scrolled with the wheel
   // must not also scroll the dashboard, and React's own listeners cannot prevent that.

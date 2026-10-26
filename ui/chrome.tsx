@@ -186,7 +186,7 @@ export function Chrome({
                 <Tooltip.Trigger>
                   <span
                     aria-label={availability}
-                    className={`mx-1 block size-2 rounded-full ${working ? "bg-danger" : "bg-success"}`}
+                    className={`ms-1 me-[9px] block size-2 shrink-0 rounded-full ${working ? "bg-danger" : "bg-success"}`}
                     role="status"
                   />
                 </Tooltip.Trigger>

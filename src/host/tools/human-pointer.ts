@@ -158,9 +158,9 @@ export async function waitForDisplay(browser: Browser): Promise<DisplayRect> {
       const available = display.getBoundingClientRect();
       const width = Math.max(320, Math.min(3840, Math.round(available.width)));
       const height = Math.max(240, Math.min(2160, Math.round(available.height)));
-      if (Math.abs(canvas.width - width) > 2 || Math.abs(canvas.height - height) > 2) return null;
+      if (Math.abs(rect.width - width) > 2 || Math.abs(rect.height - height) > 2) return null;
       return {left:rect.left, top:rect.top, width:rect.width, height:rect.height,
-        surfaceWidth:canvas.width, surfaceHeight:canvas.height};
+        surfaceWidth:width, surfaceHeight:height};
     })()`),
     Boolean,
     40_000,

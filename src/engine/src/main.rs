@@ -16,7 +16,9 @@ mod extensions;
 mod operations;
 mod pointer;
 mod session_health;
+mod viewport;
 use operations::Navigation;
+use viewport::Viewport;
 
 use cef::*;
 use image::ImageEncoder;
@@ -34,7 +36,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The surface a tab renders at until the dashboard measures the display it has.
-const VIEWPORT: (i32, i32) = (1024, 768);
+const VIEWPORT: Viewport = Viewport {
+    width: 1024,
+    height: 768,
+    screen_width: 1024,
+    screen_height: 768,
+    scale: 1.0,
+    mobile: false,
+};
 /// An operation that has not finished by this deadline leaves completion unknown.
 const OPERATION_LIMIT: Duration = Duration::from_secs(12);
 /// How long to wait for a frame once the work that should produce it has finished.
@@ -188,7 +197,7 @@ const REMEMBERED_CHANGES: usize = 48;
 struct Shared {
     painted: Mutex<Painted>,
     /// The surface the dashboard asked for, which the render handler reports to CEF.
-    size: Mutex<(i32, i32)>,
+    size: Mutex<Viewport>,
     /// Counts frames, so an operation can wait for the page it asked for to be drawn.
     paints: AtomicU64,
     url: Mutex<String>,
@@ -206,12 +215,24 @@ wrap_render_handler! {
     impl RenderHandler {
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             if let Some(rect) = rect {
-                let (width, height) = *self.shared.size.lock().unwrap();
+                let view = *self.shared.size.lock().unwrap();
                 rect.x = 0;
                 rect.y = 0;
-                rect.width = width;
-                rect.height = height;
+                rect.width = view.width;
+                rect.height = view.height;
             }
+        }
+
+        fn screen_info(&self, _browser: Option<&mut Browser>, info: Option<&mut ScreenInfo>) -> i32 {
+            let Some(info) = info else { return 0; };
+            let view = *self.shared.size.lock().unwrap();
+            info.device_scale_factor = view.scale;
+            info.depth = 24;
+            info.depth_per_component = 8;
+            info.is_monochrome = 0;
+            info.rect = Rect { x: 0, y: 0, width: view.screen_width, height: view.screen_height };
+            info.available_rect = info.rect.clone();
+            1
         }
 
         fn on_paint(
@@ -297,6 +318,13 @@ wrap_app! {
             command_line: Option<&mut CommandLine>,
         ) {
             if let Some(command_line) = command_line {
+                // A person's shared browser keeps this launch default even though its
+                // internal adapter uses a private DevTools connection.
+                let disabled = CefString::from(&command_line.switch_value(Some(&CefString::from("disable-blink-features")))).to_string();
+                if !disabled.split(',').any(|feature| feature.trim() == "AutomationControlled") {
+                    let disabled = if disabled.is_empty() { "AutomationControlled".to_owned() } else { format!("{disabled},AutomationControlled") };
+                    command_line.append_switch_with_value(Some(&CefString::from("disable-blink-features")), Some(&CefString::from(disabled.as_str())));
+                }
                 if command_line.has_switch(Some(&CefString::from("type"))) != 1 {
                     command_line.append_switch_with_value(Some(&CefString::from("remote-debugging-port")), Some(&CefString::from("0")));
                     command_line.append_switch_with_value(Some(&CefString::from("remote-debugging-address")), Some(&CefString::from("127.0.0.1")));
@@ -467,7 +495,7 @@ struct Surfacing {
 impl Surfacing {
     fn open(
         id: String,
-        size: (i32, i32),
+        size: Viewport,
         downloads: Option<std::path::PathBuf>,
         browsers: browser_lifecycle::Browsers,
     ) -> Option<Self> {
@@ -513,7 +541,7 @@ impl Surfacing {
             picker,
             dialog,
             human: false,
-            pointer: (size.0 / 2, size.1 / 2),
+            pointer: (size.width / 2, size.height / 2),
             clicks: pointer::Clicks::default(),
             pasteboard: String::new(),
             target,
@@ -556,7 +584,7 @@ struct Engine {
     next_snapshot: u64,
     /// The display the dashboard last measured. Every tab renders at this size, so a tab
     /// opened later is the same shape as the one it was opened from.
-    surface: (i32, i32),
+    surface: Viewport,
     /// The calls waiting to be served, so work that can yield sees one coming.
     inbox: Arc<Inbox>,
     navigations: Vec<Navigation>,
@@ -656,6 +684,13 @@ impl Engine {
         }
         let painted = tab.shared.clone();
         self.tabs.push(tab);
+        if self.surface != Viewport::default() {
+            let at = self.tabs.len() - 1;
+            if let Err(error) = self.apply_viewport(at) {
+                self.discard(at);
+                return Err(error);
+            }
+        }
         // A browser paints its first frame a moment after it exists, and until it does its
         // surface holds nothing. Waiting for that frame here is what makes a new tab show
         // the page rather than an empty rectangle.
@@ -818,12 +853,18 @@ impl Engine {
             std::thread::sleep(Duration::from_millis(4));
         }
         let (seq, moved, png) = self.capture(at, Some(since))?;
+        let painted = shared.painted.lock().unwrap();
+        let view = *shared.size.lock().unwrap();
         Ok(json!({
             "seq": seq,
             "x": moved.x,
             "y": moved.y,
             "width": moved.width,
             "height": moved.height,
+            "surfaceWidth": painted.width,
+            "surfaceHeight": painted.height,
+            "viewWidth": view.width,
+            "viewHeight": view.height,
             "image": BASE64_STANDARD.encode(png),
         }))
     }
@@ -1032,7 +1073,8 @@ impl Engine {
         // A pointer can only be where the surface is. A point outside it would otherwise be
         // clamped onto an edge and read as a gesture the person never made.
         if let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) {
-            let (width, height) = *self.tabs[at].shared.size.lock().unwrap();
+            let view = *self.tabs[at].shared.size.lock().unwrap();
+            let (width, height) = (view.width, view.height);
             if x < 0.0 || y < 0.0 || x >= f64::from(width) || y >= f64::from(height) {
                 return Err("the point is outside the surface".into());
             }
@@ -1576,23 +1618,22 @@ impl Engine {
             // The surface follows the dashboard's display, so a wide window is rendered
             // wide rather than stretched from a fixed one.
             "resize" => {
-                let width = call.args["width"].as_i64().unwrap_or(self.surface.0 as i64);
-                let height = call.args["height"]
-                    .as_i64()
-                    .unwrap_or(self.surface.1 as i64);
-                let width = width.clamp(320, 3840) as i32;
-                let height = height.clamp(240, 2160) as i32;
+                let view = self.surface.resize(&call.args);
                 // A window is one shape for every tab in it, including the ones opened
                 // after it was measured.
-                self.surface = (width, height);
+                self.surface = view;
                 for tab in &self.tabs {
-                    *tab.shared.size.lock().unwrap() = (width, height);
+                    *tab.shared.size.lock().unwrap() = view;
                     if let Some(host) = tab.browser.host() {
+                        host.notify_screen_info_changed();
                         host.was_resized();
                     }
                 }
+                for index in 0..self.tabs.len() {
+                    self.apply_viewport(index)?;
+                }
                 pump_for(SETTLE);
-                Ok(json!({"width": width, "height": height}))
+                Ok(view.device_metrics())
             }
             "health" => self.session_health(at, &call.args),
             // A capture belongs in the profile's workspace, where the dashboard and the

@@ -88,6 +88,17 @@
   padding-inline: 0.25rem;
 }
 
+/* The address icon is part of the field, without a divider before the URL. */
+form[aria-label="Open a website"] .input-group__prefix {
+  border-inline-end: none;
+}
+
+/* Browser chrome and the device's exposed safe areas share one continuous surface. */
+html,
+body {
+  background-color: var(--color-chrome);
+}
+
 .input {
   padding-block: 0.6875rem;
   font-size: 1rem;

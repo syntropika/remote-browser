@@ -287,7 +287,15 @@ impl Engine {
                 let size = &layout["cssContentSize"];
                 let w = size["width"].as_f64().unwrap_or(0.);
                 let h = size["height"].as_f64().unwrap_or(0.);
-                if w <= 0. || h <= 0. || w > 16384. || h > 16384. || w * h > 32_000_000. {
+                let scale = f64::from(self.surface.scale);
+                let pixels_w = (w * scale).ceil();
+                let pixels_h = (h * scale).ceil();
+                if w <= 0.
+                    || h <= 0.
+                    || pixels_w > 16384.
+                    || pixels_h > 16384.
+                    || pixels_w * pixels_h > 32_000_000.
+                {
                     return Err(
                         "Full-page capture exceeds 32 million pixels or 16384 pixels per side"
                             .into(),

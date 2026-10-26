@@ -261,7 +261,17 @@ is in memory and is discarded when its tab or engine closes.
 Snapshots cover the main document with basic HTML and ARIA labels; they are not a
 complete accessibility tree and do not traverse iframe or shadow-root contents.
 The React dashboard paints engine frames onto a canvas and resizes the engine surface to
-match the available display. Frame sequence numbers allow unchanged replies and partial
+match the available display. It sends CSS viewport dimensions, screen dimensions, pixel
+density, and whether the primary input is touch without hover. The engine applies these
+metrics to the profile's tabs, including newly opened tabs. Mobile mode enables Chromium's
+mobile viewport, touch capabilities, mobile user agent and client hints; switching to a
+desktop restores its defaults. Server-selected website variants take effect on the next
+navigation or reload, without automatically reloading pages or discarding form input.
+Native painting uses the requested density up to a factor of four and a 32-million-pixel
+surface budget. Frame metadata separates backing pixels from CSS coordinates so input
+still lands correctly on high-density displays. The engine disables the
+`AutomationControlled` Blink feature by default while retaining its private CDP connection.
+Frame sequence numbers allow unchanged replies and partial
 PNG updates. Mouse, keyboard, wheel and touch input use the host action API. Touch devices
 have a page keyboard field. The dashboard opens onto its page unless the optional Access
 extension requires sign-in.
