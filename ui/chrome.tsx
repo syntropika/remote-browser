@@ -99,14 +99,13 @@ export function Chrome({
     <div className="bg-chrome @container flex flex-col px-2 py-1.5">
       <div
         aria-label="Browser toolbar"
-        className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1 @2xl:grid-cols-[minmax(10.5rem,1fr)_minmax(0,3fr)_minmax(10.5rem,1fr)] @2xl:gap-1.5"
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 @2xl:grid-cols-[minmax(10.5rem,1fr)_minmax(0,3fr)_minmax(10.5rem,1fr)]"
       >
-        <div className="flex shrink-0 items-center @2xl:gap-1.5">
+        <div className="hidden shrink-0 items-center gap-1.5 @2xl:flex">
           <Tooltip>
             <Tooltip.Trigger>
               <Button
                 aria-label="Back"
-                className="size-11 min-w-11 @2xl:size-8 @2xl:min-w-8"
                 isDisabled={!interactive || !tab?.canGoBack}
                 isIconOnly
                 onPress={() => {
@@ -115,7 +114,7 @@ export function Chrome({
                 size="sm"
                 variant="ghost"
               >
-                <Icon name="back" className="size-4 @2xl:size-[18px]" />
+                <Icon name="back" />
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content>Back</Tooltip.Content>
@@ -124,7 +123,6 @@ export function Chrome({
             <Tooltip.Trigger>
               <Button
                 aria-label="Forward"
-                className="size-11 min-w-11 @2xl:size-8 @2xl:min-w-8"
                 isDisabled={!interactive || !tab?.canGoForward}
                 isIconOnly
                 onPress={() => {
@@ -133,7 +131,7 @@ export function Chrome({
                 size="sm"
                 variant="ghost"
               >
-                <Icon name="forward" className="size-4 @2xl:size-[18px]" />
+                <Icon name="forward" />
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content>Forward</Tooltip.Content>
@@ -142,7 +140,6 @@ export function Chrome({
             <Tooltip.Trigger>
               <Button
                 aria-label="Reload page"
-                className="hidden @2xl:inline-flex"
                 isDisabled={!interactive}
                 isIconOnly
                 onPress={() => {
@@ -166,12 +163,12 @@ export function Chrome({
           }}
         >
           <InputGroup className="bg-address border-line/70 w-full min-w-0 overflow-hidden rounded-full border">
-            <InputGroup.Prefix className="hidden @2xl:flex">
+            <InputGroup.Prefix>
               <Icon name="globe" />
             </InputGroup.Prefix>
             <InputGroup.Input
               aria-label="Page address"
-              className="w-0 min-w-0 flex-1 ps-2.5 @2xl:ps-0"
+              className="w-0 min-w-0 flex-1"
               autoCapitalize="none"
               autoComplete="off"
               disabled={!interactive}

@@ -180,7 +180,7 @@ export async function run(engine: string, host: string, args: Record<string, any
           assert.equal(layout.dotMargin, "9px");
           assert.equal(layout.background, layout.chrome);
           assert(
-            layout.address.width >= (width === 320 ? 72 : 120),
+            layout.address.width >= 120,
             `The address needs usable space on a narrow screen: ${JSON.stringify(layout)}`,
           );
           assert(layout.toolbar.height <= 48, "Mobile navigation stays in one compact row");
@@ -190,10 +190,9 @@ export async function run(engine: string, host: string, args: Record<string, any
           );
           assert(layout.document <= layout.viewport, "The toolbar must not overflow the viewport");
           for (const label of ["Back", "Forward"]) {
-            const arrow = layout.controls.find((box: any) => box.label === label);
             assert(
-              arrow && arrow.right <= layout.address.left,
-              `${label} stays to the left of the URL field`,
+              !layout.controls.some((box: any) => box.label === label),
+              `${label} belongs in the mobile menu`,
             );
           }
           assert(
@@ -210,16 +209,20 @@ export async function run(engine: string, host: string, args: Record<string, any
             );
           }
         }
-        await click(browser, "Back");
+        await click(browser, "More options");
+        await item(browser, "Back");
         await wait(() =>
           browser.evaluate(
             `document.querySelector('[aria-label="Page address"]').value === 'about:blank'`,
           ),
         );
+        await click(browser, "More options");
         await wait(() =>
-          browser.evaluate(`!document.querySelector('button[aria-label="Forward"]').disabled`),
+          browser.evaluate(
+            `Array.from(document.querySelectorAll('[role=menuitem]')).some(node=>node.textContent.trim()==='Forward'&&node.getAttribute('aria-disabled')!=='true')`,
+          ),
         );
-        await click(browser, "Forward");
+        await item(browser, "Forward");
         await wait(() =>
           browser.evaluate(
             `document.querySelector('[aria-label="Page address"]').value.includes('long-address')`,
