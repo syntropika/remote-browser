@@ -1119,8 +1119,7 @@ impl Engine {
                 host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 0, count);
                 host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 1, count);
             }
-            // Capture loss alone does not provide full mouse cancellation. The native
-            // pointer-cancel regression retains the required event and state guarantees.
+            // Capture loss alone does not provide full mouse cancellation.
             "cancel" => host.send_capture_lost_event(),
             // A key press is the three events a keyboard produces: the press, the text it
             // writes, and the release. Which key was pressed and which text it writes are

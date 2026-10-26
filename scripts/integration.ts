@@ -15,7 +15,6 @@ const local = [
   "metadata",
   "native-extensions",
   "human-pointer",
-  "pointer-cancel",
   "pointer-capture",
   "pointer-events",
   "pointer-fidelity",

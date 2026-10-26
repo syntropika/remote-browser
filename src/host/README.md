@@ -209,10 +209,9 @@ longer observe the release (lost pointer capture, pointer cancellation, window b
 hidden page), it sends the `cancel` input kind instead of a release. The engine forwards
 CEF's capture-loss notification, but full mouse cancellation remains incomplete:
 `pointercancel`, `lostpointercapture` and button-state cleanup are not guaranteed, including
-when an agent reserves a tab during a human press. The `pointer-cancel` suite retains these
-required assertions and currently fails. Touch keeps tap and swipe handling. Agent clicks remain
-single native clicks; no movement is synthesized for them. The `human-pointer-smoke.ts` and
-`pointer-cancel-smoke.ts` regressions check the engine input. `dashboard-pointer-seam-smoke.ts`
+when an agent reserves a tab during a human press. Touch keeps tap and swipe handling.
+Agent clicks remain single native clicks; no movement is synthesized for them. The `human-pointer-smoke.ts`
+regression checks the engine input. `dashboard-pointer-seam-smoke.ts`
 runs the dashboard's pointer handlers with Bun, and `dashboard-pointer-smoke.ts` drives the
 dashboard with a Chrome or Chromium executable passed as `--chrome`.
 It supports basic clicking, typing, paste, named keys, scrolling, and explicit
