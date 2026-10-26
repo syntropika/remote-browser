@@ -17,16 +17,16 @@ For Linux x86-64, use the pinned
 bun run build:engine --release
 ```
 
-`scripts/prepare-cef.py` downloads the versioned asset, checks the SHA-256
+`scripts/prepare-cef.ts` downloads the versioned asset, checks the SHA-256
 in `runtime.json`, safely extracts it, and prepares the flat layout expected by the
 CEF Rust crate. It retains matching resources, headers, wrapper sources, licenses,
 credits and archive metadata. The verified library is checked again on cache reuse.
-Python 3.12 or newer is required. Build flags following `build:engine` go to Cargo.
+Bun 1.3 or newer is required; the Linux cache uses the standard util-linux flock command. Build flags following `build:engine` go to Cargo.
 
 To prepare the dependency for another build tool:
 
 ```sh
-export CEF_PATH="$(python3 scripts/prepare-cef.py)"
+export CEF_PATH="$(bun run scripts/prepare-cef.ts)"
 cargo build --locked --manifest-path src/engine/Cargo.toml
 ```
 
@@ -43,8 +43,8 @@ including its normal Chromium patches, using CEF's source-build workflow. Apply 
 integration **after** those patches and **before** generating the final build:
 
 ```sh
-python3 src/engine/cef/apply.py /path/to/chromium/src --check
-python3 src/engine/cef/apply.py /path/to/chromium/src
+bun run src/engine/cef/apply.ts /path/to/chromium/src --check
+bun run src/engine/cef/apply.ts /path/to/chromium/src
 ```
 
 The script checks both patches before changing either checkout. It refuses another
@@ -132,8 +132,8 @@ fixture alone does not establish that the native source integration compiles or 
 Run the browser shutdown regression and the real-store suite against the same engine:
 
 ```sh
-python3 src/host/tests/shutdown_smoke.py --engine-binary /path/to/remote-browser-cef-engine
-python3 src/host/tests/extension_install_smoke.py \
+bun run src/host/tests/shutdown-smoke.ts --engine-binary /path/to/remote-browser-cef-engine
+bun run src/host/tests/extension-install-smoke.ts \
   --engine-binary /path/to/remote-browser-cef-engine --verify-expiry
 ```
 
@@ -172,7 +172,7 @@ unavailable. Chrome toolbar popups remain outside this integration.
 Run the management acceptance suite against the custom runtime:
 
 ```sh
-python3 src/host/tests/extension_management_smoke.py \
+bun run src/host/tests/extension-management-smoke.ts \
   --engine-binary /path/to/remote-browser-cef-engine
 ```
 

@@ -10,7 +10,7 @@ protocol in process, through the embedder interface, and opens no debugging port
 
 ## Build and run
 
-Use Rust 1.88 or newer, Bun 1.3, and Python 3.12 or newer. From the repository root,
+Use Rust 1.88 or newer and Bun 1.3 or newer. From the repository root,
 prepare the pinned extension-enabled Linux x86-64 CEF runtime and build the engine:
 
 ```sh
@@ -211,9 +211,9 @@ the press natively: the page receives `pointercancel` and `lostpointercapture` r
 `pointerup`, `mouseup` and `click`, and its button, `:active` and capture state are cleared.
 The engine also cancels a human press when an agent reserves the tab, because the human
 release would then be rejected. Touch keeps tap and swipe handling. Agent clicks remain
-single native clicks; no movement is synthesized for them. The `human_pointer_smoke.py` and
-`pointer_cancel_smoke.py` regressions check the engine input. `dashboard_pointer_seam_smoke.py`
-runs the dashboard's pointer handlers in Node, and `dashboard_pointer_smoke.py` drives the
+single native clicks; no movement is synthesized for them. The `human-pointer-smoke.ts` and
+`pointer-cancel-smoke.ts` regressions check the engine input. `dashboard-pointer-seam-smoke.ts`
+runs the dashboard's pointer handlers with Bun, and `dashboard-pointer-smoke.ts` drives the
 dashboard with a Chrome or Chromium executable passed as `--chrome`.
 It supports basic clicking, typing, paste, named keys, scrolling, and explicit
 downloads and uploads through the managed file workspace, automatic download capture,
@@ -293,28 +293,41 @@ cargo clippy --all-targets -- -D warnings
 cargo build
 ```
 
-The real-engine suites under `src/host/tests` drive built executables and take their
-paths. A suite that speaks the engine's protocol takes the engine:
+The integration suites are TypeScript programs executed by Bun. Supply both binaries
+explicitly so host and engine arguments cannot be confused:
 
 ```sh
-python3 src/host/tests/embedded_smoke.py \
+bun run test:integration \
+  --host-binary src/host/target/release/remote-browser-native \
   --engine-binary src/engine/target/release/remote-browser-cef-engine
 ```
 
-A suite that goes through MCP or the dashboard takes the host, and the host is told which
-engine to run for its profile:
+Use `--suite native-extensions,shutdown` to select suites, or `--list` to see them.
+`REMOTE_BROWSER_HOST_BINARY` and `REMOTE_BROWSER_ENGINE_BINARY` provide defaults.
+Every suite runs sequentially with disposable profiles and bounded waits. The runner
+reports all failures and exits nonzero if any selected suite fails; missing binaries or
+required capabilities are errors. GPU, diagnostics and media suites require the matching
+runtime capabilities; media tests also require FFmpeg and ffprobe.
+
+Real Chrome Web Store installation is opt-in with `--real-store`; add `--verify-expiry`
+to check the three-minute permission timeout. `--protocol-only --suite extension-install`
+checks only IPC guards and explicitly reports that no installation was tested.
+`--native-diagnostics` opts into custom native diagnostic assertions. `--chrome /path/to/chrome`
+adds the real dashboard-pointer suite using a private DevTools pipe. The historical
+`dashboard-pointer-seam` suite requires a matching inline-script dashboard via `--dashboard`;
+it does not target the current React bundle.
+
+Individual suites also run directly:
 
 ```sh
-REMOTE_BROWSER_ENGINE_BINARY=src/engine/target/release/remote-browser-cef-engine \
-  python3 src/host/tests/files_smoke.py \
-  --engine-binary src/host/target/release/remote-browser-native
+bun run src/host/tests/native-extensions-smoke.ts \
+  --host-binary /path/to/remote-browser-native \
+  --engine-binary /path/to/remote-browser-cef-engine
 ```
 
-They cover native input, rendered frames, independent tab references, background
-selection, concurrent actions, reservation enforcement, human takeover, profile isolation,
-cookies and local storage across restart, MCP negotiation, dashboard authorization, and
-persistent catalogs and policies. They verify this host and its engine, not compatibility
-with any particular production website.
+They cover native input, frames, tab concurrency and references, reservations, takeover,
+profile isolation, persistent cookies/catalog/policies, files, logs, optional modules and
+extension state. These assertions verify this host/runtime, not arbitrary website compatibility.
 
 ## Local downloads and uploads
 
@@ -368,8 +381,9 @@ not a filesystem sandbox against another process running as the same OS user.
 Verify the feature with the actual embedded executable:
 
 ```sh
-REMOTE_BROWSER_ENGINE_BINARY=/path/to/remote-browser-cef-engine \
-  python3 src/host/tests/files_smoke.py --engine-binary /path/to/remote-browser-native
+bun run src/host/tests/files-smoke.ts \
+  --host-binary /path/to/remote-browser-native \
+  --engine-binary /path/to/remote-browser-cef-engine
 ```
 
 ## Native extensions and browser login
@@ -447,7 +461,7 @@ keys are managed through Settings.
 Verify both independent modules against the actual engine:
 
 ```sh
-python3 src/host/tests/native_extensions_smoke.py \
+bun run src/host/tests/native-extensions-smoke.ts \
   --host-binary /path/to/remote-browser-native \
   --engine-binary /path/to/remote-browser-cef-engine
 ```

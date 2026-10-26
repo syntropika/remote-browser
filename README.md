@@ -20,7 +20,7 @@ with it.
 
 ## Build and run
 
-Rust 1.88 or newer, Bun 1.3, and Python 3.12 or newer. On Linux x86-64, the engine
+Rust 1.88 or newer and Bun 1.3 or newer. On Linux x86-64, the engine
 build command downloads the pinned extension-enabled CEF release (293 MB), verifies
 its SHA-256, and caches a flat runtime outside the checkout. Cargo copies its runtime
 files beside the executable. Chromium is already compiled.
@@ -93,5 +93,5 @@ suite against the custom distribution before treating this integration as ready.
 bun run check   # formatting, TypeScript, lint rules and the host's tests
 ```
 
-The Python smoke tests under `src/host/tests/` drive both executables end to end; see the
+The Bun integration tests under `src/host/tests/` drive both executables end to end; see the
 host's README for how to run them.

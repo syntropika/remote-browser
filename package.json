@@ -11,15 +11,20 @@
   "type": "module",
   "scripts": {
     "build": "bun run scripts/build-ui.ts",
-    "build:engine": "python3 scripts/prepare-cef.py --build",
-    "prepare:cef": "python3 scripts/prepare-cef.py",
+    "build:engine": "bun run scripts/prepare-cef.ts --build",
+    "prepare:cef": "bun run scripts/prepare-cef.ts",
     "typecheck": "tsc --noEmit",
-    "test": "cargo test --manifest-path src/host/Cargo.toml",
+    "test": "bun run test:unit && bun run test:host",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives",
     "lint:fix": "oxlint --fix --deny-warnings --report-unused-disable-directives",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test"
+    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test",
+    "build:host": "bun run scripts/tasks.ts build:host",
+    "test:unit": "bun test scripts test",
+    "test:host": "bun run scripts/tasks.ts test:host",
+    "test:integration": "bun run scripts/integration.ts",
+    "lint:host": "bun run scripts/tasks.ts lint:host"
   },
   "dependencies": {
     "@heroui/react": "3.2.6",
@@ -40,6 +45,7 @@
     "oxlint": "1.85.0",
     "oxlint-tsgolint": "7.0.2002",
     "tailwindcss": "4.1.18",
+    "tar": "7.5.22",
     "typescript": "5.9.3",
     "ultracite": "7.12.0"
   },

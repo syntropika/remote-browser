@@ -12,7 +12,7 @@ ownership` or `docs: clarify setup`.
 - `src/engine/` — the Rust engine: one process per session, Chromium through CEF.
 - `ui/` — the dashboard, React and TypeScript, with the HTML shell it loads.
 - `scripts/build-ui.ts` — the bundle: Bun for the script, Tailwind for the stylesheet.
-- `src/host/tests/` — Python smoke tests that drive both executables end to end.
+- `src/host/tests/` — Bun/TypeScript integration tests that drive both executables end to end.
 
 The pair in `src/host/ui/` is generated from `ui/`, and the host embeds it at compile time
 along with `ui/index.html`. Run `bun run build` after changing anything in `ui/` and commit

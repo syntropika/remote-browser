@@ -87,8 +87,14 @@ export default defineConfig({
     {
       // Synthetic fixtures intentionally model partial native and transport objects.
       // Their runtime assertions validate behavior; production code retains typed checks.
-      files: ["test/**/*.ts", "scripts/integration.ts"],
+      files: [
+        "test/**/*.ts",
+        "scripts/integration.ts",
+        "src/host/tests/**/*.ts",
+        "src/host/tools/**/*.ts",
+      ],
       rules: {
+        "typescript/no-explicit-any": "off",
         "typescript/no-unsafe-assignment": "off",
         "typescript/no-unsafe-member-access": "off",
         "typescript/no-unsafe-call": "off",
