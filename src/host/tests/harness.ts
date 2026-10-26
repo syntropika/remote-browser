@@ -1,12 +1,13 @@
 /** Async native IPC/MCP fixtures; every wait and child shutdown has a deadline. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessByStdio } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import filePath from "node:path";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
 
 import { PAGE, WELCOME } from "./fixtures/smoke.js";
@@ -67,15 +68,22 @@ export async function temporary(run: (root: string) => Promise<void>): Promise<v
 }
 
 export class Rpc {
-  readonly process: ChildProcessWithoutNullStreams;
+  readonly process: ChildProcessByStdio<Writable, Readable, Readable | null>;
   readonly logs: string[] = [];
   readonly pending = new Map<
     number,
     { resolve: (value: Wire) => void; reject: (cause: Error) => void }
   >();
   sequence = 0;
-  constructor(command: string[], env = process.env, drainLogs = true) {
-    this.process = spawn(command[0], command.slice(1), { env, stdio: "pipe" });
+  constructor(command: string[], env = process.env, drainLogs = true, stderr?: number) {
+    // Node's overloads do not narrow the first two pipes when the third entry is a file descriptor.
+    const child = spawn(command[0], command.slice(1), {
+      env,
+      stdio: ["pipe", "pipe", stderr ?? "pipe"],
+    });
+    assert.ok(child.stdin && child.stdout, "native IPC requires stdin and stdout pipes");
+    // SAFETY: spawn requested both IPC pipes and the assertion above verifies their presence.
+    this.process = child as ChildProcessByStdio<Writable, Readable, Readable | null>;
     const lines = createInterface({ input: this.process.stdout });
     lines.on("line", (line) => {
       try {
@@ -105,6 +113,7 @@ export class Rpc {
     }
   }
   drain() {
+    assert.ok(this.process.stderr, "stderr must be piped to capture logs");
     createInterface({ input: this.process.stderr }).on("line", (line) => this.logs.push(line));
   }
   send(value: Wire): Promise<Wire> {
@@ -137,7 +146,9 @@ export class Rpc {
 
 export class Engine extends Rpc {
   constructor(binary: string, directory: string, files = `${directory}-files`) {
-    super([binary, "--engine-profile", directory, "--files-root", files], {
+    // Synthetic fixtures opt into software graphics instead of depending on a desktop GPU.
+    const args = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
+    super([binary, "--engine-profile", directory, "--files-root", files, ...args], {
       ...process.env,
       LIBGL_ALWAYS_SOFTWARE: "1",
       GALLIUM_DRIVER: "llvmpipe",

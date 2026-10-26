@@ -15,7 +15,11 @@ export async function run(binary: string) {
       ].entries()) {
         await evaluate("window.trace=[];return true;");
         await click(x, y);
-        const trace = await evaluate("return window.trace;");
+        const trace = await wait(
+          () => evaluate("return window.trace;"),
+          (events) =>
+            events.some((event: any) => event.type === (index === 1 ? "dblclick" : "click")),
+        );
         assert(trace.some((event: any) => event.type === "click"));
         if (index === 1) {
           assert(trace.some((event: any) => event.type === "dblclick"));

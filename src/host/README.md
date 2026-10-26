@@ -206,11 +206,11 @@ a slower action collapse into the latest position. A press belongs to the pointe
 profile that started it: its movement and release go there even if the selected tab or profile
 changes meanwhile, and other pointers are ignored until it ends. When the dashboard can no
 longer observe the release (lost pointer capture, pointer cancellation, window blur or a
-hidden page), it sends the `cancel` input kind instead of a release. The engine then cancels
-the press natively: the page receives `pointercancel` and `lostpointercapture` rather than
-`pointerup`, `mouseup` and `click`, and its button, `:active` and capture state are cleared.
-The engine also cancels a human press when an agent reserves the tab, because the human
-release would then be rejected. Touch keeps tap and swipe handling. Agent clicks remain
+hidden page), it sends the `cancel` input kind instead of a release. The engine forwards
+CEF's capture-loss notification, but full mouse cancellation remains incomplete:
+`pointercancel`, `lostpointercapture` and button-state cleanup are not guaranteed, including
+when an agent reserves a tab during a human press. The `pointer-cancel` suite retains these
+required assertions and currently fails. Touch keeps tap and swipe handling. Agent clicks remain
 single native clicks; no movement is synthesized for them. The `human-pointer-smoke.ts` and
 `pointer-cancel-smoke.ts` regressions check the engine input. `dashboard-pointer-seam-smoke.ts`
 runs the dashboard's pointer handlers with Bun, and `dashboard-pointer-smoke.ts` drives the
@@ -308,6 +308,11 @@ Every suite runs sequentially with disposable profiles and bounded waits. The ru
 reports all failures and exits nonzero if any selected suite fails; missing binaries or
 required capabilities are errors. GPU, diagnostics and media suites require the matching
 runtime capabilities; media tests also require FFmpeg and ffprobe.
+Direct-engine synthetic fixtures explicitly select ANGLE/SwiftShader and opt into software
+WebGL so graphics and frame input do not depend on a desktop GPU. These flags apply only to
+the disposable test processes; production launch settings are unchanged. Pointer fixtures
+wait for their posted event traces before checking event order and coordinates. The logging
+suite uses a real FIFO to exercise stderr backpressure without Bun buffering it in memory.
 
 Real Chrome Web Store installation is opt-in with `--real-store`; add `--verify-expiry`
 to check the three-minute permission timeout. `--protocol-only --suite extension-install`
@@ -484,4 +489,3 @@ Attachment navigations, download links, blob/data links and POST attachment resp
 Human takeover blocks agent actions while preserving the reservation. When the dashboard is connected, a rejected agent action can request an acknowledged five-second handoff that the user can cancel. A cancelled action remains unexecuted. Operations with unknown completion are never retried by this handoff mechanism.
 
 No CDP or Playwright adapter is included. The updated `skills/remote-browser/SKILL.md` documents the individual native MCP tools and their ownership, permission and file contracts.
-

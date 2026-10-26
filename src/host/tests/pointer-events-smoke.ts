@@ -5,9 +5,13 @@ import { pointerFixture, assert, wait } from "./pointer-fixture.js";
 export async function run(binary: string) {
   await pointerFixture(binary, { "/": PAGE, "/frame": FRAME }, async ({ evaluate, click }) => {
     await wait(() => evaluate("return window.ready;"));
-    const traceClick = async (x: number, y: number) => {
+    const traceClick = async (x: number, y: number, terminal = "click") => {
+      const before = await evaluate("return window.result?.trace.length ?? 0;");
       await click(x, y);
-      return evaluate("return window.result.trace;");
+      return wait(
+        () => evaluate("return window.result?.trace;"),
+        (trace) => trace?.slice(before).some((event: any) => event.type === terminal),
+      );
     };
     let trace = await traceClick(50, 60);
     const types = trace.filter((e: any) => e.target === "a").map((e: any) => e.type);
@@ -40,7 +44,7 @@ export async function run(binary: string) {
       [0, 0, 1, 34, 36, false, 0],
     );
     assert.equal(event.pointerId, trace.find((e: any) => e.type === "pointerup").pointerId);
-    trace = await traceClick(50, 60);
+    trace = await traceClick(50, 60, "dblclick");
     const doubles = trace.filter((e: any) => e.type === "dblclick");
     assert.equal(doubles.length, 1);
     assert.equal(doubles[0].detail, 2);
@@ -63,7 +67,7 @@ export async function run(binary: string) {
     await evaluate("document.querySelector('iframe').contentWindow.preventCheck=true;return true;");
     await click(point.x, point.y);
     assert.equal(await evaluate(checked), true);
-    trace = await traceClick(700, 500);
+    trace = await traceClick(700, 500, "mouseleave");
     for (const type of ["pointerleave", "mouseleave"]) {
       assert.equal(trace.filter((e: any) => e.type === type && e.target === "parent").length, 1);
     }

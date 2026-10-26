@@ -1,3 +1,6 @@
+import { constants, openSync, closeSync, readSync } from "node:fs";
+import filePath from "node:path";
+
 import {
   cli,
   assert,
@@ -12,6 +15,7 @@ import {
 } from "./harness.js";
 
 const secret = "synthetic-log-secret-do-not-record";
+const { join } = filePath;
 
 const records = (lines: string[]) =>
   lines
@@ -106,11 +110,41 @@ export async function run(engine: string, host: string) {
       assert(!records(runtime.logs).some((e) => e.level === "debug"));
     });
     await temporary(async (root) => {
+      // A real FIFO keeps Bun's eager child-pipe buffering out of the backpressure test.
+      const fifo = join(root, "stderr.fifo");
+      assert.equal(Bun.spawnSync(["mkfifo", fifo]).exitCode, 0);
+      const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+      const writer = openSync(fifo, constants.O_WRONLY);
       const rpc = new Rpc(
         [host, "--profile-root", root, "--engine-binary", engine],
         { ...process.env, REMOTE_BROWSER_LOG_LEVEL: "debug" },
         false,
+        writer,
       );
+      closeSync(writer);
+      let draining: ReturnType<typeof setInterval> | undefined;
+      let buffered = "";
+      const drain = () => {
+        const bytes = Buffer.alloc(65_536);
+        for (;;) {
+          let count: number;
+          try {
+            count = readSync(reader, bytes);
+          } catch (cause) {
+            if (cause instanceof Error && "code" in cause && cause.code === "EAGAIN") {
+              break;
+            }
+            throw cause;
+          }
+          if (count === 0) {
+            break;
+          }
+          buffered += bytes.toString("utf-8", 0, count);
+          const lines = buffered.split("\n");
+          buffered = lines.pop() ?? "";
+          rpc.logs.push(...lines);
+        }
+      };
       const client = new Mcp(rpc);
       try {
         await client.request("initialize", INIT);
@@ -120,17 +154,17 @@ export async function run(engine: string, host: string) {
         for (let i = 0; i < 1500; i++) {
           assert((await client.call("browser_tabs", { action: "list" })).tabs.length);
         }
-        rpc.drain();
+        draining = setInterval(drain, 10);
+        drain();
         assert((await client.call("browser_tabs", { action: "list" })).tabs.length);
         await rpc.exit();
-        await wait(
-          () => records(rpc.logs),
-          (events) => events.some((event) => event.droppedEvents > 0),
-        );
+        await wait(() => records(rpc.logs).find((event) => event.droppedEvents > 0));
       } finally {
         if (rpc.process.exitCode === null) {
           rpc.process.kill("SIGKILL");
         }
+        clearInterval(draining);
+        closeSync(reader);
       }
     });
   } finally {

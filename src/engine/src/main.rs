@@ -11,6 +11,9 @@ use cef::args::Args;
 mod browser_lifecycle;
 mod extension_installs;
 mod extensions;
+mod operations;
+mod session_health;
+use operations::Navigation;
 
 use cef::*;
 use image::ImageEncoder;
@@ -119,6 +122,10 @@ struct Call {
     human: bool,
     #[serde(default)]
     args: Value,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    profile_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -469,6 +476,7 @@ struct Surfacing {
     /// A tab a person took; agent operations on it are refused until they hand it back.
     human: bool,
     pointer: (i32, i32),
+    last_click: Option<(Instant, (i32, i32), i32)>,
     /// Text the dashboard put on this profile's clipboard, waiting to be pasted.
     pasteboard: String,
     _registration: Option<Registration>,
@@ -519,12 +527,13 @@ impl Surfacing {
             picker,
             human: false,
             pointer: (size.0 / 2, size.1 / 2),
+            last_click: None,
             pasteboard: String::new(),
             _registration: registration,
         })
     }
 
-    fn describe(&self, active: bool, reservation: Option<ReservationInfo>) -> Value {
+    fn describe(&self, active: bool, reservation: Option<ReservationInfo>, busy: bool) -> Value {
         // A page writes its own title and address, and may write a great deal of them.
         let brief = |value: &str| -> String { value.chars().take(1024).collect() };
         json!({
@@ -539,7 +548,7 @@ impl Surfacing {
             "url": brief(&self.shared.url.lock().unwrap()),
             "title": brief(&self.shared.title.lock().unwrap()),
             "reservation": reservation,
-            "busy": false,
+            "busy": busy,
         })
     }
 }
@@ -563,6 +572,7 @@ struct Engine {
     surface: (i32, i32),
     /// The calls waiting to be served, so work that can yield sees one coming.
     inbox: Arc<Inbox>,
+    navigations: Vec<Navigation>,
 }
 
 impl Engine {
@@ -700,30 +710,20 @@ impl Engine {
         }
     }
 
-    fn navigate(&mut self, at: usize, url: &str) -> Result<Value, String> {
+    fn navigate(&mut self, at: usize, url: &str, id: u64) -> Result<Value, String> {
         let parsed = url::Url::parse(url).map_err(|_| "the URL is not valid".to_string())?;
         if !matches!(parsed.scheme(), "http" | "https" | "about") {
             return Err("only HTTP(S) and about: can be opened".into());
         }
         self.release(at);
+        self.tabs[at].last_click = None;
         let frame = self.tabs[at]
             .browser
             .main_frame()
             .ok_or("the tab has no frame")?;
         frame.load_url(Some(&CefString::from(url)));
-        let browser = self.tabs[at].browser.clone();
-        if !pump_until(|| browser.is_loading() == 0) {
-            return Err("uncertain".into());
-        }
-        // Loading ends before the first frame of the new page is drawn, and a reader of the
-        // surface right afterwards would otherwise be handed the page that was replaced.
-        let shared = self.tabs[at].shared.clone();
-        let drawn = shared.paints.load(Ordering::Acquire);
-        let deadline = Instant::now() + PAINT_LIMIT;
-        while Instant::now() < deadline && shared.paints.load(Ordering::Acquire) == drawn {
-            do_message_loop_work();
-            std::thread::sleep(Duration::from_millis(4));
-        }
+        self.navigations
+            .push(Navigation::new(id, self.tabs[at].id.clone()));
         Ok(Value::Null)
     }
 
@@ -1088,19 +1088,39 @@ impl Engine {
         if let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) {
             self.tabs[at].pointer = (x as i32, y as i32);
         }
-        match args["kind"].as_str().unwrap_or_default() {
+        let kind = args["kind"].as_str().unwrap_or_default();
+        if matches!(kind, "down" | "click") {
+            host.set_focus(1);
+            let now = Instant::now();
+            let position = self.tabs[at].pointer;
+            let count = self.tabs[at]
+                .last_click
+                .filter(|(when, previous, _)| {
+                    now.duration_since(*when) <= Duration::from_millis(500)
+                        && (position.0 - previous.0).abs() <= 4
+                        && (position.1 - previous.1).abs() <= 4
+                })
+                .map_or(1, |(_, _, count)| count % 3 + 1);
+            self.tabs[at].last_click = Some((now, position, count));
+        }
+        let count = self.tabs[at].last_click.map_or(1, |(_, _, count)| count);
+        match kind {
             "move" => host.send_mouse_move_event(Some(&point(args)), 0),
             "leave" => host.send_mouse_move_event(Some(&point(args)), 1),
-            "down" => host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 0, 1),
-            "up" => host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 1, 1),
+            "down" => {
+                host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 0, count)
+            }
+            "up" => {
+                host.send_mouse_click_event(Some(&point(args)), MouseButtonType::LEFT, 1, count)
+            }
             "click" => {
                 let event = point(args);
                 host.send_mouse_move_event(Some(&event), 0);
-                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 0, 1);
-                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 1, 1);
+                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 0, count);
+                host.send_mouse_click_event(Some(&event), MouseButtonType::LEFT, 1, count);
             }
-            // The press belongs to the pointer that started it; when the dashboard can no
-            // longer see the release, the page is told the press was cancelled.
+            // Capture loss alone does not provide full mouse cancellation. The native
+            // pointer-cancel regression retains the required event and state guarantees.
             "cancel" => host.send_capture_lost_event(),
             // A key press is the three events a keyboard produces: the press, the text it
             // writes, and the release. Which key was pressed and which text it writes are
@@ -1184,6 +1204,14 @@ impl Engine {
                 | "download"
                 | "choose_files"
         );
+        if (acts || call.op == "release")
+            && self
+                .navigations
+                .iter()
+                .any(|pending| pending.tab == self.tabs[at].id)
+        {
+            return Err("busy".into());
+        }
         if acts {
             let tab = self.tabs[at].id.clone();
             let taken = self.tabs[at].human;
@@ -1322,7 +1350,11 @@ impl Engine {
                         .enumerate()
                         .zip(held)
                         .map(|((index, tab), reservation)| {
-                            tab.describe(index == active, reservation)
+                            tab.describe(
+                                index == active,
+                                reservation,
+                                self.navigations.iter().any(|pending| pending.tab == tab.id),
+                            )
                         })
                         .collect(),
                 ))
@@ -1366,7 +1398,7 @@ impl Engine {
             }
             "navigate" => {
                 let url = call.args["url"].as_str().ok_or("navigate needs a url")?;
-                self.navigate(at, url)
+                self.navigate(at, url, call.id)
             }
             "reload" => {
                 self.release(at);
@@ -1569,18 +1601,7 @@ impl Engine {
                 pump_for(SETTLE);
                 Ok(json!({"width": width, "height": height}))
             }
-            // Session assessment belongs to a later pass; saying so is better than failing
-            // the dashboard's periodic check with an unknown operation.
-            "health" => Ok(json!({
-                "state": "unknown",
-                "checkedAt": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|since| since.as_secs())
-                    .unwrap_or_default(),
-                "credentialExpiresAt": Value::Null,
-                "secondsRemaining": Value::Null,
-                "evidence": "This engine does not assess sessions yet",
-            })),
+            "health" => self.session_health(at, &call.args),
             // A capture belongs in the profile's workspace, where the dashboard and the
             // agent both find it. A plain path is still accepted for running by hand.
             "save_screenshot" => {
@@ -1925,11 +1946,13 @@ fn main() {
         next_snapshot: 0,
         surface: VIEWPORT,
         inbox: inbox.clone(),
+        navigations: Vec::new(),
     };
 
     eprintln!("engine ready");
     loop {
         do_message_loop_work();
+        engine.poll_navigations();
         match inbox.take() {
             Some(line) => match serde_json::from_str::<Call>(&line) {
                 Ok(call) if call.op == "shutdown" => {
@@ -1937,8 +1960,7 @@ fn main() {
                     break;
                 }
                 Ok(call) => {
-                    let outcome = engine.serve(&call);
-                    reply(call.id, outcome);
+                    engine.dispatch(&call);
                 }
                 Err(error) => eprintln!("unreadable call: {error}"),
             },
@@ -1958,4 +1980,5 @@ fn main() {
     }
     drop(browsers);
     shutdown();
+    remote_browser_native::logging::flush();
 }

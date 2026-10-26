@@ -7,10 +7,13 @@ export async function run(binary: string) {
     await wait(() => evaluate("return window.ready;"));
     for (const release of [false, true]) {
       await evaluate(
-        `document.querySelector('iframe').contentWindow.reset(true,${release});return true;`,
+        `window.result=null;document.querySelector('iframe').contentWindow.reset(true,${release});return true;`,
       );
       await click(50, 60);
-      const value = await evaluate("return window.result;");
+      const value = await wait(
+        () => evaluate("return window.result;"),
+        (result) => result?.trace.some((event: any) => event.type === "click") && !result.captured,
+      );
       const { trace } = value;
       for (const type of ["pointerup", "mouseup", "click"]) {
         assert(
@@ -23,10 +26,13 @@ export async function run(binary: string) {
       assert(!value.captured);
     }
     await evaluate(
-      "document.querySelector('iframe').contentWindow.reset(false,false);return true;",
+      "window.result=null;document.querySelector('iframe').contentWindow.reset(false,false);return true;",
     );
     await click(50, 60);
-    const trace = await evaluate("return window.result.trace;");
+    const { trace } = await wait(
+      () => evaluate("return window.result;"),
+      (value) => value?.trace.some((event: any) => event.type === "mouseup"),
+    );
     assert(trace.some((event: any) => event.type === "pointerup" && event.target === "BODY"));
     assert(!trace.some((event: any) => event.type === "click" && event.target === "target"));
   });
