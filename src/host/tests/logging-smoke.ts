@@ -2,6 +2,7 @@ import { constants, openSync, closeSync, readSync } from "node:fs";
 import filePath from "node:path";
 
 import {
+  reservePage,
   cli,
   assert,
   Runtime,
@@ -16,13 +17,11 @@ import {
 
 const secret = "synthetic-log-secret-do-not-record";
 const { join } = filePath;
-
 const records = (lines: string[]) =>
   lines
     .filter((line) => line.startsWith("{"))
     .map((line) => JSON.parse(line))
     .filter((event) => event.schemaVersion === 1);
-
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
   const server = serve();
@@ -43,10 +42,15 @@ export async function run(engine: string, host: string) {
         );
       try {
         const c = runtime.client;
-        const tab = (await c.call("browser_tabs", { action: "list" })).tabs[0].id;
+        const tab = (
+          await c.call("browser_tabs", {
+            action: "list",
+          })
+        ).tabs[0].id;
+        const lease = (await reservePage(c, tab)).leaseId;
         const result = await c.request("tools/call", {
           name: "browser_navigate",
-          arguments: { tabId: tab, url: `${server.origin}/?credential=${secret}` },
+          arguments: { leaseId: lease, url: `${server.origin}/?credential=${secret}` },
         });
         assert.match(result._meta.traceId, /^[\da-f-]{36}$/u);
         const events = await trace(result._meta.traceId, ["mcp", "native", "engine"]);
@@ -56,24 +60,21 @@ export async function run(engine: string, host: string) {
         for (const key of ["requestId", "profileKey", "tabKey"]) {
           assert.equal(peers[0][key], peers[1][key]);
         }
-        const snapshot = await c.call("browser_snapshot", { tabId: tab });
-        await c.call("browser_fill", {
-          tabId: tab,
-          reference: reference(snapshot, "Email"),
+        const snapshot = await c.call("browser_snapshot", {
+          leaseId: lease,
+        });
+        await c.call("browser_type", {
+          leaseId: lease,
+          target: reference(snapshot, "Email"),
           text: secret,
         });
         await c.call("browser_evaluate", {
-          tabId: tab,
-          script: `document.title='${secret}';document.cookie='credential=${secret}';return true;`,
+          leaseId: lease,
+          function:
+            "() => {\n" +
+            `document.title='${secret}';document.cookie='credential=${secret}';return true;` +
+            "\n}",
         });
-        const lease = (
-          await c.call("browser_tabs", {
-            action: "reserve",
-            tabId: tab,
-            agentName: "Test agent",
-            task: secret,
-          })
-        ).leaseId;
         const response = await runtime.dashboard.api(
           "/api/action",
           { profileId: "default", op: "navigate", tabId: tab, args: { url: server.origin } },
@@ -103,7 +104,9 @@ export async function run(engine: string, host: string) {
         env: { ...process.env, REMOTE_BROWSER_LOG_LEVEL: "info" },
       });
       try {
-        await runtime.client.call("browser_tabs", { action: "list" });
+        await runtime.client.call("browser_tabs", {
+          action: "list",
+        });
       } finally {
         await runtime.stop();
       }
@@ -152,11 +155,23 @@ export async function run(engine: string, host: string) {
           `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
         );
         for (let i = 0; i < 1500; i++) {
-          assert((await client.call("browser_tabs", { action: "list" })).tabs.length);
+          assert(
+            (
+              await client.call("browser_tabs", {
+                action: "list",
+              })
+            ).tabs.length,
+          );
         }
         draining = setInterval(drain, 10);
         drain();
-        assert((await client.call("browser_tabs", { action: "list" })).tabs.length);
+        assert(
+          (
+            await client.call("browser_tabs", {
+              action: "list",
+            })
+          ).tabs.length,
+        );
         await rpc.exit();
         await wait(() => records(rpc.logs).find((event) => event.droppedEvents > 0));
       } finally {
@@ -174,7 +189,6 @@ export async function run(engine: string, host: string) {
     "PASS: correlated private diagnostics, log levels and 1500 operations with stderr backpressure",
   );
 }
-
 if (import.meta.main) {
   await cli(run);
 }

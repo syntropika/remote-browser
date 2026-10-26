@@ -213,43 +213,25 @@ impl Automation {
         }
         self.0.request(op, tab, args, true).await
     }
-    pub async fn reserve(&self, tab: &str, task: &str, ttl_ms: u64) -> Result<Lease> {
-        Ok(serde_json::from_value(
-            self.0
-                .request(
-                    "reserve",
-                    Some(tab),
-                    json!({"task":task,"ttlMs":ttl_ms}),
-                    false,
-                )
-                .await?,
-        )?)
-    }
     pub async fn reserve_named(
         &self,
-        tab: &str,
+        tab: Option<&str>,
         task: &str,
         agent_name: &str,
-        ttl_ms: u64,
     ) -> Result<Lease> {
         Ok(serde_json::from_value(
             self.0
                 .request(
                     "reserve",
-                    Some(tab),
-                    json!({"task":task,"agentName":agent_name,"ttlMs":ttl_ms}),
+                    tab,
+                    json!({"task":task,"agentName":agent_name}),
                     false,
                 )
                 .await?,
         )?)
     }
-    pub async fn renew(&self, tab: &str, lease_id: &str, ttl_ms: u64) -> Result<Lease> {
-        Ok(serde_json::from_value(
-            self.0
-                .with_lease(Some(lease_id))
-                .request("renew", Some(tab), json!({"ttlMs":ttl_ms}), false)
-                .await?,
-        )?)
+    pub(crate) async fn operation(&self, op: &str, tab: &str, args: Value) -> Result<Value> {
+        self.0.request(op, Some(tab), args, false).await
     }
     pub async fn release(&self, tab: &str, lease_id: &str) -> Result<()> {
         self.0

@@ -10,7 +10,7 @@
   },
   "type": "module",
   "scripts": {
-    "build": "bun run scripts/build-ui.ts",
+    "build": "bun run build:code-mode && bun run scripts/build-ui.ts",
     "build:engine": "bun run scripts/prepare-cef.ts --build",
     "prepare:cef": "bun run scripts/prepare-cef.ts",
     "typecheck": "tsc --noEmit",
@@ -20,13 +20,14 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "check": "bun run format:check && bun run typecheck && bun run lint && bun run test",
-    "build:host": "bun run scripts/tasks.ts build:host",
+    "build:host": "bun run build:code-mode && bun run scripts/tasks.ts build:host",
     "test:unit": "bun test scripts test",
     "test:host": "bun run scripts/tasks.ts test:host",
     "test:engine": "bun run scripts/tasks.ts test:engine",
     "test:integration": "bun run scripts/integration.ts",
     "lint:host": "bun run scripts/tasks.ts lint:host",
-    "lint:engine": "bun run scripts/tasks.ts lint:engine"
+    "lint:engine": "bun run scripts/tasks.ts lint:engine",
+    "build:code-mode": "bun run scripts/build-code-mode.ts"
   },
   "dependencies": {
     "@heroui/react": "3.2.6",

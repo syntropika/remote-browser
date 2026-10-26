@@ -1,4 +1,4 @@
-import { cli, assert, Runtime, serve, temporary, wait } from "./harness.js";
+import { reservePage, cli, assert, Runtime, serve, temporary, wait } from "./harness.js";
 
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
@@ -20,25 +20,44 @@ export async function run(engine: string, host: string) {
       const runtime = await Runtime.launch(host, engine, root);
       try {
         const { client } = runtime;
-        const healthy = (await client.call("browser_tabs", { action: "list" })).tabs[0].id;
-        await client.call("browser_navigate", { tabId: healthy, url: server.origin });
-        const failed = (await client.call("browser_tabs", { action: "open" })).tabId;
+        const healthy = (
+          await client.call("browser_tabs", {
+            action: "list",
+          })
+        ).tabs[0].id;
+        const healthyLease = (await reservePage(client, healthy)).leaseId;
+        await client.call("browser_navigate", {
+          leaseId: healthyLease,
+          url: server.origin,
+        });
+        const failed = await runtime.dashboard.action("open", null, {}, "default");
+        const failedLease = (await reservePage(client, failed)).leaseId;
         const result = await client.call(
           "browser_navigate",
-          { tabId: failed, url: `${server.origin}/pending` },
+          {
+            leaseId: failedLease,
+            url: `${server.origin}/pending`,
+          },
           true,
         );
         assert.equal(
           result.content[0].text,
           "Browser completion is unknown. Restart the MCP server before further actions",
         );
-        const { tabs } = await client.call("browser_tabs", { action: "list" });
+        const { tabs } = await client.call("browser_tabs", {
+          action: "list",
+        });
         assert(
           tabs.find((t: any) => t.id === failed).uncertain &&
             !tabs.find((t: any) => t.id === healthy).uncertain,
         );
         assert.equal(
-          (await client.call("browser_evaluate", { tabId: healthy, script: "return 42;" })).value,
+          (
+            await client.call("browser_evaluate", {
+              leaseId: healthyLease,
+              function: "() => {\nreturn 42;\n}",
+            })
+          ).value,
           42,
         );
         const records = () =>
@@ -64,7 +83,6 @@ export async function run(engine: string, host: string) {
     "PASS: completion unknown is isolated to the timed-out tab with redacted correlated diagnostics",
   );
 }
-
 if (import.meta.main) {
   await cli(run);
 }

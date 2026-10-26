@@ -23,6 +23,19 @@ Direct local CDP access bypasses API keys, tab leases and human takeover, so oth
 processes on the same machine are part of the trusted execution environment. Do not
 publish or proxy that listener to untrusted clients.
 
+Page-scoped MCP calls require a reservation token bound to the authenticated client.
+The token carries routing information but is not an authorization assertion: the engine
+checks its random reservation secret against the requested tab and client on every call,
+including observations. User takeover, release and closure revoke that secret. Agent names
+are display labels. Clients sharing one API key must keep their lease tokens separate.
+
+Code mode embeds QuickJS without OS, filesystem, process, module loader or direct network
+bindings. Its page object uses the same reservation-bound operations as individual tools.
+Each call has bounded memory, stack, operation count, concurrency, output and execution
+time. It is not a substitute for process isolation against native runtime vulnerabilities.
+Page JavaScript retains its normal website/session authority. Completed actions are not
+rolled back when a later code step fails.
+
 ## Reporting a vulnerability
 
 Use [GitHub's private vulnerability reporting](https://github.com/syntropika/remote-browser/security/advisories/new)

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { cli, assert, Runtime, temporary, serve, sleep, wait } from "./harness.js";
+import { reservePage, cli, assert, Runtime, temporary, serve, sleep, wait } from "./harness.js";
 
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
@@ -54,22 +54,54 @@ export async function run(engine: string, host: string) {
         assert(
           (await c.request("tools/list", {})).tools.some((t: any) => t.name === "browser_control"),
         );
-        const tab = (await c.call("browser_tabs", { action: "open" })).tabId;
+        const tab = await runtime.dashboard.action("open", null, {}, "default");
+        const lease = (await reservePage(c, tab)).leaseId;
         const control = (action: string, args: any = {}) =>
-          c.call("browser_control", { tabId: tab, action, ...args });
+          c.call("browser_control", {
+            leaseId: lease,
+            action,
+            ...args,
+          });
         const evaluate = async (script: string) =>
-          (await c.call("browser_evaluate", { tabId: tab, script })).value;
+          (
+            await c.call("browser_evaluate", {
+              leaseId: lease,
+              function: `() => {\n${script}\n}`,
+            })
+          ).value;
         const navigate = (path: string) =>
-          c.call("browser_navigate", { tabId: tab, url: server.origin + path });
-        const files = async () => (await c.call("browser_files", { action: "list" })).files;
+          c.call("browser_navigate", {
+            leaseId: lease,
+            url: server.origin + path,
+          });
+        const files = async () =>
+          (
+            await c.call("browser_files", {
+              action: "list",
+            })
+          ).files;
         const saved = (suffix: string) =>
           wait(async () => (await files()).find((file: any) => file.id.endsWith(suffix)));
         await navigate("/one");
         await navigate("/two");
         await control("back");
-        assert.equal((await c.call("browser_snapshot", { tabId: tab })).title, "One");
+        assert.equal(
+          (
+            await c.call("browser_snapshot", {
+              leaseId: lease,
+            })
+          ).title,
+          "One",
+        );
         await control("forward");
-        assert.equal((await c.call("browser_snapshot", { tabId: tab })).title, "Two");
+        assert.equal(
+          (
+            await c.call("browser_snapshot", {
+              leaseId: lease,
+            })
+          ).title,
+          "Two",
+        );
         await control("back");
         const before = ones;
         await control("reload");
@@ -129,7 +161,10 @@ export async function run(engine: string, host: string) {
         );
         assert.equal(await readFile((await saved("blob.txt")).path, "utf-8"), "blob download");
         for (const file of await files()) {
-          await c.call("browser_files", { action: "delete", fileId: file.id });
+          await c.call("browser_files", {
+            action: "delete",
+            fileId: file.id,
+          });
         }
         assert.deepEqual(await files(), []);
       } finally {
@@ -143,7 +178,6 @@ export async function run(engine: string, host: string) {
     "PASS: history, clipboard, PNG ranges, playable MP4, automatic downloads and single POST export",
   );
 }
-
 if (import.meta.main) {
   await cli(run);
 }

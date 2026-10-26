@@ -426,3 +426,14 @@ export async function privateFile(path: string, text: string) {
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, text, { mode: 0o600 });
 }
+
+/** Explicit fixture reservation; callers keep and pass the returned lease. */
+export async function reservePage(client: Pick<Http, "call">, tabId?: string, profileId?: string) {
+  return client.call("browser_tabs", {
+    action: "reserve",
+    tabId,
+    profileId,
+    agentName: "Integration agent",
+    task: "fixture operations",
+  });
+}

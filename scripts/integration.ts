@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 
 const local = [
+  "agent-api",
   "cdp-adapter",
   "embedded",
   "unified",
@@ -56,6 +57,7 @@ if (values.list) {
     throw new Error("Pass --engine-binary or REMOTE_BROWSER_ENGINE_BINARY");
   }
   const hostSuites = new Set([
+    "agent-api",
     "cdp-adapter",
     "unified",
     "http",

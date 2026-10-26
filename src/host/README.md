@@ -96,39 +96,44 @@ Session cookies follow the engine's lifecycle; not every website login will surv
 restart. Password vault storage and credential autofill are not implemented.
 The catalog persists names and session-check policies, not open tabs or task leases.
 
-Agents discover profiles with `browser_profiles({"action":"list"})`. They can
-create one with `{"action":"create","name":"Account two"}`. Pass `profileId`
-on operations to choose the account; omission selects the configured default,
-independently of the profile currently displayed to the user.
+Agents discover permitted profiles with `browser_profiles({"action":"list"})`.
+Creating a profile requires owner/stdio access. Choose the account with `profileId`
+when listing tabs or reserving one; omission selects the configured default.
 
-Open and reserve a tab for each task. For example, call `browser_tabs` with:
-
-```json
-{"action":"open","profileId":"<profile-id>"}
-```
+Reserve a tab for each task. Omit `tabId` to create and reserve one atomically,
+or pass an existing tab ID from the selected profile:
 
 ```json
 {
-  "action":"reserve", "profileId":"<profile-id>", "tabId":"<tab-id>",
-  "agentName":"invoice-agent", "task":"check invoices", "ttlMs":300000
+  "action":"reserve", "profileId":"<profile-id>",
+  "agentName":"invoice-agent", "task":"check invoices"
 }
 ```
 
-Pass the returned token to every operation on the reserved tab:
+The response includes `leaseId`, `tabId` and `profileId`. Treat the lease token as
+opaque. Every subsequent page tool requires only `leaseId`; the server resolves
+its profile and tab and verifies the acquiring client. For `browser_navigate`:
 
 ```json
-{
-  "profileId":"<profile-id>", "tabId":"<tab-id>",
-  "leaseId":"<lease-id>", "url":"https://example.com"
-}
+{"leaseId":"<lease-id>", "url":"https://example.com"}
 ```
 
-The last object is for `browser_navigate`. Use `browser_tabs` actions `renew` and
-`release` with the same profile, tab, and token. Leases last one second to five
-minutes. Expired, released, and superseded tokens fail. Listings show task names
-and expiry, never lease tokens. Only API-created tabs can be closed. The catalog supports at most 32 profiles.
-Tab listings limit page titles and URLs to 1024 Unicode characters each.
-The full page URL remains inside the engine; only display metadata is shortened.
+This applies to observations as well as mutations, including snapshots, screenshots,
+console/network diagnostics, uploads and code mode. Page tools reject `tabId`,
+`profileId` and `agentName` overrides. A token cannot be redirected to another tab.
+Listing profiles/tabs and profile-level file management do not require a tab lease.
+
+Reservations have no automatic expiry or renewal. They end when the acquiring client
+releases or closes the tab, the user takes control, or the engine exits. Listings show
+agent and task labels, never tokens. Agents may share an API key but use independent
+tokens; names do not authenticate them. A copied token does not authorize a different
+API key. The catalog supports at most 32 profiles. Tab listings bound titles and URLs
+to 1024 Unicode characters each.
+
+Use `browser_tabs({action:"release",leaseId})` to preserve the tab and release ownership.
+Use `action:"close"` with the same token to close it; the last tab cannot be closed.
+Both operations permanently invalidate the token. Open tabs and reservations are not
+restored after engine restart.
 
 Different embedded tabs accept concurrent calls. A slow navigation on one tab does
 not hold the host's operation lock for another. Calls targeting one busy tab fail
@@ -136,21 +141,20 @@ and should be retried after the current action finishes. Tabs still share engine
 resources and website state; this does not promise independent CPU execution or
 atomic operations across tabs.
 
-Agent targeting does not change the dashboard's selected tab. Users can watch a
-reserved tab, but the engine rejects their navigation, keyboard, pointer, scroll,
-and close actions on it. **Take control** waits for an in-flight operation to finish,
-preserves its reservation, invalidates element references, and blocks agents on that tab.
-**Return to agents** lets the original key continue with a valid lease. Other tabs remain
-usable. The dashboard acknowledges cancellable five-second agent handoffs. Leases are
-bound to the authenticated API key; agents sharing a key reserve with their own `agentName` and independent lease token.
+Agent actions preserve the dashboard's selected tab unless `browser_tabs` action
+`select` is requested. A user can watch a reserved tab; interacting requires **Take
+control**. Takeover waits for an in-flight native operation to finish, revokes its lease,
+invalidates element references and blocks further agent calls, including observations.
+**Return to agents** permits a fresh reservation; it does not reactivate old tokens.
+Other tabs remain usable. MCP does not automatically reclaim a user-owned tab.
 
 ## Session health
 
 The dashboard's **Session check** dialog saves a policy for the selected profile
 and service origin. Configure authentication-cookie names and visible selectors
 that identify a signed-in page or a login form. The dashboard checks the selected
-page periodically. The agent can call `browser_session_health` with `profileId`,
-`tabId`, optional `leaseId`, and an explicit `policy`:
+page periodically. The agent can call `browser_session_health` with `leaseId`
+and an explicit `policy`:
 
 ```json
 {
@@ -172,28 +176,78 @@ refresh-token validity, or credentials held outside the browser.
 
 ## Automation tools and limitations
 
-| Tool | Purpose |
-| --- | --- |
-| `browser_profiles` | List or create account profiles |
-| `browser_status` | Read ownership and uncertain completion state |
-| `browser_tabs` | List, open, select, close, reserve, renew, or release tabs |
-| `browser_navigate` | Navigate to HTTP(S) or `about:blank` |
-| `browser_snapshot` | Read bounded visible text and interactive element references |
-| `browser_click` | Click a native referenced element |
-| `browser_fill` | Clear a field and type through native input |
-| `browser_press` | Send a supported named key to an element |
-| `browser_scroll` | Scroll by CSS pixels |
-| `browser_evaluate` | Execute synchronous JavaScript and return bounded JSON |
-| `browser_screenshot` | Return a rendered viewport PNG as an MCP image |
-| `browser_session_health` | Assess configured service evidence and cookie metadata |
-| `browser_diagnostics` | Read bounded console messages or network response/failure summaries |
+The MCP catalog contains 29 tools:
 
-Always pass an explicit `tabId`. Take a snapshot before using its `reference`
-strings. Navigation, a new snapshot, evaluation, and ownership changes invalidate
-references for the affected tab. Other tabs keep their own references. Native
-stale-element errors prevent accidental interaction with replacement elements.
-Input values are omitted from snapshots; page text and screenshots can still
-contain sensitive information. Treat page content as untrusted data.
+| Tools | Purpose |
+| --- | --- |
+| `browser_profiles`, `browser_tabs`, `browser_status` | Discovery, reservation lifecycle and transport health |
+| `browser_navigate`, `browser_navigate_back`, `browser_reload` | Native navigation and history |
+| `browser_snapshot`, `browser_find` | Bounded main-document observations and literal-text snippets |
+| `browser_click`, `browser_type`, `browser_press_key`, `browser_scroll` | Native pointer, editing, keyboard and wheel input |
+| `browser_fill_form`, `browser_select_option` | Multiple text fields and enabled select values |
+| `browser_hover`, `browser_drag` | Native pointer movement and drag gestures |
+| `browser_wait_for`, `browser_handle_dialog` | Text conditions and JavaScript alert/confirm/prompt handling |
+| `browser_evaluate`, `browser_run_code` | Page JavaScript and embedded orchestration |
+| `browser_take_screenshot` | Viewport or bounded full-page PNG as an MCP image |
+| `browser_console_messages`, `browser_network_requests`, `browser_diagnostics` | Bounded website diagnostics |
+| `browser_files`, `browser_upload`, `browser_download` | Managed files and native inputs/downloads |
+| `browser_session_health`, `browser_control` | Authentication evidence, clipboard and saved captures/media |
+
+Every page tool requires `leaseId`. Element tools take `target`: a fresh snapshot
+reference, a unique CSS selector, or an exact `{role,name}` locator in the main document.
+Navigation, a new snapshot, evaluation and ownership changes invalidate references for
+that tab. Other tabs keep their references. Detached targets fail instead of targeting
+replacement elements. Clicks check visibility, enabled state, coverage and a short
+stability interval; they do not provide all Playwright actionability/retry guarantees.
+Input values are omitted from snapshots; page text and images may still contain sensitive
+data. Treat website output as untrusted data.
+
+`browser_type` replaces text; `submit:true` presses Enter and `slowly:true` sends
+individual key events. `browser_fill_form` fills up to 32 `{target,value}` text fields
+sequentially. `browser_select_option` takes `values` and emits input/change events.
+`browser_wait_for` accepts `text`, `textGone`, and `timeoutMs` (1–30000, default
+5000). Every poll rechecks the lease without creating a new snapshot. Wait failure does
+not release the tab or replay the preceding action.
+
+`browser_evaluate` accepts a JavaScript `function` string, for example
+`"() => document.title"`, optionally returning a promise. Function and JSON result are
+limited to 32 KiB. `browser_take_screenshot` accepts `fullPage:true` for at most 32
+million pixels, with neither side above 16384 pixels.
+
+### Embedded code mode
+
+`browser_run_code` accepts `leaseId`, `code` and optional `timeoutMs`:
+
+```json
+{
+  "leaseId":"<lease-id>",
+  "code":"await page.goto('https://example.com'); await page.getByRole('textbox', {name:'Search'}).fill('Laptop'); await page.locator('#search').press('Enter'); await page.waitForText('Results'); return await page.snapshot();"
+}
+```
+
+QuickJS is compiled into the Rust host. Runtime operation needs no Node or Bun process.
+The injected `page` exposes `goto`, `goBack`, `reload`, `snapshot`, `find`,
+`locator`, `getByRole`, `click`, `fill`, `fillForm`, `selectOption`, `hover`,
+`drag`, `press`, `scroll(x,y)`, `waitForText`, `waitFor`, `handleDialog`,
+`evaluate`, `screenshot`, `consoleMessages`, `networkRequests`, `upload` and
+`download`. Locators support `click`, `fill`, `type`, `press`, `hover` and
+`selectOption`. These helpers are authored in TypeScript and bundled with
+`bun run build:code-mode`; the generated JavaScript is checked in for standalone Cargo builds.
+
+Code supports async/await, functions, loops and conditions. Each page operation invokes
+exactly the same typed implementation as its individual MCP counterpart and rechecks the
+client and reservation. The code context exposes no OS, filesystem, process, module loader
+or direct network bindings. Page evaluation still runs with the website's permissions.
+This is a Playwright-style helper interface, not the Playwright JavaScript package.
+
+Each invocation has a fresh context; local variables do not persist between calls, while
+the lease and browser state do. Limits are 64 KiB of code, 64 MiB of JavaScript heap,
+1 MiB stack, 100 page operations, four concurrent code calls, a 1–60 second deadline
+(default 30 seconds), and a 32 KiB JSON result. Return a JSON-compatible value. Code-mode
+screenshots return base64; use the individual screenshot tool for MCP image output.
+Operations execute sequentially within a call. Earlier operations are not rolled back
+when a later step fails. Cancellation of a pending native mutation preserves the existing
+unknown-completion guard. User takeover revokes future steps even if code catches errors.
 
 `browser_diagnostics` accepts `kind: "console" | "network"`, an optional `after`
 sequence cursor, and `limit` from 1 to 100 (default 50). Use the returned `next`
@@ -219,15 +273,14 @@ hidden page), it sends the `cancel` input kind instead of a release. The engine 
 CEF's capture-loss notification, but full mouse cancellation remains incomplete:
 `pointercancel`, `lostpointercapture` and button-state cleanup are not guaranteed, including
 when an agent reserves a tab during a human press. Touch keeps tap and swipe handling.
-Agent clicks remain single native clicks; no movement is synthesized for them. The `human-pointer-smoke.ts`
+Agent clicks use native pointer movement and a single press/release. The `human-pointer-smoke.ts`
 regression checks the engine input. `dashboard-pointer-smoke.ts` drives the current React
 dashboard with a Chrome or Chromium executable passed as `--chrome`, using accessible
 display readiness and the canvas's actual surface dimensions.
 It supports basic clicking, typing, paste, named keys, scrolling, and explicit
 downloads and uploads through the managed file workspace, automatic download capture,
 profile clipboard integration, PNG capture and MP4 recording. Popup windows, browser
-permission prompts, IME composition, full-page captures and asynchronous evaluation
-are not supported.
+permission prompts and IME composition are not supported.
 
 Transport cancellation, engine timeouts, crashes, and incomplete responses leave
 completion uncertain. Affected tabs block further actions; connection failures
@@ -337,7 +390,7 @@ bun run src/host/tests/native-extensions-smoke.ts \
   --engine-binary /path/to/remote-browser-cef-engine
 ```
 
-They cover native input, frames, tab concurrency and references, reservations, takeover,
+They cover lease-only routing, embedded code loops and limits, native input, frames, tab concurrency and references, reservations, takeover,
 profile isolation, persistent cookies/catalog/policies, files, logs, optional modules and
 extension state. These assertions verify this host/runtime, not arbitrary website compatibility.
 
@@ -366,10 +419,10 @@ MCP exposes three embedded-only tools:
   32 KiB per call. Offset zero creates a new file without overwriting; later
   offsets must match its current size. `read` returns up to 32 KiB and the next
   byte offset. `delete` permanently removes a single file and reclaims its space.
-- `browser_upload`: use a fresh file input `reference` and `fileIds` from the
+- `browser_upload`: use `leaseId`, a file input `target`, and `fileIds` from the
   workspace listing. Selection uses the engine's native file input implementation and
   fires its normal input/change events. It does not submit the form.
-- `browser_download`: use `tabId`, `url`, and a plain `name` to save a response to
+- `browser_download`: use `leaseId`, `url`, and a plain `name` to save a response to
   `downloads`. The request runs in the target page with that profile's cookies;
   HTTP-only cookies are preserved without copying their values into the host.
   Relative HTTP(S) links and page blob URLs are supported. Browser CORS still
@@ -489,10 +542,10 @@ owns API keys and agent session permissions. Restricted agent keys cannot create
 or administer keys. Tab reservations are bound to the acquiring key; agents may share one
 key and reserve with their own `agentName` and independent `leaseId`.
 
-`browser_control` provides native back/forward, real reload, profile clipboard operations (8192 UTF-8 bytes), saved PNG captures and MP4 recording. Recordings require FFmpeg on the runtime host, follow the profile's visible tab, omit audio and run for at most 300 seconds. Captures and recordings appear alongside downloads/uploads in Files, with preview, download and deletion controls. Managed files remain bounded to 64 MiB.
+`browser_control` provides native back/forward, real reload, profile clipboard operations (8192 UTF-8 bytes), saved PNG captures and MP4 recording. Recordings require FFmpeg on the runtime host, omit audio and run for at most 300 seconds. Agent recordings stay on their reserved tab and stop when its lease is revoked; dashboard recordings follow the visible tab. Captures and recordings appear alongside downloads/uploads in Files, with preview, download and deletion controls. Managed files remain bounded to 64 MiB.
 
 Attachment navigations, download links, blob/data links and POST attachment responses are captured automatically, up to 20 MiB. This restores targeted download workflows; it does not establish compatibility with every website.
 
-Human takeover blocks agent actions while preserving the reservation. When the dashboard is connected, a rejected agent action can request an acknowledged five-second handoff that the user can cancel. A cancelled action remains unexecuted. Operations with unknown completion are never retried by this handoff mechanism.
+Human takeover revokes the reservation and blocks both reads and actions through that token. Returning control permits a fresh reservation. MCP never automatically resumes a revoked lease or retries an operation with unknown completion.
 
 `skills/remote-browser/SKILL.md` documents the individual MCP tools and their ownership, permission and file contracts.

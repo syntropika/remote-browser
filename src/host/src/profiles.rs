@@ -122,6 +122,9 @@ impl Profiles {
             _catalog_lock: catalog_lock,
         })
     }
+    pub(crate) fn profile_id(&self, id: Option<&str>) -> String {
+        id.unwrap_or(&self.default_id).to_owned()
+    }
     pub async fn browser(&self, id: Option<&str>) -> Result<Automation> {
         let id = id.unwrap_or(&self.default_id);
         crate::identity::check_profile(id)?;

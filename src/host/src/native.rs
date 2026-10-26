@@ -108,6 +108,10 @@ fn observation(op: &str) -> bool {
     matches!(
         op,
         "status"
+            | "validate_lease"
+            | "agent_text"
+            | "agent_wait"
+            | "agent_screenshot"
             | "diagnostics"
             | "extensions"
             | "extension_installs"
@@ -278,6 +282,9 @@ impl NativeClient {
             lease_id: lease.map(str::to_owned),
         }
     }
+    pub(crate) fn lease_id(&self) -> Option<&str> {
+        self.lease_id.as_deref()
+    }
     pub fn with_profile(mut self, id: &str) -> Self {
         self.profile_id = Some(id.into());
         self
@@ -311,6 +318,8 @@ impl NativeClient {
         }
         let result = self.engine_request(op, tab, args.clone(), human).await;
         if !human
+            && self.lease_id.is_none()
+            && op != "reserve"
             && self.state.handoffs.available()
             && matches!(result, Err(Error::HumanControl))
             && let Some(tab) = tab

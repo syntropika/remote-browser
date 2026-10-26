@@ -7,6 +7,7 @@ accounts over MCP.
 - Watch the live page, take control to browse or sign in, then hand the tab back.
 - Keep each session's cookies and sign-ins in its own profile, across restarts.
 - Let an agent read compact page snapshots and click, type, scroll and upload.
+- Compose browser operations with loops and conditions in embedded JavaScript.
 - Read bounded console messages and network response or failure summaries through MCP.
 - Save screenshots, record the session, and manage uploads and downloads per session.
 - Copy and paste between your machine and the page.
@@ -28,7 +29,7 @@ files beside the executable. Chromium is already compiled.
 
 ```sh
 bun install
-bun run build                                   # the dashboard bundle the host embeds
+bun run build                                   # dashboard and embedded JavaScript helpers
 bun run build:engine --release
 cargo build --release --manifest-path src/host/Cargo.toml
 ./src/host/target/release/remote-browser-native \
@@ -67,7 +68,8 @@ cookies never authorize MCP.
 For stdio clients, use `--mcp-stdio` alongside `--dashboard-port`, or launch without a
 dashboard. Explicit MCP launch options install the module on first startup. Existing key
 registries migrate automatically; later restarts respect the saved module state.
-An agent that releases a tab closes it, so your own tabs stay as you left them. The
+Agents reserve a tab once and use only its `leaseId` for page operations. Release keeps
+the tab; close removes it. User takeover revokes the reservation. The
 agent-facing contract is described in [skills/remote-browser/SKILL.md](skills/remote-browser/SKILL.md).
 
 ## Extensions

@@ -1,50 +1,34 @@
-import { assert, cli, Runtime, temporary } from "./harness.js";
+import { assert, cli, reservePage, Runtime, temporary } from "./harness.js";
 
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
   await temporary(async (root) => {
     const runtime = await Runtime.launch(host, engine, root);
     const { client } = runtime;
-    const tabs = async () =>
-      (await client.call("browser_tabs", { action: "list" })).tabs.map((tab: any) => tab.id);
-    const reserve = async (tabId: string) =>
-      (
-        await client.call("browser_tabs", {
-          action: "reserve",
-          tabId,
-          agentName: "Release smoke",
-          task: "release",
-        })
-      ).leaseId;
     try {
-      const start = await tabs();
-      const opened = (await client.call("browser_tabs", { action: "open" })).tabId;
-      assert((await tabs()).includes(opened));
-      await client.call("browser_tabs", {
-        action: "release",
-        tabId: opened,
-        leaseId: await reserve(opened),
-      });
-      assert.deepEqual(await tabs(), start);
-      const alone = start[0];
-      await client.call("browser_tabs", {
-        action: "release",
-        tabId: alone,
-        leaseId: await reserve(alone),
-      });
-      assert.deepEqual(await tabs(), [alone]);
-      const held = (await client.call("browser_tabs", { action: "open" })).tabId;
-      const lease = await reserve(held);
-      await runtime.dashboard.action("take", held);
-      await client.call("browser_tabs", { action: "release", tabId: held, leaseId: lease });
-      assert((await tabs()).includes(held));
+      const { tabId, leaseId } = await reservePage(client);
+      await client.call("browser_tabs", { action: "release", leaseId });
+      const { tabs } = await client.call("browser_tabs", { action: "list" });
+      assert(tabs.some((tab: any) => tab.id === tabId && !tab.reservation));
+      await client.call("browser_snapshot", { leaseId }, true);
+      const next = await reservePage(client, tabId);
+      await client.call("browser_tabs", { action: "close", leaseId: next.leaseId });
+      assert(
+        !(await client.call("browser_tabs", { action: "list" })).tabs.some(
+          (tab: any) => tab.id === tabId,
+        ),
+      );
+      await client.call("browser_snapshot", { leaseId: next.leaseId }, true);
+      const last = (await client.call("browser_tabs", { action: "list" })).tabs[0].id;
+      const held = await reservePage(client, last);
+      await client.call("browser_tabs", { action: "close", leaseId: held.leaseId }, true);
+      await client.call("browser_tabs", { action: "release", leaseId: held.leaseId });
     } finally {
       await runtime.stop();
     }
   });
-  console.log("PASS: release closes agent tabs, preserves the last tab and human-owned tabs");
+  console.log("PASS: release preserves tabs, close revokes leases, and the last tab stays open");
 }
-
 if (import.meta.main) {
   await cli(run);
 }

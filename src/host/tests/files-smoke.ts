@@ -4,12 +4,10 @@ import filePath from "node:path";
 import { cli, assert, Runtime, temporary, serve, wait } from "./harness.js";
 
 const { join } = filePath;
-
 const payload = Buffer.from([
   108, 111, 99, 97, 108, 32, 102, 105, 108, 101, 32, 119, 111, 114, 107, 115, 112, 97, 99, 101, 0,
   255, 10,
 ]);
-
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
   const handler = async (request: Request) => {
@@ -48,8 +46,11 @@ export async function run(engine: string, host: string) {
         const c = runtime.client;
         const d = runtime.dashboard;
         const files = (action: string, args: any = {}) =>
-          c.call("browser_files", { action, ...args });
-        const tab = (await c.call("browser_tabs", { action: "open" })).tabId;
+          c.call("browser_files", {
+            action,
+            ...args,
+          });
+        const tab = await runtime.dashboard.action("open", null, {}, "default");
         const lease = (
           await c.call("browser_tabs", {
             action: "reserve",
@@ -58,10 +59,18 @@ export async function run(engine: string, host: string) {
             task: "files smoke",
           })
         ).leaseId;
-        const target = { tabId: tab, leaseId: lease };
+        const target = { leaseId: lease };
         const evaluate = async (script: string) =>
-          (await c.call("browser_evaluate", { ...target, script })).value;
-        await c.call("browser_navigate", { ...target, url: server.origin });
+          (
+            await c.call("browser_evaluate", {
+              ...target,
+              function: `() => {\n${script}\n}`,
+            })
+          ).value;
+        await c.call("browser_navigate", {
+          ...target,
+          url: server.origin,
+        });
         assert.equal((await files("list")).root, join(root, "shared/default"));
         const staged = await files("stage", {
           name: "test.bin",
@@ -71,7 +80,12 @@ export async function run(engine: string, host: string) {
         assert.deepEqual(await readFile(staged.path), payload);
         await c.call(
           "browser_files",
-          { action: "stage", name: "test.bin", offset: 0, data: "eA==" },
+          {
+            action: "stage",
+            name: "test.bin",
+            offset: 0,
+            data: "eA==",
+          },
           true,
         );
         let snapshot = await c.call("browser_snapshot", target);
@@ -80,7 +94,11 @@ export async function run(engine: string, host: string) {
         ).reference;
         await c.call(
           "browser_upload",
-          { ...target, reference: textRef, fileIds: ["uploads/test.bin"] },
+          {
+            ...target,
+            target: textRef,
+            fileIds: ["uploads/test.bin"],
+          },
           true,
         );
         assert.equal(await evaluate("return document.getElementById('text').value;"), "");
@@ -88,10 +106,18 @@ export async function run(engine: string, host: string) {
         const { reference } = snapshot.elements.find((e: any) => e.type === "file");
         await c.call(
           "browser_upload",
-          { tabId: tab, reference, fileIds: ["uploads/test.bin"] },
+          {
+            tabId: tab,
+            target: reference,
+            fileIds: ["uploads/test.bin"],
+          },
           true,
         );
-        await c.call("browser_upload", { ...target, reference, fileIds: ["uploads/test.bin"] });
+        await c.call("browser_upload", {
+          ...target,
+          target: reference,
+          fileIds: ["uploads/test.bin"],
+        });
         assert.deepEqual(
           await evaluate(
             "return {name:document.getElementById('file').files[0].name,size:document.getElementById('file').files[0].size};",
@@ -105,7 +131,15 @@ export async function run(engine: string, host: string) {
           ).received,
         );
         const download = async (url: string, name: string, error = false) =>
-          c.call("browser_download", { ...target, url, name }, error);
+          c.call(
+            "browser_download",
+            {
+              ...target,
+              url,
+              name,
+            },
+            error,
+          );
         const downloaded = await download("/private", "private.bin");
         assert.deepEqual(await readFile(downloaded.path), payload);
         assert.deepEqual(
@@ -141,14 +175,28 @@ export async function run(engine: string, host: string) {
         ]) {
           await download(url, name, true);
         }
-        await c.call("browser_files", { action: "delete", fileId: "uploads/../../outside" }, true);
+        await c.call(
+          "browser_files",
+          {
+            action: "delete",
+            fileId: "uploads/../../outside",
+          },
+          true,
+        );
         const profile = (
-          await c.call("browser_profiles", { action: "create", name: "Other account" })
+          await c.call("browser_profiles", {
+            action: "create",
+            name: "Other account",
+          })
         ).id;
         assert.deepEqual((await files("list", { profileId: profile })).files, []);
         await c.call(
           "browser_files",
-          { action: "delete", profileId: profile, fileId: "uploads/test.bin" },
+          {
+            action: "delete",
+            profileId: profile,
+            fileId: "uploads/test.bin",
+          },
           true,
         );
         await c.call("browser_snapshot", target);
@@ -164,7 +212,11 @@ export async function run(engine: string, host: string) {
         );
         await c.call(
           "browser_files",
-          { action: "choose", ...target, fileIds: ["uploads/test.bin"] },
+          {
+            action: "choose",
+            ...target,
+            fileIds: ["uploads/test.bin"],
+          },
           true,
         );
         await d.action("choose_files", tab, { fileIds: ["uploads/test.bin"] });
@@ -191,7 +243,11 @@ export async function run(engine: string, host: string) {
       runtime = await Runtime.launch(host, engine, join(root, "browser"), { env });
       try {
         assert.deepEqual(
-          (await runtime.client.call("browser_files", { action: "list" })).files,
+          (
+            await runtime.client.call("browser_files", {
+              action: "list",
+            })
+          ).files,
           [],
         );
       } finally {
@@ -206,7 +262,6 @@ export async function run(engine: string, host: string) {
     "PASS: workspace isolation, native upload/submission, authenticated downloads, limits/CORS, picker, reads and cleanup",
   );
 }
-
 if (import.meta.main) {
   await cli(run);
 }

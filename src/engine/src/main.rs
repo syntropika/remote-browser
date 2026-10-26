@@ -8,6 +8,7 @@
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use cef::args::Args;
+mod agent_actions;
 mod browser_lifecycle;
 mod cdp;
 mod extension_installs;
@@ -379,6 +380,7 @@ wrap_client! {
     struct Surfaced {
         shared: Arc<Shared>,
         picker: Rc<RefCell<Option<FileDialogCallback>>>,
+        dialog: Rc<RefCell<Option<agent_actions::PendingDialog>>>,
         downloads: Option<std::path::PathBuf>,
         browsers: browser_lifecycle::Browsers,
     }
@@ -395,6 +397,8 @@ wrap_client! {
         fn dialog_handler(&self) -> Option<DialogHandler> {
             Some(Picker::new(self.picker.clone()))
         }
+
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> { Some(agent_actions::Dialogs::new(self.dialog.clone())) }
 
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(Downloads::new(self.downloads.clone()))
@@ -450,6 +454,7 @@ struct Surfacing {
     held: Option<Held>,
     /// Set while the page is waiting for files, which it asked for with a file dialog.
     picker: Rc<RefCell<Option<FileDialogCallback>>>,
+    dialog: Rc<RefCell<Option<agent_actions::PendingDialog>>>,
     /// A tab a person took; agent operations on it are refused until they hand it back.
     human: bool,
     pointer: (i32, i32),
@@ -469,8 +474,15 @@ impl Surfacing {
         let shared = Arc::new(Shared::default());
         *shared.size.lock().unwrap() = size;
         let picker = Rc::new(RefCell::new(None));
+        let dialog = Rc::new(RefCell::new(None));
         let window_info = WindowInfo::default().set_as_windowless(0);
-        let mut client = Surfaced::new(shared.clone(), picker.clone(), downloads, browsers);
+        let mut client = Surfaced::new(
+            shared.clone(),
+            picker.clone(),
+            dialog.clone(),
+            downloads,
+            browsers,
+        );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
@@ -499,6 +511,7 @@ impl Surfacing {
             shared,
             held: None,
             picker,
+            dialog,
             human: false,
             pointer: (size.0 / 2, size.1 / 2),
             clicks: pointer::Clicks::default(),
@@ -537,7 +550,7 @@ struct Engine {
     next_tab: u32,
     /// The profile's file workspace: what a page may upload and what it downloaded.
     files: Option<Files>,
-    /// Which client is working on which tab, and until when.
+    /// Which client exclusively holds each reserved tab.
     reservations: Reservations,
     /// Counts snapshots, so a reference from an earlier one is recognised as stale.
     next_snapshot: u64,
@@ -569,26 +582,13 @@ impl Engine {
 
     fn reserve(&mut self, call: &Call, tab: &str) -> Result<Value, String> {
         let client = call.client_id.as_deref().unwrap_or("stdio");
-        let now = Instant::now();
-        let ttl = call.args["ttlMs"].as_u64().unwrap_or(300_000);
         match call.op.as_str() {
             "reserve" => {
                 let task = call.args["task"].as_str().unwrap_or_default();
                 let agent = call.args["agentName"].as_str().unwrap_or(task);
                 let lease = self
                     .reservations
-                    .reserve_named_for(tab, task, agent, ttl, client, now)
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(lease).map_err(|error| error.to_string())
-            }
-            "renew" => {
-                let token = call
-                    .lease_id
-                    .as_deref()
-                    .ok_or("renew needs the tab's leaseId")?;
-                let lease = self
-                    .reservations
-                    .renew_for(tab, token, ttl, client, now)
+                    .reserve_named_for(tab, task, agent, client)
                     .map_err(|error| error.to_string())?;
                 serde_json::to_value(lease).map_err(|error| error.to_string())
             }
@@ -598,7 +598,7 @@ impl Engine {
                     .as_deref()
                     .ok_or("release needs the tab's leaseId")?;
                 self.reservations
-                    .release_for(tab, token, client, now)
+                    .release_for(tab, token, client)
                     .map_err(|error| error.to_string())?;
                 Ok(Value::Null)
             }
@@ -1140,6 +1140,15 @@ impl Engine {
         let acts = matches!(
             call.op.as_str(),
             "navigate"
+                | "agent_click"
+                | "agent_type"
+                | "agent_hover"
+                | "agent_drag"
+                | "agent_select"
+                | "agent_press"
+                | "agent_evaluate"
+                | "agent_dialog"
+                | "agent_upload"
                 | "cdp"
                 | "evaluate"
                 | "input"
@@ -1164,30 +1173,32 @@ impl Engine {
         {
             return Err("busy".into());
         }
-        if acts {
+        if acts || call.lease_id.is_some() {
             let tab = self.tabs[at].id.clone();
             let taken = self.tabs[at].human;
             if call.human {
                 // A tab an agent reserved stays the agent's until the person takes it,
                 // which is what the dashboard's control button is for.
-                if !taken && self.reservations.info(&tab, Instant::now()).is_some() {
+                if !taken && self.reservations.info(&tab).is_some() {
                     return Err("This tab is reserved; take control of it first".into());
                 }
             } else {
-                if taken {
-                    return Err("humanControl".into());
-                }
                 self.reservations
                     .check_for(
                         &tab,
                         call.lease_id.as_deref(),
                         call.client_id.as_deref().unwrap_or("stdio"),
-                        Instant::now(),
                     )
                     .map_err(|error| error.to_string())?;
+                if taken {
+                    return Err("humanControl".into());
+                }
             }
         }
 
+        if let Some(result) = self.agent_action(at, call) {
+            return result;
+        }
         match call.op.as_str() {
             "diagnostics" => {
                 let kind = call.args["kind"]
@@ -1295,13 +1306,10 @@ impl Engine {
             }
             "status" => Ok(json!({"owner": "agent", "uncertain": false})),
             "tabs" => {
-                // Reading a reservation prunes the expired ones, so the listing is built
-                // from what is still held.
-                let now = Instant::now();
                 let ids: Vec<String> = self.tabs.iter().map(|tab| tab.id.clone()).collect();
                 let mut held: Vec<Option<ReservationInfo>> = Vec::new();
                 for id in &ids {
-                    held.push(self.reservations.info(id, now));
+                    held.push(self.reservations.info(id));
                 }
                 let active = self.active;
                 Ok(Value::Array(
@@ -1320,19 +1328,32 @@ impl Engine {
                 ))
             }
             "open" => self.open(),
-            "reserve" | "renew" => {
-                let tab = self.tabs[at].id.clone();
-                self.reserve(call, &tab)
+            "reserve" => {
+                if self.tabs[at].human && call.tab_id.is_some() {
+                    return Err("humanControl".into());
+                }
+                let tab = if call.tab_id.is_none() {
+                    self.open()?
+                        .as_str()
+                        .ok_or("the tab could not be created")?
+                        .to_owned()
+                } else {
+                    self.tabs[at].id.clone()
+                };
+                match self.reserve(call, &tab) {
+                    Ok(lease) => Ok(lease),
+                    Err(error) => {
+                        if call.tab_id.is_none() {
+                            let index = self.index(Some(&tab))?;
+                            self.discard(index);
+                        }
+                        Err(error)
+                    }
+                }
             }
             "release" => {
                 let tab = self.tabs[at].id.clone();
                 self.reserve(call, &tab)?;
-                // An agent is finished with a tab when it releases it, so the tab goes rather
-                // than piling up behind the person's own. One the person took over stays, and
-                // so does the last one, which has nowhere to leave the engine.
-                if self.tabs.len() > 1 && !self.tabs[at].human {
-                    self.discard(at);
-                }
                 Ok(Value::Null)
             }
             // The dashboard calls this "view" and the automation layer calls it "select";
@@ -1349,6 +1370,8 @@ impl Engine {
                 Ok(Value::Null)
             }
             "take" => {
+                self.reservations.remove(&self.tabs[at].id);
+                self.release(at);
                 self.tabs[at].human = true;
                 Ok(Value::Null)
             }

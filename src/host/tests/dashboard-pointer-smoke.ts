@@ -9,12 +9,19 @@ import { page } from "./human-pointer-smoke.js";
 
 export async function run(engine: string, host: string, args: Record<string, any>) {
   assert(host && args.chrome, "--host-binary and --chrome are required");
-  const server = serve(
-    (request, origin) =>
-      new Response(new URL(request.url).pathname === "/frame" ? FRAME : page(origin), {
-        headers: { "Content-Type": "text/html" },
-      }),
-  );
+  let fixtureState: any;
+  const server = serve(async (request, origin) => {
+    if (new URL(request.url).pathname === "/state") {
+      fixtureState = await request.json();
+      return new Response("ok");
+    }
+    const report =
+      "<script>setInterval(()=>fetch('/state',{method:'POST',body:JSON.stringify({frame:window.frame,topMoves,topLeft})}),30)</script>";
+    return new Response(
+      new URL(request.url).pathname === "/frame" ? FRAME : page(origin) + report,
+      { headers: { "Content-Type": "text/html" } },
+    );
+  });
   try {
     await temporary(async (root) => {
       const graphicsEngine = filePath.join(root, "graphics-engine");
@@ -27,17 +34,10 @@ export async function run(engine: string, host: string, args: Record<string, any
       const runtime = await Runtime.launch(host, graphicsEngine, root);
       let browser: Browser | undefined;
       try {
-        const c = runtime.client;
-        const tab = (await c.call("browser_tabs", { action: "list" })).tabs[0].id;
-        await c.call("browser_navigate", { tabId: tab, url: server.origin });
-        const read = async () =>
-          (
-            await c.call("browser_evaluate", {
-              tabId: tab,
-              script: "return {frame:window.frame,topMoves,topLeft};",
-            })
-          ).value;
-        await wait(read, (v) => v.frame.ready);
+        const tab = (await runtime.dashboard.action("tabs"))[0].id;
+        await runtime.dashboard.action("navigate", tab, { url: server.origin });
+        const read = () => fixtureState;
+        await wait(read, (value) => value?.frame.ready);
         browser = await Browser.launch(args.chrome);
         await browser.open(runtime.url);
         const rect = await waitForDisplay(browser);
@@ -72,7 +72,6 @@ export async function run(engine: string, host: string, args: Record<string, any
   }
   console.log("PASS: real dashboard pointer forwards motion/hover/duration/leave across sites");
 }
-
 if (import.meta.main) {
   await cli(run);
 }

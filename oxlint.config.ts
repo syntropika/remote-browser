@@ -7,7 +7,7 @@ export default defineConfig({
   extends: [core],
   jsPlugins: antiSlop.jsPlugins,
   // The committed native bundle is generated from the checked UI sources.
-  ignorePatterns: [...core.ignorePatterns, "src/host/ui/app.js"],
+  ignorePatterns: [...core.ignorePatterns, "src/host/ui/app.js", "src/host/code/page.js"],
   options: { typeAware: true },
   rules: {
     "func-style": "off",

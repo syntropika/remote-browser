@@ -1,8 +1,10 @@
 //! Local browser automation with an engine boundary and an MCP adapter.
 pub mod access;
+mod agent;
 pub mod api_keys;
 pub mod automation;
 pub mod cli;
+mod code_mode;
 pub mod dashboard;
 pub mod files;
 pub mod handoff;

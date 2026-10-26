@@ -5,7 +5,6 @@ import filePath from "node:path";
 import { cli, assert, Http, INIT, Runtime, temporary, privateFile } from "./harness.js";
 
 const { join } = filePath;
-
 export async function run(engine: string, host: string) {
   assert(host, "--host-binary is required");
   await temporary(async (root) => {
@@ -48,7 +47,7 @@ export async function run(engine: string, host: string) {
       assert.equal(created.key.name, "Work laptop");
       const active = new Http(runtime.url, secret);
       await active.request("initialize", INIT);
-      assert.equal((await active.request("tools/list", {})).result.tools.length, 17);
+      assert.equal((await active.request("tools/list", {})).result.tools.length, 29);
       const profile = (await owner.api("/api/profiles", { name: "Restricted profile" })).data.id;
       const limited = (
         await owner.api("/api/keys", { name: "Restricted key", profileIds: [profile] }, 201)
@@ -56,13 +55,31 @@ export async function run(engine: string, host: string) {
       const scoped = new Http(runtime.url, limited.secret);
       await scoped.request("initialize", INIT);
       assert.deepEqual(
-        (await scoped.call("browser_profiles", { action: "list" })).profiles.map((p: any) => p.id),
+        (
+          await scoped.call("browser_profiles", {
+            action: "list",
+          })
+        ).profiles.map((p: any) => p.id),
         [profile],
       );
-      await scoped.call("browser_tabs", { action: "list", profileId: "default" }, true);
-      await scoped.call("browser_profiles", { action: "create", name: "Denied" }, true);
+      await scoped.call(
+        "browser_tabs",
+        {
+          action: "list",
+          profileId: "default",
+        },
+        true,
+      );
+      await scoped.call(
+        "browser_profiles",
+        {
+          action: "create",
+          name: "Denied",
+        },
+        true,
+      );
       await owner.api("/api/login/key", { secret: limited.secret }, 401);
-      const tab = (await scoped.call("browser_tabs", { action: "open", profileId: profile })).tabId;
+      const tab = await runtime.dashboard.action("open", null, {}, profile);
       const lease = (
         await scoped.call("browser_tabs", {
           action: "reserve",
@@ -72,17 +89,35 @@ export async function run(engine: string, host: string) {
           task: "limited client",
         })
       ).leaseId;
-      const args = { profileId: profile, tabId: tab, leaseId: lease };
-      await active.call("browser_evaluate", { ...args, script: "return 42;" }, true);
-      for (const action of ["renew", "release"]) {
-        await active.call("browser_tabs", { ...args, action }, true);
+      const args = { leaseId: lease };
+      await active.call(
+        "browser_evaluate",
+        {
+          ...args,
+          function: "() => {\nreturn 42;\n}",
+        },
+        true,
+      );
+      for (const action of ["close", "release"]) {
+        await active.call(
+          "browser_tabs",
+          {
+            ...args,
+            action,
+          },
+          true,
+        );
       }
       assert.equal(
-        (await scoped.call("browser_evaluate", { ...args, script: "return 42;" })).value,
+        (
+          await scoped.call("browser_evaluate", {
+            ...args,
+            function: "() => {\nreturn 42;\n}",
+          })
+        ).value,
         42,
       );
-      const second = (await scoped.call("browser_tabs", { action: "open", profileId: profile }))
-        .tabId;
+      const second = await runtime.dashboard.action("open", null, {}, profile);
       const lease2 = (
         await scoped.call("browser_tabs", {
           action: "reserve",
@@ -92,28 +127,51 @@ export async function run(engine: string, host: string) {
           task: "second task",
         })
       ).leaseId;
-      await scoped.call("browser_evaluate", { ...args, tabId: second, script: "return 9;" }, true);
+      await scoped.call(
+        "browser_evaluate",
+        {
+          ...args,
+          tabId: second,
+          function: "() => {\nreturn 9;\n}",
+        },
+        true,
+      );
       assert.equal(
         (
           await scoped.call("browser_evaluate", {
             ...args,
-            tabId: second,
             leaseId: lease2,
-            script: "return 9;",
+            function: "() => {\nreturn 9;\n}",
           })
         ).value,
         9,
       );
-      const { tabs } = await scoped.call("browser_tabs", { action: "list", profileId: profile });
+      const { tabs } = await scoped.call("browser_tabs", {
+        action: "list",
+        profileId: profile,
+      });
       assert.equal(tabs.find((t: any) => t.id === tab).reservation.agentName, "Agent one");
       assert.equal(tabs.find((t: any) => t.id === second).reservation.agentName, "Agent two");
       await scoped.call(
         "browser_tabs",
-        { ...args, action: "reserve", agentName: "Agent two", task: "conflict" },
+        {
+          profileId: profile,
+          tabId: tab,
+          action: "reserve",
+          agentName: "Agent two",
+          task: "conflict",
+        },
         true,
       );
       await owner.api("/api/keys/permissions", { id: limited.key.id, profileIds: ["default"] });
-      await scoped.call("browser_tabs", { action: "list", profileId: profile }, true);
+      await scoped.call(
+        "browser_tabs",
+        {
+          action: "list",
+          profileId: profile,
+        },
+        true,
+      );
       for (const profileIds of [[], ["default", profile], ["missing"]]) {
         await owner.api("/api/keys/permissions", { id: limited.key.id, profileIds }, 400);
       }
@@ -152,7 +210,6 @@ export async function run(engine: string, host: string) {
     "PASS: compatible registry, origin guards, one-time scoped keys, lease identity, revocation/restart and fail-closed corruption",
   );
 }
-
 if (import.meta.main) {
   await cli(run);
 }

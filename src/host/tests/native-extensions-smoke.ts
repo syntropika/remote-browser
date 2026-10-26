@@ -5,9 +5,7 @@ import filePath from "node:path";
 import { assert, Browser, Http, INIT, Runtime, cli, temporary } from "./harness.js";
 
 const { join } = filePath;
-
 const login = { username: "test-owner", password: "synthetic-browser-login-only" };
-
 export async function run(engine: string, host: string) {
   assert(host, "Pass --host-binary or REMOTE_BROWSER_HOST_BINARY");
   await temporary(async (root) => {
@@ -37,7 +35,7 @@ export async function run(engine: string, host: string) {
           (tool: any) => tool.name === "browser_navigate",
         ),
       );
-      const tab = (await agent.call("browser_tabs", { action: "open" })).tabId;
+      const tab = await runtime.dashboard.action("open", null, {}, "default");
       const lease = (
         await agent.call("browser_tabs", {
           action: "reserve",
@@ -47,8 +45,12 @@ export async function run(engine: string, host: string) {
         })
       ).leaseId;
       assert.equal(
-        (await agent.call("browser_evaluate", { tabId: tab, leaseId: lease, script: "return 42;" }))
-          .value,
+        (
+          await agent.call("browser_evaluate", {
+            leaseId: lease,
+            function: "() => {\nreturn 42;\n}",
+          })
+        ).value,
         42,
       );
       const access = await owner.change("access", "install");
@@ -76,7 +78,13 @@ export async function run(engine: string, host: string) {
       assert((await visitor.api("/api/profiles")).data.profiles.length);
       await visitor.api("/api/access/logout", {});
       await visitor.api("/api/profiles", undefined, 401);
-      assert((await agent.call("browser_profiles", { action: "list" })).profiles.length);
+      assert(
+        (
+          await agent.call("browser_profiles", {
+            action: "list",
+          })
+        ).profiles.length,
+      );
       await owner.change("mcp", "disable");
       await agent.request("tools/list", {}, 503);
       assert(
@@ -126,7 +134,6 @@ export async function run(engine: string, host: string) {
     "PASS: independent native modules, real MCP automation, browser login, private hashes/cookies, restart persistence, confirmed uninstall and retained revocations",
   );
 }
-
 if (import.meta.main) {
   await cli(run);
 }

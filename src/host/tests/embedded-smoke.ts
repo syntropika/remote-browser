@@ -130,8 +130,8 @@ export async function run(binary: string) {
         await first.call("navigate", a, { url: server.origin }, { ...oa, error: true });
         await first.call("navigate", a, { url: server.origin }, { human: true });
         await first.call("return", a, {}, { human: true });
-        await first.call("reserve", a, { task: "resumed" }, { error: true });
-        await first.call("renew", a, {}, oa);
+        await first.call("navigate", a, { url: server.origin }, { ...oa, error: true });
+        oa.lease = (await first.call("reserve", a, { task: "resumed" })).leaseId;
         await first.call("navigate", a, { url: `${server.origin}/short` }, oa);
         const health = await first.call(
           "health",

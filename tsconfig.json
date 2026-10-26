@@ -17,6 +17,7 @@
     "src/host/tests/**/*.ts",
     "src/host/tools/**/*.ts",
     "src/engine/cef/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "src/host/code/**/*.ts"
   ]
 }
