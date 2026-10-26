@@ -126,8 +126,11 @@ export function Settings({
   const current = SECTIONS.find((entry) => entry.id === section);
 
   return (
-    <section aria-label="Settings" className="bg-card absolute inset-0 z-30 flex">
-      <aside className="flex w-14 shrink-0 flex-col gap-1 p-2 sm:w-64 sm:p-3">
+    <section
+      aria-label="Settings"
+      className="bg-card absolute inset-0 z-30 flex flex-col sm:flex-row"
+    >
+      <aside className="flex w-full shrink-0 flex-col gap-1 p-2 sm:w-64 sm:p-3">
         <Button
           aria-label="Back to browser"
           className="justify-start"
@@ -136,12 +139,12 @@ export function Settings({
           variant="ghost"
         >
           <Icon name="back" />
-          <span className="hidden sm:inline">Back to browser</span>
+          <span>Back to browser</span>
         </Button>
         <h1 className="sr-only text-lg font-semibold tracking-tight sm:not-sr-only sm:px-3 sm:pt-4 sm:pb-2">
           Settings
         </h1>
-        <nav aria-label="Settings sections" className="flex flex-col gap-0.5">
+        <nav aria-label="Settings sections" className="flex gap-0.5 overflow-x-auto sm:flex-col">
           {SECTIONS.filter(
             (entry) =>
               (entry.id !== "mcp" || mcp?.installed) &&
@@ -151,10 +154,10 @@ export function Settings({
               aria-current={entry.id === section}
               aria-label={entry.label}
               title={entry.label}
-              className={`flex items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors sm:px-3 ${
+              className={`flex min-h-11 shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm whitespace-nowrap transition-colors ${
                 entry.id === section
-                  ? "border-accent text-ink border-l-2 bg-white/10 font-medium"
-                  : "text-ink-dim hover:bg-raised border-l-2 border-transparent"
+                  ? "text-ink bg-white/10 font-medium"
+                  : "text-ink-dim hover:bg-raised"
               }`}
               key={entry.id}
               onClick={() => {
@@ -163,13 +166,13 @@ export function Settings({
               type="button"
             >
               <Icon name={entry.icon} />
-              <span className="hidden sm:inline">{entry.label}</span>
+              <span>{entry.label}</span>
             </button>
           ))}
         </nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 px-4 py-4 sm:px-8">
           <h2 className="text-xl font-semibold tracking-tight">{current?.label}</h2>
           <p className="text-ink-faint text-sm">{current?.blurb}</p>

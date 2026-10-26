@@ -10,12 +10,20 @@ export type Profile = {
 };
 
 export type Reservation = { agentName: string; task: string };
+export type JsDialog = {
+  id: string;
+  type: "alert" | "confirm" | "prompt";
+  origin: string;
+  message: string;
+  defaultPromptText: string;
+};
 
 export type Tab = {
   id: string;
   active: boolean;
   owned: boolean;
   filePicker: boolean;
+  jsDialog: JsDialog | null;
   canGoBack: boolean;
   canGoForward: boolean;
   reservation: Reservation | null;
@@ -73,11 +81,24 @@ export function readTab(value: unknown): Tab {
   const tab = record(value);
   const reservation = record(tab.reservation);
   const task = optionalText(reservation.task);
+  const dialog = record(tab.jsDialog);
+  const dialogType = dialog.type;
   return {
     id: text(tab.id),
     active: flag(tab.active),
     owned: flag(tab.owned),
     filePicker: flag(tab.filePicker),
+    jsDialog:
+      text(dialog.id) &&
+      (dialogType === "alert" || dialogType === "confirm" || dialogType === "prompt")
+        ? {
+            id: text(dialog.id),
+            type: dialogType,
+            origin: text(dialog.origin),
+            message: text(dialog.message),
+            defaultPromptText: text(dialog.defaultPromptText),
+          }
+        : null,
     canGoBack: flag(tab.canGoBack),
     canGoForward: flag(tab.canGoForward),
     reservation: task === null ? null : { agentName: text(reservation.agentName, "Agent"), task },

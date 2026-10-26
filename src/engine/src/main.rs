@@ -1148,6 +1148,7 @@ impl Engine {
                 | "agent_press"
                 | "agent_evaluate"
                 | "agent_dialog"
+                | "js_dialog"
                 | "agent_upload"
                 | "cdp"
                 | "evaluate"
@@ -1166,6 +1167,7 @@ impl Engine {
                 | "choose_files"
         );
         if (acts || call.op == "release")
+            && !matches!(call.op.as_str(), "agent_dialog" | "js_dialog")
             && self
                 .navigations
                 .iter()
@@ -1318,11 +1320,20 @@ impl Engine {
                         .enumerate()
                         .zip(held)
                         .map(|((index, tab), reservation)| {
-                            tab.describe(
+                            let mut description = tab.describe(
                                 index == active,
                                 reservation,
                                 self.navigations.iter().any(|pending| pending.tab == tab.id),
-                            )
+                            );
+                            if call.human {
+                                description["jsDialog"] = tab
+                                    .dialog
+                                    .borrow()
+                                    .as_ref()
+                                    .map(agent_actions::PendingDialog::describe)
+                                    .unwrap_or(Value::Null);
+                            }
+                            description
                         })
                         .collect(),
                 ))

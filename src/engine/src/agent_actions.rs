@@ -16,9 +16,9 @@ const LOCATE: &str = r#"(target) => {
   if (nodes.length !== 1) throw Error('Role and name must match exactly one element');
   return nodes[0];
 }"#;
-const BOUNDS: &str = r#"function() {
+const BOUNDS: &str = r#"function(scroll = true) {
   if (!this.isConnected || this.disabled || this.getAttribute('aria-disabled') === 'true') throw Error('Target is detached or disabled');
-  this.scrollIntoView({block:'center', inline:'center', behavior:'instant'});
+  if (scroll) this.scrollIntoView({block:'center', inline:'center', behavior:'instant'});
   const r = this.getBoundingClientRect(), s = getComputedStyle(this);
   if (!r.width || !r.height || s.display === 'none' || s.visibility !== 'visible') throw Error('Target is not visible');
   const x = r.left + r.width / 2, y = r.top + r.height / 2;
@@ -89,6 +89,60 @@ impl Engine {
             return Err("Target is moving; wait and try again".into());
         }
         Ok(second)
+    }
+    fn drag_bounds(&mut self, at: usize, source: &str, destination: &str) -> Result<Value, String> {
+        // Scroll both endpoints before reading either coordinate. Never press until
+        // both centers are visible, hit-tested and stable in the same viewport.
+        let arguments = json!([{"objectId":destination}]);
+        let prepared = self.protocol(at, "Runtime.callFunctionOn", json!({
+            "objectId":source,"arguments":arguments,"returnByValue":true,
+            "functionDeclaration":"function(destination) { for (const element of [this, destination]) element.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'}); }"
+        }))?;
+        Self::action_result(&prepared)?;
+        let function = format!(
+            "function(destination) {{ const bounds = {BOUNDS}; return [bounds.call(this, false), bounds.call(destination, false)]; }}"
+        );
+        let mut read = || -> Result<Value, String> {
+            let result = self.protocol(at, "Runtime.callFunctionOn", json!({"objectId":source,"arguments":arguments,"functionDeclaration":function,"returnByValue":true}))?;
+            Self::action_result(&result)
+        };
+        let first = read()?;
+        pump_for(Duration::from_millis(32));
+        let second = read()?;
+        if (0..2).any(|index| {
+            ["x", "y", "width", "height"].iter().any(|key| {
+                (first[index][key].as_f64().unwrap_or_default()
+                    - second[index][key].as_f64().unwrap_or_default())
+                .abs()
+                    > 1.0
+            })
+        }) {
+            return Err("Drag endpoints are moving; wait and try again".into());
+        }
+        Ok(second)
+    }
+    fn resolve_dialog(&mut self, at: usize, args: &Value, human: bool) -> Result<Value, String> {
+        let accept = args["accept"].as_bool().ok_or("accept must be a boolean")?;
+        let prompt = match args.get("promptText") {
+            None | Some(Value::Null) => "",
+            Some(value) => value.as_str().ok_or("promptText must be text")?,
+        };
+        if prompt.len() > 32768 {
+            return Err("promptText exceeds 32768 bytes".into());
+        }
+        let mut pending = self.tabs[at].dialog.borrow_mut();
+        let dialog = pending.as_ref().ok_or("No JavaScript dialog is pending")?;
+        if human && args["id"].as_str() != Some(dialog.id.as_str()) {
+            return Err(
+                "This JavaScript dialog is no longer current; refresh and try again".into(),
+            );
+        }
+        let dialog = pending.take().ok_or("No JavaScript dialog is pending")?;
+        drop(pending);
+        dialog
+            .callback
+            .cont(i32::from(accept), Some(&CefString::from(prompt)));
+        Ok(Value::Null)
     }
     fn agent_target_action(&mut self, at: usize, op: &str, args: &Value) -> Result<Value, String> {
         let object = self.target_object(at, &args["target"])?;
@@ -184,8 +238,9 @@ impl Engine {
                     }
                 };
                 let outcome = (|| {
-                    let start = self.target_bounds(at, &source)?;
-                    let end = self.target_bounds(at, &destination)?;
+                    let bounds = self.drag_bounds(at, &source, &destination)?;
+                    let start = &bounds[0];
+                    let end = &bounds[1];
                     let (x, y) = (
                         start["x"].as_f64().unwrap_or_default(),
                         start["y"].as_f64().unwrap_or_default(),
@@ -241,21 +296,8 @@ impl Engine {
                 let result = self.protocol(at,"Page.captureScreenshot",json!({"format":"png","captureBeyondViewport":true,"clip":{"x":0,"y":0,"width":w,"height":h,"scale":1}}))?;
                 Ok(result["data"].clone())
             })(),
-            "agent_dialog" => {
-                let pending = self.tabs[at].dialog.borrow_mut().take();
-                match pending {
-                    Some(dialog) => {
-                        dialog.callback.cont(
-                            i32::from(args["accept"].as_bool().unwrap_or(false)),
-                            Some(&CefString::from(
-                                args["promptText"].as_str().unwrap_or_default(),
-                            )),
-                        );
-                        Ok(Value::Null)
-                    }
-                    None => Err("No JavaScript dialog is pending".into()),
-                }
-            }
+            "agent_dialog" => self.resolve_dialog(at, args, false),
+            "js_dialog" if call.human => self.resolve_dialog(at, args, true),
             _ => return None,
         })
     }
@@ -263,12 +305,31 @@ impl Engine {
 
 pub(super) struct PendingDialog {
     pub callback: JsdialogCallback,
+    id: String,
+    kind: &'static str,
+    origin: String,
+    message: String,
+    default_prompt: String,
+}
+impl PendingDialog {
+    pub(super) fn describe(&self) -> Value {
+        json!({"id":self.id,"type":self.kind,"origin":self.origin,"message":self.message,"defaultPromptText":self.default_prompt})
+    }
 }
 wrap_jsdialog_handler! {
     pub(super) struct Dialogs { pending: Rc<RefCell<Option<PendingDialog>>>, }
     impl JsdialogHandler {
-        fn on_jsdialog(&self, _browser: Option<&mut Browser>, _origin: Option<&CefString>, _kind: JsdialogType, _message: Option<&CefString>, _default: Option<&CefString>, callback: Option<&mut JsdialogCallback>, _suppress: Option<&mut i32>) -> i32 {
-            if let Some(callback) = callback { *self.pending.borrow_mut() = Some(PendingDialog { callback:callback.clone() }); }
+        fn on_jsdialog(&self, _browser: Option<&mut Browser>, origin: Option<&CefString>, kind: JsdialogType, message: Option<&CefString>, default: Option<&CefString>, callback: Option<&mut JsdialogCallback>, _suppress: Option<&mut i32>) -> i32 {
+            let Some(callback) = callback else { return 0; };
+            let brief = |value: Option<&CefString>| value.map(ToString::to_string).unwrap_or_default().chars().take(8192).collect::<String>();
+            *self.pending.borrow_mut() = Some(PendingDialog {
+                callback:callback.clone(), id:uuid::Uuid::new_v4().to_string(),
+                kind: if kind == JsdialogType::PROMPT { "prompt" } else if kind == JsdialogType::CONFIRM { "confirm" } else { "alert" },
+                origin: url::Url::parse(&brief(origin)).map(|url| {
+                    if url.scheme() == "chrome-extension" { format!("chrome-extension://{}", url.host_str().unwrap_or_default()) } else { url.origin().ascii_serialization() }
+                }).unwrap_or_else(|_| "Website".into()).chars().take(1024).collect(),
+                message:brief(message), default_prompt:brief(default),
+            });
             1
         }
         fn on_reset_dialog_state(&self, _browser: Option<&mut Browser>) { self.pending.borrow_mut().take(); }

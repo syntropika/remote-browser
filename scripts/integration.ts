@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 
 const local = [
   "agent-api",
+  "review-regressions",
   "cdp-adapter",
   "embedded",
   "unified",
@@ -28,7 +29,13 @@ const local = [
   "user-activation",
   "webgl",
 ];
-const optional = ["extension-install", "extension-management", "dashboard-pointer"];
+const optional = [
+  "extension-install",
+  "extension-management",
+  "dashboard-pointer",
+  "dashboard-dialog",
+  "dashboard-mobile",
+];
 const { values } = parseArgs({
   options: {
     "engine-binary": { type: "string" },
@@ -49,7 +56,7 @@ if (values.list) {
     : [
         ...local,
         ...(values["real-store"] ? ["extension-install", "extension-management"] : []),
-        ...(values.chrome ? ["dashboard-pointer"] : []),
+        ...(values.chrome ? ["dashboard-pointer", "dashboard-dialog", "dashboard-mobile"] : []),
       ];
   const engine = values["engine-binary"] || process.env.REMOTE_BROWSER_ENGINE_BINARY;
   const host = values["host-binary"] || process.env.REMOTE_BROWSER_HOST_BINARY;
@@ -58,6 +65,7 @@ if (values.list) {
   }
   const hostSuites = new Set([
     "agent-api",
+    "review-regressions",
     "cdp-adapter",
     "unified",
     "http",
@@ -72,6 +80,8 @@ if (values.list) {
     "native-extensions",
     "release",
     "dashboard-pointer",
+    "dashboard-dialog",
+    "dashboard-mobile",
   ]);
   if (suites.some((suite) => hostSuites.has(suite)) && !host) {
     throw new Error("Pass --host-binary or REMOTE_BROWSER_HOST_BINARY for host suites");
@@ -81,8 +91,8 @@ if (values.list) {
     if (![...local, ...optional].includes(suite)) {
       throw new Error(`Unknown integration suite: ${suite}`);
     }
-    if (suite === "dashboard-pointer" && !values.chrome) {
-      throw new Error("dashboard-pointer requires --chrome");
+    if (suite.startsWith("dashboard-") && !values.chrome) {
+      throw new Error(`${suite} requires --chrome`);
     }
   }
   for (const suite of suites) {
@@ -90,7 +100,7 @@ if (values.list) {
       "--engine-binary",
       engine,
       ...(host ? ["--host-binary", host] : []),
-      ...(suite === "dashboard-pointer" && values.chrome ? ["--chrome", values.chrome] : []),
+      ...(suite.startsWith("dashboard-") && values.chrome ? ["--chrome", values.chrome] : []),
       ...(suite === "extension-install" && values["verify-expiry"] ? ["--verify-expiry"] : []),
       ...(suite === "extension-install" && values["protocol-only"] ? ["--protocol-only"] : []),
     ];

@@ -7,7 +7,13 @@ import { Alert } from "./alert.js";
 import { action, api, failure, whenUnauthorized } from "./api.js";
 import { asyncHandler, background } from "./async-boundary.js";
 import { Chrome } from "./chrome.js";
-import { ClipboardDialog, HandoffDialog, MediaDialog, NewProfileDialog } from "./dialogs.js";
+import {
+  ClipboardDialog,
+  HandoffDialog,
+  MediaDialog,
+  NewProfileDialog,
+  WebsiteDialog,
+} from "./dialogs.js";
 import { Display } from "./display.js";
 import { ExtensionInstalls } from "./extensions.js";
 import { FilesPanel } from "./files.js";
@@ -51,7 +57,8 @@ export function App() {
   live.current = { profileId, tabId, profiles, tabs };
 
   const tab = tabs.find((candidate) => candidate.id === tabId);
-  const interactive = editable(tab) && ready;
+  const pageDialog = editable(tab) ? tab?.jsDialog : null;
+  const interactive = editable(tab) && ready && !pageDialog;
 
   const report = useCallback((cause: unknown) => {
     setNote({ tone: "danger", text: failure(cause).message });
@@ -489,6 +496,10 @@ export function App() {
           profiles={profiles}
           recording={recording}
           tab={tab}
+          tabs={tabs}
+          onSelectTab={selectTab}
+          onCloseTab={closeTab}
+          onOpenTab={openTab}
         />
         <section
           aria-busy={!ready}
@@ -620,7 +631,16 @@ export function App() {
         tabId={tabId}
       />
       <MediaDialog file={preview} onClose={() => setPreview(null)} profileId={profileId} />
-      {profileId && !dialog && !panel && !handoff && !preview ? (
+      {pageDialog ? (
+        <WebsiteDialog
+          key={`${profileId}:${tabId}:${pageDialog.id}`}
+          dialog={pageDialog}
+          profileId={profileId}
+          tabId={tabId}
+          onResolved={() => refresh(profileId)}
+        />
+      ) : null}
+      {profileId && !dialog && !panel && !handoff && !preview && !pageDialog ? (
         <ExtensionInstalls key={profileId} onNotice={inform} profileId={profileId} />
       ) : null}
       <HandoffDialog

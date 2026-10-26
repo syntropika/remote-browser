@@ -179,6 +179,7 @@ impl Automation {
                 | "handoff_ack"
                 | "handoff_cancel"
                 | "tabs"
+                | "js_dialog"
                 | "open"
                 | "view"
                 | "take"
