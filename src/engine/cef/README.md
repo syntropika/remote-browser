@@ -22,6 +22,19 @@ CEF revision, existing bridge files, or a partially applied patch. Reapply the
 integration after any source update/reset that removes it. CEF's checkout scripts
 must not reset the patched files between this step and the build.
 
+On Linux, retain CEF's client allocator compatibility settings. Official CEF builds
+set these automatically; when using `is_official_build=false`, explicitly add the
+following to `GN_DEFINES` before regenerating the build:
+
+```text
+use_partition_alloc_as_malloc=false enable_backup_ref_ptr_support=false
+```
+
+These match the Linux settings in the pinned CEF revision's `tools/gn_args.py`.
+They prevent `libcef.so` from replacing the embedding application's global allocator.
+PartitionAlloc remains available for Chromium's internal uses. A nonofficial build
+with the default allocator settings can abort during engine startup.
+
 Regenerate and build a CEF binary distribution with the normal CEF tooling. Its
 `libcef.so` must export `rb_extension_install_enable_v1`,
 `rb_extension_install_poll_v1`, `rb_extension_install_resolve_v1`, and
