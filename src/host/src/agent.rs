@@ -48,10 +48,29 @@ impl Page {
         tab: Option<&str>,
         task: &str,
         agent: &str,
+        network: Option<&str>,
     ) -> Result<Value> {
-        let profile = profiles.profile_id(profile);
+        let session = network
+            .map(|id| profiles.network.reserve(id, profile))
+            .transpose()?;
+        if tab.is_some() && session.is_some() {
+            return Err(Error::Invalid(
+                "Network sessions require a new test tab".into(),
+            ));
+        }
+        let profile = session
+            .as_ref()
+            .map(|session| session.profile().to_owned())
+            .unwrap_or_else(|| profiles.profile_id(profile));
+        let configuration = session
+            .as_ref()
+            .map(|session| session.configuration())
+            .transpose()?;
         let browser = profiles.browser(Some(&profile)).await?;
-        let lease = browser.reserve_named(tab, task, agent).await?;
+        let lease = browser
+            .reserve_with_network(tab, task, agent, configuration)
+            .await?;
+        drop(session);
         let token = Route {
             profile_id: profile.clone(),
             tab_id: lease.tab_id.clone(),

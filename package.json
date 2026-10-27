@@ -14,7 +14,7 @@
     "build:engine": "bun run scripts/prepare-cef.ts --build",
     "prepare:cef": "bun run scripts/prepare-cef.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun run test:unit && bun run test:host && bun run test:engine --release",
+    "test": "bun run test:unit && bun run test:host && bun run test:engine --release && bun run test:network && bun run test:local-mcp",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives",
     "lint:fix": "oxlint --fix --deny-warnings --report-unused-disable-directives",
     "format": "oxfmt .",
@@ -27,7 +27,13 @@
     "test:integration": "bun run scripts/integration.ts",
     "lint:host": "bun run scripts/tasks.ts lint:host",
     "lint:engine": "bun run scripts/tasks.ts lint:engine",
-    "build:code-mode": "bun run scripts/build-code-mode.ts"
+    "build:code-mode": "bun run scripts/build-code-mode.ts",
+    "build:local-mcp": "bun run scripts/tasks.ts build:local-mcp",
+    "build:network": "bun run scripts/tasks.ts build:network",
+    "test:local-mcp": "bun run scripts/tasks.ts test:local-mcp",
+    "test:network": "bun run scripts/tasks.ts test:network",
+    "lint:local-mcp": "bun run scripts/tasks.ts lint:local-mcp",
+    "lint:network": "bun run scripts/tasks.ts lint:network"
   },
   "dependencies": {
     "@heroui/react": "3.2.6",

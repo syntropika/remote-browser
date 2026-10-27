@@ -106,7 +106,8 @@ struct CompletionGuard {
 fn cancellation_safe(op: &str) -> bool {
     matches!(
         op,
-        "display"
+        "network_sessions"
+            | "display"
             | "status"
             | "validate_lease"
             | "agent_text"

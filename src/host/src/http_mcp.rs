@@ -122,6 +122,7 @@ pub fn router(
         .with_allowed_hosts([address.to_string(), format!("localhost:{}", address.port())])
         .with_allowed_origins([format!("http://{address}")])
         .with_max_request_body_bytes(65536);
+    let network = crate::network::router(profiles.clone(), extension.clone());
     let service_extension = extension.clone();
     let service = StreamableHttpService::new(
         move || {
@@ -135,6 +136,7 @@ pub fn router(
     );
     Router::new()
         .route_service("/mcp", service)
+        .merge(network)
         .layer(middleware::from_fn_with_state(extension, authorize))
 }
 

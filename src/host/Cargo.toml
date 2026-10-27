@@ -7,7 +7,9 @@ license = "Apache-2.0"
 description = "Native browser automation API and local MCP server"
 
 [dependencies]
-axum = "0.8.8"
+axum = { version = "0.8.8", features = ["ws"] }
+futures-util = "0.3"
+remote-browser-network = { path = "../network" }
 argon2 = "0.5.3"
 fs2 = "0.4"
 libc = "0.2"

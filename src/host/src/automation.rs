@@ -226,12 +226,21 @@ impl Automation {
         task: &str,
         agent_name: &str,
     ) -> Result<Lease> {
+        self.reserve_with_network(tab, task, agent_name, None).await
+    }
+    pub(crate) async fn reserve_with_network(
+        &self,
+        tab: Option<&str>,
+        task: &str,
+        agent_name: &str,
+        network: Option<Value>,
+    ) -> Result<Lease> {
         Ok(serde_json::from_value(
             self.0
                 .request(
                     "reserve",
                     tab,
-                    json!({"task":task,"agentName":agent_name}),
+                    json!({"task":task,"agentName":agent_name,"networkSession":network}),
                     false,
                 )
                 .await?,
@@ -246,6 +255,14 @@ impl Automation {
             .request("release", Some(tab), Value::Null, false)
             .await?;
         Ok(())
+    }
+    pub(crate) async fn network_contexts(&self, retired: &[String]) -> Result<Vec<String>> {
+        Ok(serde_json::from_value(
+            self.0
+                .with_lease(None)
+                .request("network_sessions", None, json!({"retired":retired}), false)
+                .await?,
+        )?)
     }
     pub async fn tabs(&self) -> Result<Vec<Tab>> {
         Ok(serde_json::from_value(

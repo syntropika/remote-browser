@@ -32,6 +32,7 @@ const local = [
   "webgl",
 ];
 const optional = [
+  "local-mcp",
   "extension-install",
   "extension-management",
   "dashboard-pointer",
@@ -43,6 +44,7 @@ const optional = [
 const { values } = parseArgs({
   options: {
     "engine-binary": { type: "string" },
+    "local-mcp-binary": { type: "string" },
     "host-binary": { type: "string" },
     suite: { type: "string" },
     chrome: { type: "string" },
@@ -59,6 +61,7 @@ if (values.list) {
     ? values.suite.split(",")
     : [
         ...local,
+        ...(values["local-mcp-binary"] ? ["local-mcp"] : []),
         ...(values["real-store"] ? ["extension-install", "extension-management"] : []),
         ...(values.chrome
           ? [
@@ -77,6 +80,7 @@ if (values.list) {
   }
   const hostSuites = new Set([
     "agent-api",
+    "local-mcp",
     "review-regressions",
     "cdp-adapter",
     "unified",
@@ -113,6 +117,9 @@ if (values.list) {
     const args = [
       "--engine-binary",
       engine,
+      ...(suite === "local-mcp" && values["local-mcp-binary"]
+        ? ["--local-mcp-binary", values["local-mcp-binary"]]
+        : []),
       ...(host ? ["--host-binary", host] : []),
       ...(suite.startsWith("dashboard-") && values.chrome ? ["--chrome", values.chrome] : []),
       ...(suite === "extension-install" && values["verify-expiry"] ? ["--verify-expiry"] : []),
