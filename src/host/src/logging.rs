@@ -271,6 +271,7 @@ fn operation(value: &str) -> &'static str {
         "browser_evaluate" => "browser_evaluate",
         "browser_screenshot" => "browser_screenshot",
         "browser_session_health" => "browser_session_health",
+        "network_sessions" => "network_sessions",
         "display" => "display",
         "editor_fields" => "editor_fields",
         "editor_focus" => "editor_focus",

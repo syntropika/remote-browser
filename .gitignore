@@ -14,3 +14,5 @@ coverage/
 dist/
 src/host/target/
 src/engine/target/
+src/network/target/
+src/local-mcp/target/

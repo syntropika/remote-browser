@@ -16,6 +16,8 @@ pub mod mcp;
 pub mod media;
 pub mod native;
 pub mod native_extensions;
+pub mod network;
+mod network_cleanup;
 pub mod profiles;
 pub mod reservations;
 

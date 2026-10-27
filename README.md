@@ -101,3 +101,7 @@ Use `bun run test:host`, `bun run test:engine --release`, `bun run lint:host` or
 `bun run lint:engine --release` for individual Rust checks. Bun executes the build tools
 and the integration tests under `src/host/tests/`, which drive both executables end to end.
 See the host's README for integration commands.
+
+## Local MCP and development servers
+
+The [standalone local MCP client](src/local-mcp/README.md) connects to an existing Remote Browser server and can expose explicitly selected local frontends/backends through an authenticated network tunnel. Tests run in isolated request contexts in the background, with optional viewing in the existing dashboard. Precompiled client executables are published to GitHub Releases when their build inputs change on `main`; CEF remains on the server.

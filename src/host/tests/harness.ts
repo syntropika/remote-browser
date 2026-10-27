@@ -408,6 +408,7 @@ export function cli(
     args: process.argv.slice(2),
     options: {
       "engine-binary": { type: "string" },
+      "local-mcp-binary": { type: "string" },
       "host-binary": { type: "string" },
       "protocol-only": { type: "boolean" },
       "verify-expiry": { type: "boolean" },

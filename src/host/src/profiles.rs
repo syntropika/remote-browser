@@ -44,6 +44,7 @@ struct Entry {
 }
 #[derive(Clone)]
 pub struct Profiles {
+    pub(crate) network: Arc<crate::network::Sessions>,
     default_id: String,
     entries: Arc<RwLock<HashMap<String, Arc<Entry>>>>,
     config: Arc<Mutex<ProfileConfig>>,
@@ -114,6 +115,7 @@ impl Profiles {
             None
         };
         Ok(Self {
+            network: Arc::new(crate::network::Sessions::default()),
             default_id: config.default_profile_id.clone(),
             entries: Arc::new(RwLock::new(entries)),
             config: Arc::new(Mutex::new(config)),
@@ -268,6 +270,7 @@ impl Profiles {
         Ok(())
     }
     pub async fn close(&self) {
+        self.network.close_all();
         let entries: Vec<_> = self.entries.read().await.values().cloned().collect();
         let mut cleanup = tokio::task::JoinSet::new();
         for entry in entries {

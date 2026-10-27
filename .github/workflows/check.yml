@@ -41,3 +41,11 @@ jobs:
         run: bun run lint:host
       - name: Lint the engine
         run: bun run lint:engine --release
+
+      - name: Test and lint the local MCP and network transport
+        run: bun run test:network && bun run test:local-mcp && bun run lint:network && bun run lint:local-mcp
+      - name: Build the local MCP integration executables
+        run: bun run build:host && bun run build:engine --release && bun run build:local-mcp
+      - name: Verify local MCP against the actual CEF engine
+        run: >-
+          bun run test:integration --suite local-mcp --host-binary src/host/target/debug/remote-browser-native --engine-binary src/engine/target/release/remote-browser-cef-engine --local-mcp-binary src/local-mcp/target/debug/remote-browser

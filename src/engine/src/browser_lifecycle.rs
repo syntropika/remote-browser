@@ -19,6 +19,15 @@ impl Browsers {
         self.active.borrow().is_empty()
     }
 
+    pub(crate) fn uses_context(&self, context: &RequestContext) -> bool {
+        self.active.borrow().values().any(|browser| {
+            browser
+                .host()
+                .and_then(|host| host.request_context())
+                .is_some_and(|mut other| context.is_sharing_with(Some(&mut other)) == 1)
+        })
+    }
+
     pub(crate) fn close_all(&self) {
         // Closing may call back into the registry, so do not borrow it across CEF calls.
         let browsers: Vec<_> = self.active.borrow().values().cloned().collect();

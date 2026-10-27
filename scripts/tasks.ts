@@ -9,7 +9,7 @@ const operations = new Map([
   ["lint", "clippy"],
 ]);
 const verb = operations.get(operation);
-if (!verb || !["host", "engine"].includes(component)) {
+if (!verb || !["host", "engine", "network", "local-mcp"].includes(component)) {
   throw new Error(`Unknown native task: ${task}`);
 }
 let { env } = process;

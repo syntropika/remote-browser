@@ -36,6 +36,7 @@ enum TabsArgs {
         tab_id: Option<String>,
         task: String,
         agent_name: String,
+        network_session_id: Option<String>,
     },
     Select {
         lease_id: String,
@@ -123,6 +124,7 @@ impl NativeMcp {
                     tab_id,
                     task,
                     agent_name,
+                    network_session_id,
                 } => {
                     Page::reserve(
                         &self.profiles,
@@ -130,6 +132,7 @@ impl NativeMcp {
                         tab_id.as_deref(),
                         &task,
                         &agent_name,
+                        network_session_id.as_deref(),
                     )
                     .await?
                 }
@@ -351,8 +354,8 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "browser_tabs",
-            "List tabs, reserve an existing tab, or create and reserve one atomically by omitting tabId. Reserve requires agentName and task. Reservations do not expire. Other actions accept only leaseId. Release preserves the tab; close removes it. User takeover revokes the token permanently. Names are labels, not credentials. Tabs within a profile share cookies.",
-            json!({"action":{"enum":["list","reserve","select","close","release"]},"profileId":profile,"tabId":text(128),"leaseId":lease,"agentName":text(120),"task":text(120)}),
+            "List tabs, reserve an existing tab, or create and reserve one atomically by omitting tabId. Reserve requires agentName and task. Reservations do not expire. Other actions accept only leaseId. Release preserves the tab; close removes it. User takeover revokes the token permanently. Names are labels, not credentials. Normal tabs within a profile share cookies. A networkSessionId from the local MCP creates an isolated test page with session cookies and network settings; omit tabId. Creation stays in the background; select explicitly to view it.",
+            json!({"action":{"enum":["list","reserve","select","close","release"]},"profileId":profile,"tabId":text(128),"leaseId":lease,"agentName":text(120),"task":text(120),"networkSessionId":text(64)}),
             &["action"],
             false,
         ),
@@ -568,9 +571,9 @@ fn tool(
     }
     if name == "browser_tabs" {
         schema["oneOf"] = json!([
-            {"properties":{"action":{"const":"list"}},"not":{"anyOf":[{"required":["leaseId"]},{"required":["tabId"]},{"required":["agentName"]},{"required":["task"]}]}},
-            {"properties":{"action":{"const":"reserve"}},"required":["agentName","task"],"not":{"required":["leaseId"]}},
-            {"properties":{"action":{"enum":["select","close","release"]}},"required":["leaseId"],"not":{"anyOf":[{"required":["profileId"]},{"required":["tabId"]},{"required":["agentName"]},{"required":["task"]}]}}
+            {"properties":{"action":{"const":"list"}},"not":{"anyOf":[{"required":["leaseId"]},{"required":["tabId"]},{"required":["agentName"]},{"required":["task"]},{"required":["networkSessionId"]}]}},
+            {"properties":{"action":{"const":"reserve"}},"required":["agentName","task"],"not":{"required":["leaseId"]},"allOf":[{"not":{"required":["tabId","networkSessionId"]}}]},
+            {"properties":{"action":{"enum":["select","close","release"]}},"required":["leaseId"],"not":{"anyOf":[{"required":["profileId"]},{"required":["tabId"]},{"required":["agentName"]},{"required":["task"]},{"required":["networkSessionId"]}]}}
         ]);
     }
     if name == "browser_files" {

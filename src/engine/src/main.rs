@@ -15,6 +15,7 @@ mod display;
 mod editor;
 mod extension_installs;
 mod extensions;
+mod network_contexts;
 mod operations;
 mod pointer;
 mod session_health;
@@ -502,6 +503,7 @@ struct Surfacing {
     /// Text the dashboard put on this profile's clipboard, waiting to be pasted.
     pasteboard: String,
     target: String,
+    network_session: Option<String>,
 }
 
 impl Surfacing {
@@ -510,6 +512,7 @@ impl Surfacing {
         size: Viewport,
         downloads: Option<std::path::PathBuf>,
         browsers: browser_lifecycle::Browsers,
+        mut network: Option<(String, RequestContext)>,
     ) -> Option<Self> {
         let shared = Arc::new(Shared::default());
         *shared.size.lock().unwrap() = size;
@@ -535,7 +538,7 @@ impl Surfacing {
                 ..Default::default()
             }),
             None,
-            None,
+            network.as_mut().map(|(_, context)| context),
         )?;
         if let Some(host) = browser.host() {
             // Windowless rendering only produces frames for a view that is visible and has
@@ -559,6 +562,7 @@ impl Surfacing {
             clicks: pointer::Clicks::default(),
             pasteboard: String::new(),
             target,
+            network_session: network.map(|(id, _)| id),
         })
     }
 
@@ -601,6 +605,7 @@ struct Engine {
     /// The calls waiting to be served, so work that can yield sees one coming.
     inbox: Arc<Inbox>,
     navigations: Vec<Navigation>,
+    network_contexts: network_contexts::Contexts,
 }
 
 impl Engine {
@@ -625,6 +630,15 @@ impl Engine {
         let client = call.client_id.as_deref().unwrap_or("stdio");
         match call.op.as_str() {
             "reserve" => {
+                if self
+                    .tabs
+                    .iter()
+                    .find(|page| page.id == tab)
+                    .and_then(|page| page.network_session.as_deref())
+                    .is_some_and(|id| !self.network_contexts.owns(id, client))
+                {
+                    return Err("This test page belongs to another network connection".into());
+                }
                 let task = call.args["task"].as_str().unwrap_or_default();
                 let agent = call.args["agentName"].as_str().unwrap_or(task);
                 let lease = self
@@ -681,14 +695,23 @@ impl Engine {
     }
 
     fn open(&mut self) -> Result<Value, String> {
+        self.open_network(None)
+    }
+
+    fn open_network(&mut self, network: Option<(String, RequestContext)>) -> Result<Value, String> {
         self.next_tab += 1;
         let id = format!("tab-{}", self.next_tab);
         let downloads = self
             .files
             .as_ref()
             .map(|files| files.root().join("downloads"));
-        let size = *self.tabs[self.active].shared.size.lock().unwrap();
-        let tab = Surfacing::open(id.clone(), size, downloads, self.browsers.clone())
+        // Background tests have stable metrics independent of the dashboard device.
+        let size = if network.is_some() {
+            Viewport::default()
+        } else {
+            *self.tabs[self.active].shared.size.lock().unwrap()
+        };
+        let tab = Surfacing::open(id.clone(), size, downloads, self.browsers.clone(), network)
             .ok_or("the tab could not be created")?;
         if let Err(error) = self.cdp.bind(&id, &tab.target) {
             if let Some(host) = tab.browser.host() {
@@ -1285,6 +1308,13 @@ impl Engine {
             return result;
         }
         match call.op.as_str() {
+            "network_sessions" => {
+                let retired: Vec<String> = serde_json::from_value(call.args["retired"].clone())
+                    .map_err(|_| "Retired session IDs are required")?;
+                Ok(json!(
+                    self.network_contexts.retire(&self.browsers, &retired)
+                ))
+            }
             "diagnostics" => {
                 let kind = call.args["kind"]
                     .as_str()
@@ -1426,8 +1456,29 @@ impl Engine {
                 if self.tabs[at].human && call.tab_id.is_some() {
                     return Err("humanControl".into());
                 }
+                if call.tab_id.is_some() && !call.args["networkSession"].is_null() {
+                    return Err("Network sessions require a new test tab".into());
+                }
+                let network = if let Some(session) = call.args["networkSession"].as_object() {
+                    let id = session
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or("Network session ID is required")?;
+                    let proxy = session
+                        .get("proxy")
+                        .and_then(Value::as_str)
+                        .ok_or("Network proxy is required")?;
+                    let context = self.network_contexts.get(
+                        id,
+                        call.client_id.as_deref().unwrap_or("stdio"),
+                        proxy,
+                    )?;
+                    Some((id.to_owned(), context))
+                } else {
+                    None
+                };
                 let tab = if call.tab_id.is_none() {
-                    self.open()?
+                    self.open_network(network)?
                         .as_str()
                         .ok_or("the tab could not be created")?
                         .to_owned()
@@ -2040,8 +2091,13 @@ fn main() {
         }
     };
     let browsers = browser_lifecycle::Browsers::default();
-    let Some(first) = Surfacing::open("tab-1".to_string(), VIEWPORT, downloads, browsers.clone())
-    else {
+    let Some(first) = Surfacing::open(
+        "tab-1".to_string(),
+        VIEWPORT,
+        downloads,
+        browsers.clone(),
+        None,
+    ) else {
         eprintln!("the first tab could not be created");
         drop(cdp);
         shutdown();
@@ -2070,6 +2126,7 @@ fn main() {
         next_snapshot: 0,
         inbox: inbox.clone(),
         navigations: Vec::new(),
+        network_contexts: network_contexts::Contexts::default(),
     };
 
     eprintln!("engine ready");
