@@ -6,22 +6,39 @@ import { Browser, waitForDisplay } from "../tools/human-pointer.js";
 import { assert, cli, Runtime, serve, sleep, temporary, wait } from "./harness.js";
 
 async function click(browser: Browser, label: string) {
-  const box = await browser.evaluate(`(() => {
+  let previous: number[] | null = null;
+  const box = await wait(async () => {
+    const current = await browser.evaluate(`(() => {
     const button = Array.from(document.querySelectorAll('button')).find(button => (button.getAttribute('aria-label') || button.textContent.trim()) === ${JSON.stringify(label)} && button.getBoundingClientRect().width > 0);
     if (!button) return null;
     const r = button.getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2];
   })()`);
-  assert(box, `Visible button is missing: ${label}`);
+    const before = previous;
+    const stable =
+      current &&
+      before &&
+      current.every((value: number, index: number) => Math.abs(value - before[index]) < 0.5);
+    previous = current;
+    return stable ? current : null;
+  });
   await browser.mouse("mousePressed", box[0], box[1], 1);
   await browser.mouse("mouseReleased", box[0], box[1]);
 }
 
 async function item(browser: Browser, label: string) {
-  const point = await wait(() =>
-    browser.evaluate(
+  let previous: number[] | null = null;
+  const point = await wait(async () => {
+    const current = await browser.evaluate(
       `(() => {const node=Array.from(document.querySelectorAll('[role=menuitem]')).find(node=>node.textContent.trim()===${JSON.stringify(label)});if(!node)return null;const r=node.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];})()`,
-    ),
-  );
+    );
+    const before = previous;
+    const stable =
+      current &&
+      before &&
+      current.every((value: number, index: number) => Math.abs(value - before[index]) < 0.5);
+    previous = current;
+    return stable ? current : null;
+  });
   await browser.mouse("mousePressed", point[0], point[1], 1);
   await browser.mouse("mouseReleased", point[0], point[1]);
 }
@@ -45,13 +62,21 @@ async function containedMenu(browser: Browser, label: string) {
 
 export async function run(engine: string, host: string, args: Record<string, any>) {
   assert(host && args.chrome, "--host-binary and --chrome are required");
-  const server = serve(
-    () =>
-      new Response(
-        "<!doctype html><title>A page with a long address</title><h1>Mobile browser</h1>",
-        { headers: { "Content-Type": "text/html" } },
-      ),
-  );
+  let tapped = false;
+  const wasTapped = () => tapped;
+  let mobileRequested = false;
+  const server = serve((request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/tap") {
+      tapped = url.searchParams.get("trusted") === "true";
+      return new Response("ok");
+    }
+    mobileRequested = request.headers.get("user-agent")?.includes("Mobile") ?? false;
+    return new Response(
+      `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>A page with a long address</title><style>body{margin:0;font:18px system-ui;background:#f5f5f5;color:#222}main{padding:24px}button{padding:14px;font:inherit}</style><main><h1>${mobileRequested ? "Mobile browser" : "Desktop browser"}</h1><p>A page sized for this display.</p><button onclick="fetch('/tap?trusted='+event.isTrusted)">Mobile action</button></main>`,
+      { headers: { "Content-Type": "text/html" } },
+    );
+  });
   try {
     await temporary(async (root) => {
       const graphicsEngine = filePath.join(root, "graphics-engine");
@@ -69,24 +94,91 @@ export async function run(engine: string, host: string, args: Record<string, any
         });
         await browser.open(runtime.url);
         await waitForDisplay(browser);
+        await browser.call("Emulation.setTouchEmulationEnabled", { enabled: true });
         const output = process.env.REMOTE_BROWSER_MOBILE_SCREENSHOTS;
         for (const width of [320, 390]) {
           await browser.call("Emulation.setDeviceMetricsOverride", {
             width,
             height: 844,
-            deviceScaleFactor: 1,
+            deviceScaleFactor: 3,
             mobile: true,
+            screenWidth: width,
+            screenHeight: 844,
           });
-          await sleep(250);
+          await waitForDisplay(browser);
+          await browser.evaluate(
+            `fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profileId:"default",op:"reload",tabId:${JSON.stringify(tab)},args:{displayId:document.querySelector("[data-display-id]").dataset.displayId}})}).then(r=>{if(!r.ok)throw Error("Reload failed");return r.json()})`,
+          );
+          assert(!mobileRequested, "Resizing must preserve the profile browser identity");
+          const reservation = await runtime.client.call("browser_tabs", {
+            action: "reserve",
+            tabId: tab,
+            agentName: "Mobile verifier",
+            task: "Read the fixture's device metrics",
+          });
+          let geometry;
+          let button;
+          try {
+            geometry = (
+              await runtime.client.call("browser_evaluate", {
+                leaseId: reservation.leaseId,
+                function:
+                  "() => ({width:innerWidth,height:innerHeight,screenWidth:screen.width,screenHeight:screen.height,ratio:devicePixelRatio,mobile:navigator.userAgentData.mobile,touch:navigator.maxTouchPoints>0})",
+              })
+            ).value;
+            button = (
+              await runtime.client.call("browser_evaluate", {
+                leaseId: reservation.leaseId,
+                function:
+                  "() => {const r=document.querySelector('button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};}",
+              })
+            ).value;
+          } finally {
+            await runtime.client.call("browser_tabs", {
+              action: "release",
+              leaseId: reservation.leaseId,
+            });
+          }
+          const display = await waitForDisplay(browser);
+          assert.deepEqual(geometry, {
+            width,
+            height: display.height,
+            screenWidth: width,
+            screenHeight: 844,
+            ratio: 2,
+            mobile: false,
+            touch: true,
+          });
+          const backing = await browser.evaluate(
+            "({width:document.querySelector('canvas').width,height:document.querySelector('canvas').height})",
+          );
+          assert.equal(
+            backing.width,
+            width * 2,
+            "Live rendering bounds phone density without changing its CSS width",
+          );
+          await wait(() =>
+            browser.evaluate("!document.querySelector('[aria-label=\"Page address\"]').disabled"),
+          );
+          tapped = false;
+          await browser.call("Input.dispatchTouchEvent", {
+            type: "touchStart",
+            touchPoints: [{ x: display.left + button.x, y: display.top + button.y }],
+          });
+          await browser.call("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await wait(wasTapped);
           const layout = await browser.evaluate(`(() => {
             const r = element => {const b=element.getBoundingClientRect();return {label:element.getAttribute('aria-label'),left:b.left,right:b.right,width:b.width,height:b.height};};
-            return {viewport:innerWidth, document:document.documentElement.scrollWidth, toolbar:r(document.querySelector('[aria-label="Browser toolbar"]')), address:r(document.querySelector('[aria-label="Page address"]')), tabs:r(document.querySelector('[role=tablist]')), controls:Array.from(document.querySelectorAll('[aria-label="Browser toolbar"] button')).map(r).filter(b=>b.width>0)};
+            return {viewport:innerWidth, document:document.documentElement.scrollWidth, toolbar:r(document.querySelector('[aria-label="Browser toolbar"]')), address:r(document.querySelector('[aria-label="Page address"]')), tabs:r(document.querySelector('[role=tablist]')), controls:Array.from(document.querySelectorAll('[aria-label="Browser toolbar"] button')).map(r).filter(b=>b.width>0),divider:getComputedStyle(document.querySelector('.input-group__prefix')).borderInlineEndWidth,background:getComputedStyle(document.documentElement).backgroundColor,chrome:getComputedStyle(document.querySelector('[aria-label="Browser toolbar"]').parentElement).backgroundColor,dotMargin:getComputedStyle(document.querySelector('[role=status][aria-label]')).marginInlineEnd};
           })()`);
           assert.equal(
             layout.tabs.width,
             0,
             "The desktop strip must be absent during mobile navigation",
           );
+          assert.equal(layout.divider, "0px");
+          assert.equal(layout.dotMargin, "9px");
+          assert.equal(layout.background, layout.chrome);
           assert(
             layout.address.width >= 120,
             `The address needs usable space on a narrow screen: ${JSON.stringify(layout)}`,
@@ -97,6 +189,12 @@ export async function run(engine: string, host: string, args: Record<string, any
             `Mobile toolbar controls have touch targets of at least 44 pixels: ${JSON.stringify(layout.controls)}`,
           );
           assert(layout.document <= layout.viewport, "The toolbar must not overflow the viewport");
+          for (const label of ["Back", "Forward"]) {
+            assert(
+              !layout.controls.some((box: any) => box.label === label),
+              `${label} belongs in the mobile menu`,
+            );
+          }
           assert(
             layout.controls.every((box: any) => box.left >= 0 && box.right <= layout.viewport),
             "Every visible toolbar control must fit inside the screen",
@@ -111,6 +209,25 @@ export async function run(engine: string, host: string, args: Record<string, any
             );
           }
         }
+        await click(browser, "More options");
+        await item(browser, "Back");
+        await wait(() =>
+          browser.evaluate(
+            `document.querySelector('[aria-label="Page address"]').value === 'about:blank'`,
+          ),
+        );
+        await click(browser, "More options");
+        await wait(() =>
+          browser.evaluate(
+            `Array.from(document.querySelectorAll('[role=menuitem]')).some(node=>node.textContent.trim()==='Forward'&&node.getAttribute('aria-disabled')!=='true')`,
+          ),
+        );
+        await item(browser, "Forward");
+        await wait(() =>
+          browser.evaluate(
+            `document.querySelector('[aria-label="Page address"]').value.includes('long-address')`,
+          ),
+        );
         await click(browser, "More options");
         const menu = await wait(() =>
           browser.evaluate(
@@ -267,7 +384,12 @@ export async function run(engine: string, host: string, args: Record<string, any
           deviceScaleFactor: 1,
           mobile: false,
         });
+        await browser.call("Emulation.setTouchEmulationEnabled", { enabled: false });
         await waitForDisplay(browser);
+        await browser.evaluate(
+          `fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profileId:"default",op:"reload",tabId:${JSON.stringify(tab)},args:{displayId:document.querySelector("[data-display-id]").dataset.displayId}})}).then(r=>{if(!r.ok)throw Error("Reload failed");return r.json()})`,
+        );
+        assert(!mobileRequested, "Returning to a desktop must restore desktop website requests");
         const address = await browser.evaluate(
           "(() => {const r=document.querySelector('form[aria-label=\"Open a website\"]').getBoundingClientRect();return {center:r.left+r.width/2,viewport:innerWidth/2};})()",
         );

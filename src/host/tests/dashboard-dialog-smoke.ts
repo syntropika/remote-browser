@@ -92,7 +92,9 @@ export async function run(engine: string, host: string, args: Record<string, any
         );
         assert.equal(results[0], typed);
         await wait(() => browser.evaluate("document.querySelector('[role=dialog]') === null"));
-        await runtime.dashboard.action("input", tab, { kind: "click", x: 100, y: 50 });
+        await browser.evaluate(
+          `fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profileId:"default",op:"input",tabId:${JSON.stringify(tab)},args:{kind:"click",x:100,y:50,displayId:document.querySelector("[data-display-id]").dataset.displayId}})}).then(r=>{if(!r.ok)throw Error("Input failed");return r.json()})`,
+        );
         await wait(pending, (value) => value === "Initial value");
         await browser.call("Input.dispatchKeyEvent", {
           type: "keyDown",

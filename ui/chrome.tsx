@@ -10,6 +10,7 @@ import { MobileTabs } from "./tabs.js";
 type Props = {
   tab: Tab | undefined;
   interactive: boolean;
+  controls: boolean;
   profiles: Profile[];
   profileId: string;
   recording: boolean;
@@ -35,7 +36,10 @@ const healthNames: Record<Health["state"], string> = {
 };
 
 /** Who is holding this tab right now. */
-function holder(tab: Tab | undefined): "agent" | "you" | "free" {
+function holder(tab: Tab | undefined, controls: boolean): "agent" | "you" | "other" | "free" {
+  if (tab?.displayController && !controls) {
+    return "other";
+  }
   if (tab?.reservation && tab.owner !== "human") {
     return "agent";
   }
@@ -45,6 +49,7 @@ function holder(tab: Tab | undefined): "agent" | "you" | "free" {
 export function Chrome({
   tab,
   interactive,
+  controls,
   profiles,
   profileId,
   recording,
@@ -71,15 +76,17 @@ export function Chrome({
   }, [url]);
 
   const profileName = profiles.find((profile) => profile.id === profileId)?.name || "Sessions";
-  const holding = holder(tab);
+  const holding = holder(tab, controls);
   const working = tab?.reservation && holding === "agent" ? tab.reservation : null;
   const availability = tab?.uncertain
     ? "This tab needs an engine restart"
-    : working
-      ? `In use by ${working.agentName}: ${working.task}`
-      : holding === "you"
-        ? "You control this tab"
-        : "Free to use · the hand asks for control";
+    : holding === "other"
+      ? "Viewing this tab · another screen controls it"
+      : working
+        ? `In use by ${working.agentName}: ${working.task}`
+        : holding === "you"
+          ? "You control this tab"
+          : "Free to use · the hand asks for control";
   const remaining =
     health?.secondsRemaining === null || health?.secondsRemaining === undefined
       ? ""
@@ -186,7 +193,7 @@ export function Chrome({
                 <Tooltip.Trigger>
                   <span
                     aria-label={availability}
-                    className={`mx-1 block size-2 rounded-full ${working ? "bg-danger" : "bg-success"}`}
+                    className={`ms-1 me-[9px] block size-2 shrink-0 rounded-full ${working ? "bg-danger" : "bg-success"}`}
                     role="status"
                   />
                 </Tooltip.Trigger>
@@ -291,6 +298,7 @@ export function Chrome({
             <Tooltip.Content>Extensions</Tooltip.Content>
           </Tooltip>
           <BrowserMenu
+            controls={controls}
             profiles={profiles}
             profileId={profileId}
             tab={tab}

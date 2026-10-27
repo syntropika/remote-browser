@@ -25,6 +25,8 @@ const local = [
   "release",
   "shutdown",
   "surface",
+  "display-control",
+  "page-editor",
   "label-activation",
   "user-activation",
   "webgl",
@@ -35,6 +37,8 @@ const optional = [
   "dashboard-pointer",
   "dashboard-dialog",
   "dashboard-mobile",
+  "dashboard-editor",
+  "dashboard-viewers",
 ];
 const { values } = parseArgs({
   options: {
@@ -56,7 +60,15 @@ if (values.list) {
     : [
         ...local,
         ...(values["real-store"] ? ["extension-install", "extension-management"] : []),
-        ...(values.chrome ? ["dashboard-pointer", "dashboard-dialog", "dashboard-mobile"] : []),
+        ...(values.chrome
+          ? [
+              "dashboard-pointer",
+              "dashboard-dialog",
+              "dashboard-mobile",
+              "dashboard-editor",
+              "dashboard-viewers",
+            ]
+          : []),
       ];
   const engine = values["engine-binary"] || process.env.REMOTE_BROWSER_ENGINE_BINARY;
   const host = values["host-binary"] || process.env.REMOTE_BROWSER_HOST_BINARY;
@@ -82,6 +94,8 @@ if (values.list) {
     "dashboard-pointer",
     "dashboard-dialog",
     "dashboard-mobile",
+    "dashboard-editor",
+    "dashboard-viewers",
   ]);
   if (suites.some((suite) => hostSuites.has(suite)) && !host) {
     throw new Error("Pass --host-binary or REMOTE_BROWSER_HOST_BINARY for host suites");

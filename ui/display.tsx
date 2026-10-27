@@ -1,11 +1,13 @@
 /** The page itself: frames the engine paints, and the input a person sends back. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
-import { action, failure } from "./api.js";
+import { action, displayId, failure } from "./api.js";
 import { background } from "./async-boundary.js";
-import { Icon } from "./icons.js";
+import { displayScale } from "./display-session.js";
 import type { Frame } from "./model.js";
 import { readFrame } from "./model.js";
+import { PageEditors } from "./page-editors.js";
+import type { PageRequest } from "./page-editors.js";
 import { count, record } from "./wire.js";
 
 /** How long the engine may hold a frame request while it waits for the page to move. */
@@ -24,6 +26,8 @@ type Props = {
   tabId: string;
   /** Whether input reaches the page. A tab an agent holds only shows its frames. */
   interactive: boolean;
+  controls: boolean;
+  visible: boolean;
   epoch: number;
   onNotice: (message: string) => void;
   onReady: (ready: boolean) => void;
@@ -53,6 +57,8 @@ export function Display({
   profileId,
   tabId,
   interactive,
+  controls,
+  visible,
   epoch,
   onNotice,
   onReady,
@@ -74,22 +80,38 @@ export function Display({
   const pointerKind = useRef("mouse");
   const live = useRef({ profileId, tabId, interactive });
   live.current = { profileId, tabId, interactive };
-  // What the device keyboard has typed so far, which only a touch device uses.
-  const [draft, setDraft] = useState("");
-  const typed = useRef("");
 
-  /** Operations keep the order they were made in, and a failure does not break the chain. */
-  const enqueue = useCallback(
-    (op: string, args: Record<string, unknown>) => {
+  /** Input keeps its event order, including field focus, edits, blur and the next focus. */
+  const request: PageRequest = useCallback(
+    (op, args, receive) => {
       const { profileId: profile, tabId: tab } = live.current;
-      queue.current = queue.current
+      const task = queue.current
         .catch(() => undefined)
-        .then(() => action(op, args, tab, profile))
-        .catch((cause: unknown) => {
-          onNotice(failure(cause).message);
+        .then(async () => {
+          if (
+            op.startsWith("editor_") &&
+            (live.current.tabId !== tab ||
+              live.current.profileId !== profile ||
+              !live.current.interactive)
+          ) {
+            throw new Error("The page no longer has input control");
+          }
+          const reply = await action(op, typeof args === "function" ? args() : args, tab, profile);
+          receive?.(reply);
+          return reply;
         });
+      queue.current = task.catch((cause: unknown) => {
+        onNotice(failure(cause).message);
+      });
+      return task;
     },
     [onNotice],
+  );
+  const enqueue = useCallback(
+    (op: string, args: Record<string, unknown>) => {
+      background(request(op, args), () => undefined);
+    },
+    [request],
   );
 
   const point = useCallback((event: { clientX: number; clientY: number }): Point => {
@@ -108,7 +130,7 @@ export function Display({
   // Frames. The engine holds each request until the page moves, so a change reaches the
   // display as soon as it is painted, and an unchanged page costs one reply.
   useEffect(() => {
-    if (!tabId) {
+    if (!tabId || !visible) {
       return;
     }
     let watching = true;
@@ -128,16 +150,22 @@ export function Display({
       }
       // A frame that covers the surface carries its size; a patch lands where it moved.
       // Assigning a size clears the canvas, so it is only assigned when it changes.
-      const resized = target.width !== frame.width || target.height !== frame.height;
-      if (frame.x === 0 && frame.y === 0) {
+      const resized = target.width !== frame.surfaceWidth || target.height !== frame.surfaceHeight;
+      if (
+        frame.x === 0 &&
+        frame.y === 0 &&
+        frame.width === frame.surfaceWidth &&
+        frame.height === frame.surfaceHeight
+      ) {
         // A full frame is the engine telling the display how big its surface is, which is how
         // a session switch corrects what the previous engine was painting.
-        surface.current = { width: frame.width, height: frame.height };
+        surface.current = { width: frame.viewWidth, height: frame.viewHeight };
         sized.current = true;
+        target.style.aspectRatio = `${frame.viewWidth} / ${frame.viewHeight}`;
         if (resized) {
-          target.width = frame.width;
-          target.height = frame.height;
-          onSurface(`${frame.width} × ${frame.height}`);
+          target.width = frame.surfaceWidth;
+          target.height = frame.surfaceHeight;
+          onSurface(`${frame.surfaceWidth} × ${frame.surfaceHeight}`);
         }
       }
       target.getContext("2d")?.drawImage(image, frame.x, frame.y);
@@ -190,17 +218,21 @@ export function Display({
     return () => {
       watching = false;
     };
-  }, [tabId, profileId, epoch, onNotice, onReady, onSurface]);
+  }, [tabId, profileId, epoch, visible, onNotice, onReady, onSurface]);
 
   // The engine renders the surface the chrome leaves for the page, so a wide window shows
   // a wide page rather than a small one stretched to fit.
   useEffect(() => {
     const box = viewport.current;
-    if (!box || !tabId) {
+    if (!box || !tabId || !controls || !visible) {
       return;
     }
     let timer = 0;
     let settled = true;
+    let watching = true;
+    let previous = "";
+    const pointer = window.matchMedia("(pointer: coarse)");
+    const hover = window.matchMedia("(hover: none)");
     const apply = async () => {
       const rect = box.getBoundingClientRect();
       const width = Math.round(rect.width);
@@ -208,16 +240,26 @@ export function Display({
       if (width < 320 || height < 240) {
         return;
       }
-      if (
-        Math.abs(width - surface.current.width) < 2 &&
-        Math.abs(height - surface.current.height) < 2
-      ) {
+      const metrics = {
+        width,
+        height,
+        screenWidth: window.screen.width,
+        screenHeight: window.screen.height,
+        deviceScaleFactor: displayScale(width, height, window.devicePixelRatio),
+        mobile: pointer.matches && hover.matches,
+      };
+      const measured = JSON.stringify(metrics);
+      if (!watching || measured === previous) {
         return;
       }
       settled = false;
       sized.current = false;
       try {
-        const applied = record(await action("resize", { width, height }, tabId, profileId));
+        const applied = record(await action("resize", metrics, tabId, profileId));
+        if (!watching) {
+          return;
+        }
+        previous = measured;
         surface.current = {
           width: count(applied.width, width),
           height: count(applied.height, height),
@@ -227,7 +269,9 @@ export function Display({
         // display asks again from the beginning.
         seq.current = 0;
       } catch (cause) {
-        onNotice(failure(cause).message);
+        if (watching) {
+          onNotice(failure(cause).message);
+        }
       } finally {
         settled = true;
       }
@@ -244,17 +288,26 @@ export function Display({
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(box);
+    window.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    pointer.addEventListener("change", schedule);
+    hover.addEventListener("change", schedule);
     schedule();
     return () => {
       observer.disconnect();
+      watching = false;
       window.clearTimeout(timer);
+      window.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      pointer.removeEventListener("change", schedule);
+      hover.removeEventListener("change", schedule);
     };
-  }, [tabId, profileId, onNotice]);
+  }, [tabId, profileId, epoch, controls, visible, onNotice]);
 
   // Wheel and touch listeners are registered here because a page scrolled with the wheel
   // must not also scroll the dashboard, and React's own listeners cannot prevent that.
   useEffect(() => {
-    const target = canvas.current;
+    const target = viewport.current;
     if (!target) {
       return;
     }
@@ -274,6 +327,13 @@ export function Display({
       touch.current = first ? { x: first.clientX, y: first.clientY } : null;
     };
     const move = (event: TouchEvent) => {
+      if (
+        event.target === document.activeElement &&
+        event.target instanceof Element &&
+        event.target.matches("[data-page-editor]")
+      ) {
+        return;
+      }
       const first = event.touches[0];
       if (!touch.current || !first || !live.current.interactive) {
         return;
@@ -392,7 +452,7 @@ export function Display({
     }
     canvas.current?.focus({ preventScroll: true });
     if (!interactive) {
-      onNotice("Wait for the page, or take control if this tab is reserved.");
+      onNotice("Wait for the page, or take control to interact from this screen.");
       return;
     }
     if (!sized.current) {
@@ -456,36 +516,19 @@ export function Display({
     enqueue("input", { kind: "key", key: event.key, ...modifiers(event) });
   };
 
-  /** A device keyboard replaces its whole value, so the difference is sent as keys. */
-  const compose = (value: string) => {
-    setDraft(value);
-    const previous = typed.current;
-    let shared = 0;
-    while (
-      shared < previous.length &&
-      shared < value.length &&
-      previous[shared] === value[shared]
-    ) {
-      shared++;
-    }
-    for (let removed = previous.length - shared; removed > 0; removed--) {
-      enqueue("input", { kind: "key", key: "Backspace" });
-    }
-    const added = value.slice(shared);
-    if (added) {
-      enqueue("input", { kind: "text", text: added });
-    }
-    typed.current = value;
-  };
-
   return (
-    <div className="bg-page relative flex size-full overflow-hidden" ref={viewport}>
+    <div
+      className="bg-page relative flex size-full items-start justify-center overflow-hidden"
+      data-display-id={displayId}
+      ref={viewport}
+    >
       <canvas
         aria-label="Browser page"
         // A frame keeps the size it was painted at: stretched to its box it would scale
         // the page for as long as a new surface takes to arrive, which reads as the page
         // changing resolution.
-        className="block max-w-none flex-none touch-none self-start bg-white outline-none"
+        className="block max-h-full max-w-full flex-none touch-none self-start bg-white outline-none"
+        style={{ width: "auto", height: "auto", objectFit: "contain" }}
         height={768}
         onClick={onClick}
         onKeyDown={onKeyDown}
@@ -504,37 +547,19 @@ export function Display({
         tabIndex={0}
         width={1024}
       />
-      {/* A canvas cannot open a device keyboard, so a touch device types through this
-          field, which only coarse pointers see. */}
-      <form
-        aria-label="Type in the page"
-        className="border-line bg-chrome absolute inset-x-0 bottom-0 z-10 hidden items-center gap-2 border-t p-2 [@media(pointer:coarse)]:flex"
-        onSubmit={(event) => {
-          event.preventDefault();
-          enqueue("input", { kind: "key", key: "Enter" });
-          setDraft("");
-          typed.current = "";
-        }}
-      >
-        <input
-          aria-label="Type in the page"
-          autoCapitalize="none"
-          autoComplete="off"
-          className="border-line-strong bg-page h-10 min-w-0 flex-1 rounded-full border px-4 text-base"
-          disabled={!interactive}
-          onChange={(event) => compose(event.target.value)}
-          placeholder="Type in the browser…"
-          spellCheck={false}
-          value={draft}
+      {/* Each controlling page owns its editors; changing tabs unmounts pending drafts. */}
+      {interactive && visible && (
+        <PageEditors
+          key={`${profileId}:${tabId}`}
+          enabled
+          profileId={profileId}
+          tabId={tabId}
+          canvas={canvas}
+          viewport={viewport}
+          surface={surface}
+          request={request}
         />
-        <button
-          aria-label="Send Enter"
-          className="bg-raised grid size-10 flex-shrink-0 place-items-center rounded-full"
-          type="submit"
-        >
-          <Icon name="enter" />
-        </button>
-      </form>
+      )}
     </div>
   );
 }

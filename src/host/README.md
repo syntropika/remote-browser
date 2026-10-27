@@ -261,9 +261,43 @@ is in memory and is discarded when its tab or engine closes.
 Snapshots cover the main document with basic HTML and ARIA labels; they are not a
 complete accessibility tree and do not traverse iframe or shadow-root contents.
 The React dashboard paints engine frames onto a canvas and resizes the engine surface to
-match the available display. Frame sequence numbers allow unchanged replies and partial
+match the available display. It sends CSS viewport dimensions, screen dimensions, pixel
+density, and whether the primary input is touch without hover. Each tab keeps independent
+metrics; a new tab initially inherits the selected tab's size. Mobile mode enables Chromium's
+mobile viewport and touch capabilities. User agents and client hints remain native to the
+profile across display changes. Sites choosing variants exclusively from the user agent
+may therefore retain their desktop variant.
+
+One dashboard screen controls each tab's size and input. Other screens show the same image,
+scaled without cropping, until the person chooses **Ask for control**. Taking control also
+revokes any agent reservation. Viewing an agent's tab cannot resize it or release its lease.
+Hidden screens stop requesting frames and retain their controller identity; leaving the tab
+or closing the dashboard releases display control. Abandoned visible viewers expire after
+15 seconds, independently of agent reservations, which never expire automatically.
+The internal dashboard action API attaches a per-page `displayId` to human operations.
+The `display` action reports presence (`visible`) or departure (`leave`); once a controller
+exists, other display IDs and anonymous human mutations are refused until explicit takeover.
+
+Live rendering caps density at two and targets at most two million backing pixels, with
+a minimum density of one. Explicit native metrics remain bounded by a factor of four and
+32 million pixels. Viewers requesting the same painted rectangle share its PNG encoding.
+Frame metadata separates backing pixels from CSS coordinates so input still lands correctly
+on high-density displays. The engine disables the
+`AutomationControlled` Blink feature by default while retaining its private CDP connection.
+Frame sequence numbers allow unchanged replies and partial
 PNG updates. Mouse, keyboard, wheel and touch input use the host action API. Touch devices
-have a page keyboard field. The dashboard opens onto its page unless the optional Access
+edit text fields through a transparent local control aligned with the page field. The device
+provides its keyboard and text menus while the engine paints the page's original styling,
+text, caret and selection. Text, search, password, number and multiline fields are
+supported, including `contenteditable`/`plaintext-only` hosts, open shadow roots and
+same-origin frames. Native range edits preserve surrounding rich-text markup; inherited
+editable descendants share their host's editor. The password field's key button enables
+the mobile keyboard's saved-password options on request. Credential selection belongs
+to the device; the dashboard cannot open its picker directly or automatically match the
+remote site's domain. Cross-origin frames, closed shadow roots, custom canvas editors
+and fields longer than 4,096 UTF-16 units currently use the native
+page surface. Field editing requires control of the tab and is invalidated by navigation.
+The dashboard opens onto its page unless the optional Access
 extension requires sign-in.
 Mouse and pen input uses an ordered action queue, and leaving the display ends hover.
 Moves queued behind a slower action collapse into the latest position. Only the pointer

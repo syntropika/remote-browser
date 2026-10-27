@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BrowserLogin } from "./access.js";
 import type { Tone } from "./alert.js";
 import { Alert } from "./alert.js";
-import { action, api, failure, whenUnauthorized } from "./api.js";
+import { action, api, displayId, failure, whenUnauthorized } from "./api.js";
 import { asyncHandler, background } from "./async-boundary.js";
 import { Chrome } from "./chrome.js";
 import {
@@ -14,6 +14,7 @@ import {
   NewProfileDialog,
   WebsiteDialog,
 } from "./dialogs.js";
+import { useDisplaySession } from "./display-session.js";
 import { Display } from "./display.js";
 import { ExtensionInstalls } from "./extensions.js";
 import { FilesPanel } from "./files.js";
@@ -57,8 +58,6 @@ export function App() {
   live.current = { profileId, tabId, profiles, tabs };
 
   const tab = tabs.find((candidate) => candidate.id === tabId);
-  const pageDialog = editable(tab) ? tab?.jsDialog : null;
-  const interactive = editable(tab) && ready && !pageDialog;
 
   const report = useCallback((cause: unknown) => {
     setNote({ tone: "danger", text: failure(cause).message });
@@ -76,6 +75,14 @@ export function App() {
   const warn = useCallback((message: string) => {
     setNote({ tone: "warning", text: message });
   }, []);
+
+  const display = useDisplaySession(profileId, tabId, warn);
+  const controls =
+    editable(tab) &&
+    display.controls &&
+    (!tab?.displayController || tab.displayController === displayId);
+  const pageDialog = controls && editable(tab) ? tab?.jsDialog : null;
+  const interactive = controls && editable(tab) && ready && !pageDialog;
 
   /** Nothing to sign in to: without this browser's own address there is simply no way in. */
   const showClosed = useCallback(() => {
@@ -464,14 +471,14 @@ export function App() {
   }, [tab?.filePicker, panel, dialog]);
 
   if (phase === "loading") {
-    return <main className="bg-page h-dvh" />;
+    return <main className="bg-chrome h-dvh" />;
   }
   if (phase === "closed") {
     return <BrowserLogin onSignedIn={connect} />;
   }
 
   return (
-    <main className="bg-page relative flex h-dvh flex-col overflow-hidden">
+    <main className="bg-chrome relative flex h-dvh flex-col overflow-hidden pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
       <div className="flex min-h-0 flex-1 flex-col" inert={panel !== "" || undefined}>
         <TabStrip
           onClose={closeTab}
@@ -481,6 +488,7 @@ export function App() {
           tabs={tabs}
         />
         <Chrome
+          controls={controls}
           health={health}
           healthNote={healthNote}
           interactive={interactive}
@@ -507,6 +515,8 @@ export function App() {
           className="bg-page relative min-h-0 flex-1 overflow-hidden"
         >
           <Display
+            controls={controls}
+            visible={display.visible}
             epoch={epoch}
             interactive={interactive}
             onNotice={warn}

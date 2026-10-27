@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { cli, withEngine, serve, assert, deadline } from "./harness.js";
+import { cli, withEngine, serve, assert, deadline, wait } from "./harness.js";
 
 export async function run(binary: string) {
   let release!: () => void;
@@ -17,7 +17,7 @@ export async function run(binary: string) {
       await pending;
     }
     return new Response(
-      "<!doctype html><style>body{background:#204080}</style><title>Live viewport</title>",
+      '<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{background:#204080}</style><title>Live viewport</title>',
       { headers: { "Content-Type": "text/html" } },
     );
   });
@@ -59,6 +59,115 @@ export async function run(binary: string) {
       assert(!(await engine.call("status")).uncertain);
       assert.equal(await engine.call("evaluate", tab, { script: "return 42;" }), 42);
       release();
+      await engine.call(
+        "resize",
+        tab,
+        {
+          width: 390,
+          height: 720,
+          screenWidth: 390,
+          screenHeight: 844,
+          deviceScaleFactor: 3,
+          mobile: true,
+        },
+        { human: true },
+      );
+      const phone = await engine.call("evaluate", tab, {
+        script:
+          "return {width:innerWidth,height:innerHeight,screenWidth:screen.width,screenHeight:screen.height,ratio:devicePixelRatio,webdriver:navigator.webdriver,mobile:navigator.userAgentData.mobile,touch:navigator.maxTouchPoints > 0};",
+      });
+      assert.deepEqual(phone, {
+        width: 390,
+        height: 720,
+        screenWidth: 390,
+        screenHeight: 844,
+        ratio: 3,
+        webdriver: false,
+        mobile: false,
+        touch: true,
+      });
+      const phoneFrame = await wait(
+        () => engine.call("screenshot", tab, { since: 0 }, { human: true }),
+        (frame) => frame.surfaceWidth === 1170 && frame.surfaceHeight === 2160,
+      );
+      const phonePng = Buffer.from(phoneFrame.image, "base64");
+      assert.deepEqual([phonePng.readUInt32BE(16), phonePng.readUInt32BE(20)], [1170, 2160]);
+      assert.deepEqual([phoneFrame.viewWidth, phoneFrame.viewHeight], [390, 720]);
+      assert.deepEqual([phoneFrame.surfaceWidth, phoneFrame.surfaceHeight], [1170, 2160]);
+      await engine.call("evaluate", tab, {
+        script: "document.body.style.height='10000px'; return true;",
+      });
+      const oversized = await engine.call(
+        "agent_screenshot",
+        tab,
+        {},
+        { human: true, error: true },
+      );
+      assert.match(oversized, /Full-page capture exceeds/u);
+      await engine.call("evaluate", tab, { script: "document.body.style.height=''; return true;" });
+      const opened = await engine.call("open", null, {}, { human: true });
+      await engine.call("navigate", opened, { url: server.origin });
+      assert.equal(
+        await engine.call("evaluate", opened, {
+          script:
+            "return !navigator.userAgent.includes('Mobile') && !navigator.userAgentData.mobile && devicePixelRatio === 3;",
+        }),
+        true,
+      );
+      await engine.call(
+        "resize",
+        tab,
+        {
+          width: 844,
+          height: 292,
+          screenWidth: 844,
+          screenHeight: 390,
+          deviceScaleFactor: 3,
+          mobile: true,
+        },
+        { human: true },
+      );
+      assert.deepEqual(
+        await engine.call("evaluate", tab, {
+          script:
+            "return {width:innerWidth,height:innerHeight,screenWidth:screen.width,screenHeight:screen.height,angle:screen.orientation.angle,mobile:navigator.userAgentData.mobile};",
+        }),
+        { width: 844, height: 292, screenWidth: 844, screenHeight: 390, angle: 90, mobile: false },
+      );
+      await engine.call(
+        "resize",
+        tab,
+        {
+          width: 1280,
+          height: 800,
+          screenWidth: 1440,
+          screenHeight: 900,
+          deviceScaleFactor: 1,
+          mobile: false,
+        },
+        { human: true },
+      );
+      for (const target of [tab]) {
+        const desktop = await engine.call("evaluate", target, {
+          script:
+            "return {width:innerWidth,screenWidth:screen.width,ratio:devicePixelRatio,mobile:navigator.userAgentData.mobile,touch:navigator.maxTouchPoints};",
+        });
+        assert.deepEqual(desktop, {
+          width: 1280,
+          screenWidth: 1440,
+          ratio: 1,
+          mobile: false,
+          touch: 0,
+        });
+      }
+      assert.deepEqual(
+        await engine.call("evaluate", opened, {
+          script:
+            "return {width:innerWidth,ratio:devicePixelRatio,touch:navigator.maxTouchPoints>0};",
+        }),
+        { width: 390, ratio: 3, touch: true },
+        "A resize must leave other tabs unchanged",
+      );
     });
   } finally {
     release();

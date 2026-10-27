@@ -32,6 +32,7 @@ export type Tab = {
   owner: "human" | "agent";
   busy: boolean;
   uncertain: boolean;
+  displayController: string | null;
 };
 
 export type Policy = {
@@ -55,6 +56,10 @@ export type Frame = {
   y: number;
   width: number;
   height: number;
+  surfaceWidth: number;
+  surfaceHeight: number;
+  viewWidth: number;
+  viewHeight: number;
   image: string;
 };
 
@@ -107,6 +112,7 @@ export function readTab(value: unknown): Tab {
     owner: tab.owner === "human" ? "human" : "agent",
     busy: flag(tab.busy),
     uncertain: flag(tab.uncertain),
+    displayController: optionalText(tab.displayController),
   };
 }
 
@@ -149,6 +155,10 @@ export function readFrame(value: unknown): Frame | null {
     y: count(frame.y),
     width: count(frame.width),
     height: count(frame.height),
+    surfaceWidth: count(frame.surfaceWidth, count(frame.width)),
+    surfaceHeight: count(frame.surfaceHeight, count(frame.height)),
+    viewWidth: count(frame.viewWidth, count(frame.width)),
+    viewHeight: count(frame.viewHeight, count(frame.height)),
     image,
   };
 }

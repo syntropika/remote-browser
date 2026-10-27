@@ -96,18 +96,18 @@ struct CompletionGuard {
     request_id: u64,
     sent: bool,
     operation: String,
-    /// Reading the browser leaves it as it was, so an unfinished read says nothing about
-    /// the tab. Only an action with an unknown outcome makes a tab's state uncertain.
-    observation: bool,
+    /// Reads and idempotent viewer presence do not leave page actions unfinished.
+    cancellation_safe: bool,
     reason: &'static str,
 }
 
-/// The operations that only read. A display asking for frames is the common case: it has
-/// a request in flight at all times, and the page it is watching closes with one open.
-fn observation(op: &str) -> bool {
+/// Reads and display presence may be abandoned when a dashboard closes. Presence only
+/// updates viewer metadata; each subsequent action checks the current controller again.
+fn cancellation_safe(op: &str) -> bool {
     matches!(
         op,
-        "status"
+        "display"
+            | "status"
             | "validate_lease"
             | "agent_text"
             | "agent_wait"
@@ -117,6 +117,7 @@ fn observation(op: &str) -> bool {
             | "extension_installs"
             | "tabs"
             | "screenshot"
+            | "editor_fields"
             | "snapshot"
             | "health"
             | "files"
@@ -139,8 +140,8 @@ impl Drop for CompletionGuard {
                         self.tab.as_deref(),
                     );
                 }
-            } else if self.observation {
-                // Nothing changed, so nothing about the tab is unknown.
+            } else if self.cancellation_safe {
+                // No page action was left with an unknown outcome.
             } else if let Some(tab) = &self.tab {
                 if self.state.unknown.lock().unwrap().insert(tab.clone()) {
                     diagnostic(
@@ -406,7 +407,7 @@ impl NativeClient {
             request_id: id,
             sent: false,
             operation: op.into(),
-            observation: observation(op),
+            cancellation_safe: cancellation_safe(op),
             reason: "request_cancelled",
         };
         let bytes = serde_json::to_vec(
@@ -616,6 +617,69 @@ for await (const line of createInterface({input:process.stdin})) {
                 .await,
             Err(Error::Uncertain)
         ));
+        assert!(
+            client
+                .request("observe", Some("tab-b"), Value::Null, false)
+                .await
+                .is_ok()
+        );
+        client.close().await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn cancelled_display_presence_does_not_block_its_tab() {
+        let fixture_lock = FIXTURE_START.lock().await;
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("browser-native-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("fixture");
+        std::fs::write(
+            &binary,
+            r#"#!/usr/bin/env bun
+import { createInterface } from 'node:readline';
+import { writeFileSync,writeSync } from 'node:fs';
+for await (const line of createInterface({input:process.stdin})) {
+ const r=JSON.parse(line);
+ if(r.op==='display') { writeFileSync(process.argv[3]+'/received','');continue; }
+ writeSync(1,JSON.stringify({id:r.id,value:{ok:true}})+'\n');
+ if(r.op==='shutdown')break;
+}
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let client = NativeClient::start(&binary, &root, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(fixture_lock);
+        let clone = client.clone();
+        let request = tokio::spawn(async move {
+            clone
+                .request(
+                    "display",
+                    Some("tab-a"),
+                    json!({"displayId":"phone","leave":true}),
+                    true,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !root.join("received").exists() {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap();
+        request.abort();
+        let _ = request.await;
+        assert!(client.state.pending.lock().unwrap().is_empty());
+        assert!(
+            client
+                .request("observe", Some("tab-a"), Value::Null, false)
+                .await
+                .is_ok(),
+            "Cancelled display presence must not quarantine its tab"
+        );
         assert!(
             client
                 .request("observe", Some("tab-b"), Value::Null, false)
