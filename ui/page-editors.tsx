@@ -122,6 +122,8 @@ function FieldEditor({ field, box, request }: { field: Field; box: Box; request:
   const close = () => {
     active.current = false;
     setFocused(false);
+    setUseCredentials(false);
+    credentialMode.current = false;
     control.current?.blur();
   };
   const apply = (reply: unknown, version: number) => {
@@ -313,7 +315,11 @@ function FieldEditor({ field, box, request }: { field: Field; box: Box; request:
       background(request("editor_blur", { reference: field.reference }), () => undefined);
     },
     onSelect: () => selectionChanged.current(),
-    onChange: (event: React.ChangeEvent<TextControl>) => update(event.currentTarget),
+    onChange: (event: React.ChangeEvent<TextControl>) => {
+      if (active.current) {
+        update(event.currentTarget);
+      }
+    },
     onCompositionStart: () => {
       composing.current = true;
     },
