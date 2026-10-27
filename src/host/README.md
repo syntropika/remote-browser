@@ -286,10 +286,16 @@ on high-density displays. The engine disables the
 `AutomationControlled` Blink feature by default while retaining its private CDP connection.
 Frame sequence numbers allow unchanged replies and partial
 PNG updates. Mouse, keyboard, wheel and touch input use the host action API. Touch devices
-edit text fields through a local editor aligned with the page field, using Remote Browser's
-styling and the device keyboard. Text, search, password, number and multiline fields are
-supported, including open shadow roots and same-origin frames. Cross-origin frames,
-contenteditable editors and fields longer than 4,096 UTF-16 units currently use the native
+edit text fields through a transparent local control aligned with the page field. The device
+provides its keyboard and text menus while the engine paints the page's original styling,
+text, caret and selection. Text, search, password, number and multiline fields are
+supported, including `contenteditable`/`plaintext-only` hosts, open shadow roots and
+same-origin frames. Native range edits preserve surrounding rich-text markup; inherited
+editable descendants share their host's editor. The password field's key button enables
+the mobile keyboard's saved-password options on request. Credential selection belongs
+to the device; the dashboard cannot open its picker directly or automatically match the
+remote site's domain. Cross-origin frames, closed shadow roots, custom canvas editors
+and fields longer than 4,096 UTF-16 units currently use the native
 page surface. Field editing requires control of the tab and is invalidated by navigation.
 The dashboard opens onto its page unless the optional Access
 extension requires sign-in.

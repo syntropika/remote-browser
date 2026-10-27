@@ -8,7 +8,8 @@
     "jsx": "react-jsx",
     "skipLibCheck": true,
     "types": ["bun"],
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true
   },
   "include": [
     "ui/**/*.ts",
@@ -18,6 +19,7 @@
     "src/host/tools/**/*.ts",
     "src/engine/cef/*.ts",
     "test/**/*.ts",
-    "src/host/code/**/*.ts"
+    "src/host/code/**/*.ts",
+    "src/engine/src/editor.js"
   ]
 }

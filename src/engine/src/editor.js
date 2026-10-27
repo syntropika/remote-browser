@@ -1,6 +1,10 @@
 /** Private, tab-scoped field handles for the controlling human display. */
-/** @typedef {HTMLInputElement | HTMLTextAreaElement} TextControl */
-/** @param {number} prefix - Document generation. */
+import rich from "./contenteditable.js";
+
+/** @typedef {HTMLElement} TextControl */
+/**
+ * @param {number} prefix - Document generation.
+ */
 ((prefix) => {
   /** @type {WeakMap<TextControl, string>} */
   const ids = new WeakMap();
@@ -10,27 +14,32 @@
   /** @type {TextControl | null} */
   let active = null;
   const types = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
+  /** @param {Element | null | undefined} element - Candidate native field.
+   * @returns {element is HTMLInputElement | HTMLTextAreaElement} Whether this has native text selection. */
+  const nativeControl = (element) => {
+    const view = element?.ownerDocument.defaultView;
+    return !!(
+      view &&
+      (element instanceof view.HTMLInputElement || element instanceof view.HTMLTextAreaElement)
+    );
+  };
   /** @param {Element | null | undefined} element - Candidate page field.
    * @returns {element is TextControl} Whether the field can be edited. */
   const editable = (element) => {
-    if (!element?.isConnected || !["INPUT", "TEXTAREA"].includes(element.tagName)) {
+    if (!element?.isConnected) {
       return false;
     }
-    const view = element.ownerDocument.defaultView;
-    if (
-      !view ||
-      !(element instanceof view.HTMLInputElement || element instanceof view.HTMLTextAreaElement)
-    ) {
-      return false;
+    if (nativeControl(element)) {
+      return (
+        !element.disabled &&
+        !element.readOnly &&
+        (element.tagName === "TEXTAREA" || types.has(element.type))
+      );
     }
-    return (
-      !element.disabled &&
-      !element.readOnly &&
-      (element.tagName === "TEXTAREA" || types.has(element.type))
-    );
+    return rich.accepts(element);
   };
   /** @param {TextControl} element - Candidate page field. */
-  const value = (element) => element.value;
+  const value = (element) => (nativeControl(element) ? element.value : rich.value(element));
   /** @param {TextControl} element - Candidate page field. */
   const identity = (element) => {
     const known = ids.get(element);
@@ -83,11 +92,14 @@
     };
   };
   /** @param {TextControl} element - Candidate page field. */
-  const state = (element) => ({
-    value: value(element),
-    start: element.selectionStart ?? value(element).length,
-    end: element.selectionEnd ?? value(element).length,
-  });
+  const state = (element) =>
+    nativeControl(element)
+      ? {
+          value: value(element),
+          start: element.selectionStart ?? value(element).length,
+          end: element.selectionEnd ?? value(element).length,
+        }
+      : rich.state(element);
   /** @param {string} reference - Opaque field handle. */
   const target = (reference) => {
     const element = elements.get(reference);
@@ -118,7 +130,7 @@
     scan() {
       /** @type {Map<string, TextControl>} */
       const found = new Map();
-      /** @type {Array<{reference:string,x:number,y:number,width:number,height:number,value:string,type:string,inputMode:string,enterKeyHint:string,label:string,maxLength:number}>} */
+      /** @type {Array<{reference:string,x:number,y:number,width:number,height:number,value:string,type:string,inputMode:string,enterKeyHint:string,label:string,maxLength:number,autocomplete:string}>} */
       const fields = [];
       let visited = 0;
       /** @param {Element} element - Candidate page field. */
@@ -163,19 +175,35 @@
         fields.push({
           reference,
           ...rect,
-          value: element.type === "password" ? "" : value(element),
-          type: element.tagName === "TEXTAREA" ? "textarea" : element.type,
+          value: nativeControl(element) && element.type === "password" ? "" : value(element),
+          type: nativeControl(element)
+            ? element.tagName === "TEXTAREA"
+              ? "textarea"
+              : element.type
+            : "contenteditable",
+          autocomplete: nativeControl(element)
+            ? element.autocomplete
+                .split(/\s+/u)
+                .find((token) =>
+                  ["username", "current-password", "new-password", "one-time-code"].includes(token),
+                ) || "off"
+            : "off",
           inputMode: element.inputMode,
           enterKeyHint:
             element.enterKeyHint ||
-            (element.type === "search" || element.name === "q" ? "search" : "enter"),
+            (nativeControl(element) && (element.type === "search" || element.name === "q")
+              ? "search"
+              : "enter"),
           label: (
             element.getAttribute("aria-label") ||
-            element.labels?.[0]?.textContent ||
-            element.placeholder ||
+            (nativeControl(element) && (element.labels?.[0]?.textContent || element.placeholder)) ||
+            element.dataset.placeholder ||
             "Page text field"
           ).slice(0, 160),
-          maxLength: element.maxLength >= 0 ? Math.min(4096, element.maxLength) : 4096,
+          maxLength:
+            nativeControl(element) && element.maxLength >= 0
+              ? Math.min(4096, element.maxLength)
+              : 4096,
         });
       };
       /** @param {Document | ShadowRoot} root - Document or open shadow root. */
@@ -184,7 +212,11 @@
           if (++visited > 6000 || fields.length >= 48) {
             break;
           }
-          add(element);
+          try {
+            add(element);
+          } catch {
+            /* A complex or detached editor cannot hide other fields. */
+          }
           if (element.shadowRoot) {
             collect(element.shadowRoot);
           }
@@ -226,6 +258,9 @@
     /** @param {string} reference - Opaque field handle. @param {number} start - Selection start in UTF-16 units. @param {number} end - Selection end in UTF-16 units. */
     range(reference, start, end) {
       const element = focused(reference);
+      if (!nativeControl(element)) {
+        return rich.range(element, start, end);
+      }
       try {
         element.setSelectionRange(start, end);
         return true;

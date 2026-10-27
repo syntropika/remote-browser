@@ -7,8 +7,8 @@ export async function run(binary: string) {
     () =>
       new Response(
         `<!doctype html><meta charset="utf-8"><style>input,textarea{display:block;margin:12px;width:200px;height:28px}iframe{width:300px;height:100px}</style>
-    <input aria-label="Text"><input type="password" aria-label="Password" value="existing secret"><input type="number" aria-label="Number" value="12"><input readonly aria-label="Read only"><input type="hidden" aria-label="Hidden"><textarea aria-label="Multiline"></textarea><div id="shadow"></div><iframe srcdoc="<input aria-label='Framed'>"></iframe>
-    <script>window.events=[];document.addEventListener('input',event=>events.push({trusted:event.isTrusted,value:event.target.value}));document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<input aria-label="Shadow">';</script>`,
+    <input aria-label="Text"><input type="password" aria-label="Password" value="existing secret"><input type="number" aria-label="Number" value="12"><input readonly aria-label="Read only"><input type="hidden" aria-label="Hidden"><textarea aria-label="Multiline"></textarea><div contenteditable="true" aria-label="Rich text" style="width:260px;min-height:50px"><b>Hello</b> <i>world</i><span aria-label="Inherited">!</span></div><div contenteditable="plaintext-only" aria-label="Plain editable" style="width:260px;min-height:40px"></div><div contenteditable="true" aria-label="Paragraphs" style="width:260px"><p>one <b>bold</b></p><p>two</p></div><div contenteditable="false" aria-label="Not editable">Read only</div><div role="textbox" aria-label="Role only">Read only</div><div id="shadow"></div><iframe srcdoc="<input aria-label='Framed'><div contenteditable='true' aria-label='Framed rich'><b>frame</b></div>"></iframe>
+    <script>window.events=[];document.addEventListener('input',event=>events.push({trusted:event.isTrusted,value:event.target.value}));document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<input aria-label="Shadow"><div contenteditable="true" aria-label="Shadow rich"><b>shadow</b></div>';</script>`,
         { headers: { "Content-Type": "text/html; charset=utf-8" } },
       ),
   );
@@ -23,10 +23,14 @@ export async function run(binary: string) {
         engine.call(op, tab, { ...args, displayId }, { ...human, error });
       const fields = await wait(
         async () => (await call("editor_fields")).fields,
-        (all: Wire[]) => all.length === 6,
+        (all: Wire[]) =>
+          all.filter((field) => field.type === "contenteditable").length === 5 &&
+          all.some((field) => field.label === "Framed"),
       );
       const field = (label: string) => fields.find((entry: Wire) => entry.label === label);
       assert(field("Shadow") && field("Framed"));
+      assert.equal(fields.filter((entry) => entry.type === "contenteditable").length, 5);
+      assert(!field("Inherited") && !field("Not editable") && !field("Role only"));
       assert.equal(field("Password").value, "", "Bulk metadata never includes password contents");
       assert(!field("Read only") && !field("Hidden"));
       const focus = (entry: Wire) =>
@@ -56,6 +60,17 @@ export async function run(binary: string) {
         await focus(entry);
         assert.equal((await update(entry, "", label)).value, label);
       }
+      for (const [label, initialValue] of [
+        ["Framed rich", "frame"],
+        ["Shadow rich", "shadow"],
+      ]) {
+        const entry = field(label);
+        await focus(entry);
+        assert.equal(
+          (await update(entry, initialValue, `${initialValue}!`)).value,
+          `${initialValue}!`,
+        );
+      }
       const number = field("Number");
       await focus(number);
       assert.equal((await update(number, "12", "123")).value, "123");
@@ -66,6 +81,38 @@ export async function run(binary: string) {
       assert.equal(
         (await call("editor_key", { reference: multiline.reference, key: "Enter" })).value,
         "first\n",
+      );
+      const rich = field("Rich text");
+      await focus(rich);
+      assert.equal((await update(rich, "Hello world!", "Hello café 😀!")).value, "Hello café 😀!");
+      assert.deepEqual(
+        await call("evaluate", {
+          script: `const e=document.querySelector('[aria-label="Rich text"]');return {bold:e.querySelector("b").textContent,italic:e.querySelector("i").textContent,inherited:e.querySelector("span").isContentEditable};`,
+        }),
+        { bold: "Hello", italic: "café 😀", inherited: true },
+      );
+      assert.equal((await update(rich, "Hello café 😀!", "Hello café!")).value, "Hello café!");
+      const plain = field("Plain editable");
+      await focus(plain);
+      await update(plain, "", "first");
+      const enter = await call("editor_key", { reference: plain.reference, key: "Enter" });
+      assert.equal(enter.value, "first\n");
+      assert.equal((await update(plain, "first\n", "first\nsecond")).value, "first\nsecond");
+      const paragraphs = field("Paragraphs");
+      await focus(paragraphs);
+      assert.equal(
+        (await update(paragraphs, "one bold\ntwo", "one bold\nthree 😀")).value,
+        "one bold\nthree 😀",
+      );
+      assert.equal(
+        await call("evaluate", {
+          script: `return document.querySelector('[aria-label="Paragraphs"] b').textContent;`,
+        }),
+        "bold",
+      );
+      assert.equal(
+        (await update(paragraphs, "one bold\nthree 😀", "one bold three 😀")).value,
+        "one bold three 😀",
       );
       const events = await call("evaluate", { script: "return events;" });
       assert(events.length >= 7 && events.every((event: Wire) => event.trusted));

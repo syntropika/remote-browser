@@ -12,6 +12,21 @@ pub(super) struct Editor {
 }
 
 impl Engine {
+    /// Await the renderer's editing key before reading the resulting field value.
+    fn editor_edit_key(
+        &mut self,
+        at: usize,
+        key: &str,
+        code: &str,
+        virtual_key: u32,
+        modifiers: u32,
+    ) -> Result<(), String> {
+        for kind in ["keyDown", "keyUp"] {
+            self.protocol(at, "Input.dispatchKeyEvent", json!({"type":kind,"key":key,"code":code,"windowsVirtualKeyCode":virtual_key,"modifiers":modifiers}))?;
+        }
+        Ok(())
+    }
+
     fn editor_call(
         &mut self,
         at: usize,
@@ -25,8 +40,18 @@ impl Engine {
             .is_none_or(|editor| editor.page != page)
         {
             let generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
-            let expression =
-                include_str!("editor.js").replace("EDITOR_GENERATION", &format!("{generation}"));
+            let expression = include_str!("editor.js")
+                .replace("EDITOR_GENERATION", &format!("{generation}"))
+                .replace(
+                    "import rich from \"./contenteditable.js\";",
+                    &format!(
+                        "const rich = {};",
+                        include_str!("contenteditable.js")
+                            .replacen("export default", "", 1)
+                            .trim()
+                            .trim_end_matches(';')
+                    ),
+                );
             let result = self.protocol(
                 at,
                 "Runtime.evaluate",
@@ -157,10 +182,16 @@ impl Engine {
                             .as_bool()
                             == Some(true);
                         if !ranged {
-                            self.input(at, &json!({"kind":"key","key":"a","ctrl":!cfg!(target_os = "macos"),"meta":cfg!(target_os = "macos")}))?;
+                            self.editor_edit_key(
+                                at,
+                                "a",
+                                "KeyA",
+                                65,
+                                if cfg!(target_os = "macos") { 4 } else { 2 },
+                            )?;
                         }
                         if (ranged && text.is_empty()) || (!ranged && desired.is_empty()) {
-                            self.input(at, &json!({"kind":"key","key":"Delete"}))?;
+                            self.editor_edit_key(at, "Delete", "Delete", 46, 0)?;
                         } else {
                             self.protocol(
                                 at,

@@ -10,8 +10,34 @@ export async function run(engine: string, host: string, args: Record<string, any
   let value = "";
   let trusted = false;
   let submitted = false;
+  let richValue = "";
+  let richHTML = "";
+  let passwordValue = "";
+  let richTrusted = false;
+  let remoteSelection = "";
   const server = serve(async (request) => {
     const url = new URL(request.url);
+    if (url.pathname === "/selection") {
+      remoteSelection = await request.text();
+      return new Response("ok");
+    }
+    if (url.pathname === "/rich-input") {
+      const event = await request.json();
+      richValue = event.value;
+      richHTML = event.html;
+      richTrusted = event.trusted;
+      return new Response("ok");
+    }
+    if (url.pathname === "/password-input") {
+      passwordValue = (await request.json()).value;
+      return new Response("ok");
+    }
+    if (url.pathname === "/rich") {
+      return new Response(
+        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>[contenteditable],input{position:absolute;left:24px;top:84px;width:330px;height:48px;box-sizing:border-box}input{top:170px}</style><div contenteditable="true" aria-label="Rich editor" oninput="fetch('/rich-input',{method:'POST',body:JSON.stringify({value:this.textContent,html:this.innerHTML,trusted:event.isTrusted})})"><strong>Rich</strong> <em>text</em></div><script>document.addEventListener("selectionchange",()=>fetch("/selection",{method:"POST",body:getSelection().toString()}))</script><input type="password" autocomplete="section-remote current-password" aria-label="Password" oninput="fetch('/password-input',{method:'POST',body:JSON.stringify({value:this.value})})">`,
+        { headers: { "Content-Type": "text/html; charset=utf-8" } },
+      );
+    }
     if (url.pathname === "/input") {
       const event = await request.json();
       ({ value, trusted } = event);
@@ -107,6 +133,109 @@ export async function run(engine: string, host: string, args: Record<string, any
           windowsVirtualKeyCode: 13,
         });
         await wait(() => submitted);
+        const displayId = await browser.evaluate(
+          'document.querySelector("[data-display-id]").dataset.displayId',
+        );
+        await runtime.dashboard.action("navigate", tab, {
+          url: `${server.origin}/rich`,
+          displayId,
+        });
+        await waitForDisplay(browser);
+        const tap = async (label: string) => {
+          const location = await wait(() =>
+            browser.evaluate(
+              `(()=>{const e=[...document.querySelectorAll('[data-page-editor]')].find(e=>e.getAttribute('aria-label')===${JSON.stringify(label)});const r=e?.getBoundingClientRect();return r?{x:r.x+r.width/2,y:r.y+r.height/2}:null;})()`,
+            ),
+          );
+          await browser.call("Input.dispatchTouchEvent", {
+            type: "touchStart",
+            touchPoints: [location],
+          });
+          await browser.call("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await wait(() =>
+            browser.evaluate(
+              `document.activeElement?.getAttribute('aria-label')===${JSON.stringify(label)}`,
+            ),
+          );
+        };
+        await tap("Rich editor");
+        await browser.evaluate("document.activeElement.setSelectionRange(9,9)");
+        await browser.call("Input.insertText", { text: " café 😀" });
+        await wait(
+          () => richValue,
+          (v) => v === "Rich text café 😀",
+        );
+        assert(
+          richTrusted &&
+            richHTML.includes("<strong>Rich</strong>") &&
+            richHTML.includes("<em>text"),
+          "Native rich editing preserves formatting",
+        );
+        if (output) {
+          await Bun.write(
+            `${output}/rich-mobile.png`,
+            Buffer.from(
+              (await browser.call("Page.captureScreenshot", { format: "png" })).data,
+              "base64",
+            ),
+          );
+        }
+        await wait(
+          () => browser.evaluate("document.activeElement.value"),
+          (v) => v === "Rich text café 😀",
+        );
+        assert.deepEqual(
+          await browser.evaluate(
+            "(()=>{const s=getComputedStyle(document.activeElement);return {background:s.backgroundColor,text:s.color,caret:s.caretColor};})()",
+          ),
+          { background: "rgba(0, 0, 0, 0)", text: "rgba(0, 0, 0, 0)", caret: "rgba(0, 0, 0, 0)" },
+        );
+        await browser.evaluate("document.activeElement.setSelectionRange(0,4)");
+        await wait(
+          () => remoteSelection,
+          (v) => v === "Rich",
+        );
+        const caretPoint = await browser.evaluate(
+          "(()=>{const r=document.activeElement.getBoundingClientRect();return {x:r.x+2,y:r.y+8};})()",
+        );
+        await browser.call("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [caretPoint],
+        });
+        await browser.call("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await browser.call("Input.insertText", { text: "X" });
+        await wait(
+          () => richValue,
+          (v) => v === "X text café 😀",
+        );
+        await tap("Password");
+        assert.equal(
+          await browser.evaluate("document.activeElement.autocomplete"),
+          "off",
+          "Saved credentials are enabled only by an explicit request",
+        );
+        const key = await browser.evaluate(
+          `(()=>{const r=document.querySelector('[aria-label="Use saved passwords"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
+        );
+        await browser.call("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [key] });
+        await browser.call("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await wait(() =>
+          browser.evaluate('document.activeElement.autocomplete==="current-password"'),
+        );
+        await browser.call("Input.insertText", { text: "test-only secret" });
+        await wait(
+          () => passwordValue,
+          (v) => v === "test-only secret",
+        );
+        if (output) {
+          await Bun.write(
+            `${output}/password-mobile.png`,
+            Buffer.from(
+              (await browser.call("Page.captureScreenshot", { format: "png" })).data,
+              "base64",
+            ),
+          );
+        }
         await browser.call("Emulation.clearDeviceMetricsOverride");
         await browser.call("Emulation.setTouchEmulationEnabled", { enabled: false });
         await waitForDisplay(browser);
@@ -133,7 +262,7 @@ export async function run(engine: string, host: string, args: Record<string, any
     await server.stop();
   }
   console.log(
-    "PASS: one-tap field editor, trusted Unicode input and search submission without a bottom bar",
+    "PASS: transparent touch editors, native selection/replacement, Unicode/IME, rich text and explicit password options",
   );
 }
 if (import.meta.main) {
