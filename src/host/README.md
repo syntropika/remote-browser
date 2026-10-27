@@ -286,7 +286,12 @@ on high-density displays. The engine disables the
 `AutomationControlled` Blink feature by default while retaining its private CDP connection.
 Frame sequence numbers allow unchanged replies and partial
 PNG updates. Mouse, keyboard, wheel and touch input use the host action API. Touch devices
-have a page keyboard field. The dashboard opens onto its page unless the optional Access
+edit text fields through a local editor aligned with the page field, using Remote Browser's
+styling and the device keyboard. Text, search, password, number and multiline fields are
+supported, including open shadow roots and same-origin frames. Cross-origin frames,
+contenteditable editors and fields longer than 4,096 UTF-16 units currently use the native
+page surface. Field editing requires control of the tab and is invalidated by navigation.
+The dashboard opens onto its page unless the optional Access
 extension requires sign-in.
 Mouse and pen input uses an ordered action queue, and leaving the display ends hover.
 Moves queued behind a slower action collapse into the latest position. Only the pointer

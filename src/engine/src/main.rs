@@ -12,6 +12,7 @@ mod agent_actions;
 mod browser_lifecycle;
 mod cdp;
 mod display;
+mod editor;
 mod extension_installs;
 mod extensions;
 mod operations;
@@ -489,6 +490,7 @@ struct Surfacing {
     shared: Arc<Shared>,
     /// The last snapshot's elements; a reference names one of them.
     held: Option<Held>,
+    editor: Option<editor::Editor>,
     /// Set while the page is waiting for files, which it asked for with a file dialog.
     picker: Rc<RefCell<Option<FileDialogCallback>>>,
     dialog: Rc<RefCell<Option<agent_actions::PendingDialog>>>,
@@ -548,6 +550,7 @@ impl Surfacing {
             browser,
             shared,
             held: None,
+            editor: None,
             picker,
             dialog,
             human: false,
@@ -1231,6 +1234,11 @@ impl Engine {
                 | "choose_files"
                 | "return"
                 | "clipboard_cut"
+                | "editor_fields"
+                | "editor_focus"
+                | "editor_update"
+                | "editor_key"
+                | "editor_blur"
         );
         if (acts || call.op == "release")
             && !matches!(call.op.as_str(), "agent_dialog" | "js_dialog")
@@ -1270,6 +1278,9 @@ impl Engine {
             }
         }
 
+        if let Some(result) = self.editor_action(at, call) {
+            return result;
+        }
         if let Some(result) = self.agent_action(at, call) {
             return result;
         }

@@ -1,12 +1,13 @@
 /** The page itself: frames the engine paints, and the input a person sends back. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { action, displayId, failure } from "./api.js";
 import { background } from "./async-boundary.js";
 import { displayScale } from "./display-session.js";
-import { Icon } from "./icons.js";
 import type { Frame } from "./model.js";
 import { readFrame } from "./model.js";
+import { PageEditors } from "./page-editors.js";
+import type { PageRequest } from "./page-editors.js";
 import { count, record } from "./wire.js";
 
 /** How long the engine may hold a frame request while it waits for the page to move. */
@@ -79,22 +80,38 @@ export function Display({
   const pointerKind = useRef("mouse");
   const live = useRef({ profileId, tabId, interactive });
   live.current = { profileId, tabId, interactive };
-  // What the device keyboard has typed so far, which only a touch device uses.
-  const [draft, setDraft] = useState("");
-  const typed = useRef("");
 
-  /** Operations keep the order they were made in, and a failure does not break the chain. */
-  const enqueue = useCallback(
-    (op: string, args: Record<string, unknown>) => {
+  /** Input keeps its event order, including field focus, edits, blur and the next focus. */
+  const request: PageRequest = useCallback(
+    (op, args, receive) => {
       const { profileId: profile, tabId: tab } = live.current;
-      queue.current = queue.current
+      const task = queue.current
         .catch(() => undefined)
-        .then(() => action(op, args, tab, profile))
-        .catch((cause: unknown) => {
-          onNotice(failure(cause).message);
+        .then(async () => {
+          if (
+            op.startsWith("editor_") &&
+            (live.current.tabId !== tab ||
+              live.current.profileId !== profile ||
+              !live.current.interactive)
+          ) {
+            throw new Error("The page no longer has input control");
+          }
+          const reply = await action(op, typeof args === "function" ? args() : args, tab, profile);
+          receive?.(reply);
+          return reply;
         });
+      queue.current = task.catch((cause: unknown) => {
+        onNotice(failure(cause).message);
+      });
+      return task;
     },
     [onNotice],
+  );
+  const enqueue = useCallback(
+    (op: string, args: Record<string, unknown>) => {
+      background(request(op, args), () => undefined);
+    },
+    [request],
   );
 
   const point = useCallback((event: { clientX: number; clientY: number }): Point => {
@@ -290,7 +307,7 @@ export function Display({
   // Wheel and touch listeners are registered here because a page scrolled with the wheel
   // must not also scroll the dashboard, and React's own listeners cannot prevent that.
   useEffect(() => {
-    const target = canvas.current;
+    const target = viewport.current;
     if (!target) {
       return;
     }
@@ -310,6 +327,13 @@ export function Display({
       touch.current = first ? { x: first.clientX, y: first.clientY } : null;
     };
     const move = (event: TouchEvent) => {
+      if (
+        event.target === document.activeElement &&
+        event.target instanceof Element &&
+        event.target.matches("[data-page-editor]")
+      ) {
+        return;
+      }
       const first = event.touches[0];
       if (!touch.current || !first || !live.current.interactive) {
         return;
@@ -492,28 +516,6 @@ export function Display({
     enqueue("input", { kind: "key", key: event.key, ...modifiers(event) });
   };
 
-  /** A device keyboard replaces its whole value, so the difference is sent as keys. */
-  const compose = (value: string) => {
-    setDraft(value);
-    const previous = typed.current;
-    let shared = 0;
-    while (
-      shared < previous.length &&
-      shared < value.length &&
-      previous[shared] === value[shared]
-    ) {
-      shared++;
-    }
-    for (let removed = previous.length - shared; removed > 0; removed--) {
-      enqueue("input", { kind: "key", key: "Backspace" });
-    }
-    const added = value.slice(shared);
-    if (added) {
-      enqueue("input", { kind: "text", text: added });
-    }
-    typed.current = value;
-  };
-
   return (
     <div
       className="bg-page relative flex size-full items-start justify-center overflow-hidden"
@@ -545,37 +547,19 @@ export function Display({
         tabIndex={0}
         width={1024}
       />
-      {/* A canvas cannot open a device keyboard, so a touch device types through this
-          field, which only coarse pointers see. */}
-      <form
-        aria-label="Type in the page"
-        className="border-line bg-chrome absolute inset-x-0 bottom-0 z-10 hidden items-center gap-2 border-t p-2 [@media(pointer:coarse)]:flex"
-        onSubmit={(event) => {
-          event.preventDefault();
-          enqueue("input", { kind: "key", key: "Enter" });
-          setDraft("");
-          typed.current = "";
-        }}
-      >
-        <input
-          aria-label="Type in the page"
-          autoCapitalize="none"
-          autoComplete="off"
-          className="border-line-strong bg-page h-10 min-w-0 flex-1 rounded-full border px-4 text-base"
-          disabled={!interactive}
-          onChange={(event) => compose(event.target.value)}
-          placeholder="Type in the browser…"
-          spellCheck={false}
-          value={draft}
+      {/* Each controlling page owns its editors; changing tabs unmounts pending drafts. */}
+      {interactive && visible && (
+        <PageEditors
+          key={`${profileId}:${tabId}`}
+          enabled
+          profileId={profileId}
+          tabId={tabId}
+          canvas={canvas}
+          viewport={viewport}
+          surface={surface}
+          request={request}
         />
-        <button
-          aria-label="Send Enter"
-          className="bg-raised grid size-10 flex-shrink-0 place-items-center rounded-full"
-          type="submit"
-        >
-          <Icon name="enter" />
-        </button>
-      </form>
+      )}
     </div>
   );
 }

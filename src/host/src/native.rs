@@ -117,6 +117,7 @@ fn observation(op: &str) -> bool {
             | "extension_installs"
             | "tabs"
             | "screenshot"
+            | "editor_fields"
             | "snapshot"
             | "health"
             | "files"
