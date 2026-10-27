@@ -59,6 +59,16 @@ async function main() {
     if (!platform.name.startsWith("windows-")) {
       await chmod(destination, 0o755);
     }
+    const probe = Bun.spawn([path.resolve(destination), "--version"], {
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    const version = (await new Response(probe.stdout).text()).trim();
+    const revision = process.env.REMOTE_BROWSER_BUILD_REVISION || "development";
+    if ((await probe.exited) !== 0 || !version.endsWith(`+${revision}`)) {
+      throw new Error("The packaged client must run and identify its source revision");
+    }
+    console.log(version);
   } else if (operation === "publish") {
     const commit = process.env.GITHUB_SHA || "";
     const repository = process.env.GITHUB_REPOSITORY || "";
@@ -143,7 +153,16 @@ async function main() {
         (file) => path.join(directory, file),
       ),
     ]);
-    await command(["gh", "release", "edit", tag, "--repo", repository, "--draft=false"]);
+    await command([
+      "gh",
+      "release",
+      "edit",
+      tag,
+      "--repo",
+      repository,
+      "--draft=false",
+      "--latest=false",
+    ]);
   } else {
     throw new Error("Use package <platform> or publish");
   }
