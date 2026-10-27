@@ -5,7 +5,7 @@ import { chmod, copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const platforms = [
-  { runner: "ubuntu-22.04", target: "x86_64-unknown-linux-musl", name: "linux-x64" },
+  { runner: "ubuntu-24.04", target: "x86_64-unknown-linux-musl", name: "linux-x64" },
   { runner: "ubuntu-24.04-arm", target: "aarch64-unknown-linux-musl", name: "linux-arm64" },
   { runner: "macos-15-intel", target: "x86_64-apple-darwin", name: "macos-x64" },
   { runner: "macos-15", target: "aarch64-apple-darwin", name: "macos-arm64" },
@@ -65,8 +65,11 @@ async function main() {
     });
     const version = (await new Response(probe.stdout).text()).trim();
     const revision = process.env.REMOTE_BROWSER_BUILD_REVISION || "development";
-    if ((await probe.exited) !== 0 || !version.endsWith(`+${revision}`)) {
-      throw new Error("The packaged client must run and identify its source revision");
+    const exit = await probe.exited;
+    if (exit !== 0 || !version.endsWith(`+${revision}`)) {
+      throw new Error(
+        `The packaged client must run and identify its source revision (exit ${exit}, signal ${probe.signalCode}, output ${JSON.stringify(version)})`,
+      );
     }
     console.log(version);
   } else if (operation === "publish") {
