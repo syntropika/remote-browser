@@ -1,6 +1,7 @@
 /** Tabs share the available width; a compact marker identifies each agent-held tab. */
-import { Button, Modal } from "@heroui/react";
+import { Button, Modal, Tooltip } from "@heroui/react";
 import { useState } from "react";
+import type { ComponentPropsWithRef } from "react";
 
 import { agentColour } from "./agents.js";
 import { Icon } from "./icons.js";
@@ -28,6 +29,26 @@ function tabSite(tab: Tab): string {
   }
 }
 
+function renderTabButton(props: ComponentPropsWithRef<"button">) {
+  return <button {...props} />;
+}
+
+function TabButton({
+  agentName,
+  ...props
+}: ComponentPropsWithRef<"button"> & { agentName?: string }) {
+  return agentName ? (
+    <Tooltip delay={180}>
+      <Tooltip.Trigger<"button"> {...props} render={renderTabButton} title={undefined} />
+      <Tooltip.Content className="max-w-72 break-normal break-words" placement="bottom">
+        {agentName}
+      </Tooltip.Content>
+    </Tooltip>
+  ) : (
+    <button {...props} />
+  );
+}
+
 function AgentIndicator({ name }: { name: string }) {
   return (
     <span
@@ -36,7 +57,6 @@ function AgentIndicator({ name }: { name: string }) {
       data-colour={agentColour(name)}
       role="img"
       style={{ background: "var(--agent)" }}
-      title={name}
     />
   );
 }
@@ -71,9 +91,28 @@ export function MobileTabs({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
                 {tabs.map((tab) => (
                   <div
                     className={`bg-address relative min-w-0 overflow-hidden rounded-xl border ${tab.id === tabId ? "border-foreground" : "border-line-strong"}`}
+                    data-colour={
+                      tab.reservation && tab.owner !== "human"
+                        ? agentColour(tab.reservation.agentName)
+                        : undefined
+                    }
                     key={tab.id}
+                    style={
+                      tab.reservation && tab.owner !== "human"
+                        ? {
+                            borderLeftColor: "var(--agent)",
+                            borderRightColor: "var(--agent)",
+                            borderTopColor: "var(--agent)",
+                          }
+                        : undefined
+                    }
                   >
-                    <button
+                    <TabButton
+                      agentName={
+                        tab.reservation && tab.owner !== "human"
+                          ? tab.reservation.agentName
+                          : undefined
+                      }
                       aria-current={tab.id === tabId ? "page" : undefined}
                       aria-label={`Switch to ${tabLabel(tab)}`}
                       className="focus-visible:outline-foreground flex min-h-44 w-full min-w-0 flex-col gap-3 rounded-xl p-3 text-left focus-visible:outline-2 focus-visible:-outline-offset-2"
@@ -98,7 +137,7 @@ export function MobileTabs({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
                           {tab.id === tabId ? "Current tab" : "Open tab"}
                         </span>
                       )}
-                    </button>
+                    </TabButton>
                     {tabs.length > 1 ? (
                       <Button
                         aria-label={`Close ${tabLabel(tab)}`}
@@ -143,12 +182,15 @@ export function TabStrip({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
     const held = tab.reservation && tab.owner !== "human" ? tab.reservation : null;
     return (
       <div
-        className={`group flex h-9 max-w-60 min-w-32 flex-1 items-stretch rounded-t-xl transition-colors ${
+        className={`group flex h-9 max-w-60 min-w-32 flex-1 items-stretch rounded-t-xl border border-b-0 border-transparent transition-colors ${
           selected ? "bg-chrome" : "hover:bg-strip/80"
         }`}
+        data-colour={held ? agentColour(held.agentName) : undefined}
         key={tab.id}
+        style={held ? { borderColor: "var(--agent)" } : undefined}
       >
-        <button
+        <TabButton
+          agentName={held?.agentName}
           aria-selected={selected}
           className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-t-xl pr-1 pl-3 text-[13px] font-medium ${
             selected ? "text-foreground" : "text-ink-faint"
@@ -168,7 +210,7 @@ export function TabStrip({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
             <span className="size-1.5 flex-shrink-0 animate-pulse rounded-full bg-current" />
           ) : null}
           <span className="min-w-0 flex-1 truncate">{label}</span>
-        </button>
+        </TabButton>
         {closable ? (
           <Button
             aria-label={`Close ${label}`}

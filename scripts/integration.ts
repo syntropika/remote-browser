@@ -44,6 +44,7 @@ const optional = [
   "dashboard-viewers",
   "dashboard-recovery",
   "dashboard-clipboard",
+  "dashboard-tabs",
 ];
 const { values } = parseArgs({
   options: {
@@ -76,6 +77,7 @@ if (values.list) {
               "dashboard-viewers",
               "dashboard-recovery",
               "dashboard-clipboard",
+              "dashboard-tabs",
             ]
           : []),
       ];
@@ -110,6 +112,7 @@ if (values.list) {
     "dashboard-viewers",
     "dashboard-recovery",
     "dashboard-clipboard",
+    "dashboard-tabs",
   ]);
   if (suites.some((suite) => hostSuites.has(suite)) && !host) {
     throw new Error("Pass --host-binary or REMOTE_BROWSER_HOST_BINARY for host suites");

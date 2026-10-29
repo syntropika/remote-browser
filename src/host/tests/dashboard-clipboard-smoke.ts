@@ -14,6 +14,15 @@ async function key(browser: Browser, name: string, code: string, number: number,
   }
 }
 
+async function click(browser: Browser, target: string) {
+  const [x, y] = await browser.evaluate(`(() => {
+    const r=(${target}).getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];
+  })()`);
+  await browser.mouse("mouseMoved", x, y);
+  await browser.mouse("mousePressed", x, y, 1);
+  await browser.mouse("mouseReleased", x, y);
+}
+
 export async function run(engine: string, host: string, args: Record<string, any>) {
   assert(host && args.chrome, "--host-binary and --chrome are required");
   const values: Record<string, string> = {};
@@ -123,14 +132,27 @@ export async function run(engine: string, host: string, args: Record<string, any
         await clipboard("Cancelled paste");
         await key(browser, "v", "KeyV", 86, 2);
         await wait(() => browser.evaluate("!!window.releaseClipboard"));
-        await browser.evaluate("document.querySelector('button[aria-label=\"New tab\"]').click()");
+        await click(browser, "document.querySelector('button[aria-label=\"New tab\"]')");
+        await wait(() =>
+          browser.evaluate(
+            "document.querySelector('[role=tab][aria-selected=true]')?.textContent==='New tab'",
+          ),
+        );
         await waitForDisplay(browser);
         // Returning to the same tab must not revive work queued before switching away.
-        await browser.evaluate(
-          `Array.from(document.querySelectorAll('[role=tab]')).find(node=>node.title.includes(${JSON.stringify(server.origin)})).click()`,
+        await click(
+          browser,
+          `Array.from(document.querySelectorAll('[role=tab]')).find(node=>node.title.includes(${JSON.stringify(server.origin)}))`,
+        );
+        await wait(() =>
+          browser.evaluate(
+            `document.querySelector('[role=tab][aria-selected=true]')?.title.includes(${JSON.stringify(server.origin)})`,
+          ),
         );
         await waitForDisplay(browser);
         await browser.evaluate("window.releaseClipboard()");
+        await focus(310);
+        await key(browser, "End", "End", 35);
         await key(browser, "?", "Slash", 191, 8);
         await wait(
           () => values.rich,
