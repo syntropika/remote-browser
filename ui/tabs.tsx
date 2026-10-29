@@ -40,7 +40,15 @@ function TabButton({
   return agentName ? (
     <Tooltip delay={180}>
       <Tooltip.Trigger<"button"> {...props} render={renderTabButton} title={undefined} />
-      <Tooltip.Content className="max-w-72 break-normal break-words" placement="bottom">
+      <Tooltip.Content
+        className="max-w-72 break-normal break-words"
+        crossOffset={12}
+        data-colour={agentColour(agentName)}
+        offset={4}
+        placement="bottom start"
+        shouldFlip={false}
+        style={{ background: "var(--agent)", color: "var(--color-page)" }}
+      >
         {agentName}
       </Tooltip.Content>
     </Tooltip>

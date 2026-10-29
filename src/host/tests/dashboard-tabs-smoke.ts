@@ -31,19 +31,35 @@ export async function run(engine: string, host: string, args: Record<string, any
         (text) => text === name,
         2000,
       );
+      await wait(() =>
+        browser.evaluate(`(() => {
+        const tooltip=document.querySelector('[role=tooltip]');
+        if(!tooltip)return false;
+        const style=getComputedStyle(tooltip),rect=tooltip.getBoundingClientRect();
+        return Number(style.opacity)===1 && style.visibility==='visible' && rect.width>0 && rect.height>0;
+      })()`),
+      );
       const style = await browser.evaluate(`(() => {
         const dot=document.querySelector('[role=tab] [role=img]');
         const tab=dot.closest('[role=tab]').parentElement;
         const s=getComputedStyle(tab),r=dot.getBoundingClientRect();
+        const tooltip=document.querySelector('[role=tooltip]'),t=tooltip.getBoundingClientRect();
         return {dot:getComputedStyle(dot).backgroundColor,width:r.width,height:r.height,
           colors:[s.borderLeftColor,s.borderRightColor,s.borderTopColor],
-          widths:[s.borderLeftWidth,s.borderRightWidth,s.borderTopWidth],bottom:s.borderBottomWidth};
+          widths:[s.borderLeftWidth,s.borderRightWidth,s.borderTopWidth],bottom:s.borderBottomWidth,
+          tooltipColor:getComputedStyle(tooltip).backgroundColor,placement:tooltip.dataset.placement,
+          tooltipLeft:t.left,markerLeft:r.left,tooltipTop:t.top,
+          tabBottom:dot.closest('[role=tab]').getBoundingClientRect().bottom};
       })()`);
       assert.equal(style.width, 8);
       assert.equal(style.height, 8);
       assert.deepEqual(style.colors, [style.dot, style.dot, style.dot]);
       assert.deepEqual(style.widths, ["1px", "1px", "1px"]);
       assert.equal(style.bottom, "0px");
+      assert.equal(style.tooltipColor, style.dot);
+      assert.equal(style.placement, "bottom");
+      assert(Math.abs(style.tooltipLeft - style.markerLeft) <= 1);
+      assert(Math.abs(style.tooltipTop - style.tabBottom - 4) <= 1);
       await browser.mouse("mousePressed", x, y, 1);
       await browser.mouse("mouseReleased", x, y);
       await wait(() =>
