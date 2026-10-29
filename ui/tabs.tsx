@@ -1,9 +1,8 @@
-/** The tab strip. Tabs share the width they have, as a browser's do, and the tabs an
- *  agent is working on are drawn together under its name. */
+/** Tabs share the available width; a compact marker identifies each agent-held tab. */
 import { Button, Modal } from "@heroui/react";
 import { useState } from "react";
 
-import { agentColour, groupByAgent } from "./agents.js";
+import { agentColour } from "./agents.js";
 import { Icon } from "./icons.js";
 import type { Tab } from "./model.js";
 
@@ -27,6 +26,19 @@ function tabSite(tab: Tab): string {
   } catch {
     return "New tab";
   }
+}
+
+function AgentIndicator({ name }: { name: string }) {
+  return (
+    <span
+      aria-label={`Agent: ${name}`}
+      className="inline-block size-2 shrink-0 rounded-full"
+      data-colour={agentColour(name)}
+      role="img"
+      style={{ background: "var(--agent)" }}
+      title={name}
+    />
+  );
 }
 
 /** The mobile browser leaves its current page only when the person opens the tab overview. */
@@ -78,8 +90,8 @@ export function MobileTabs({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
                         {tabSite(tab)}
                       </span>
                       {tab.reservation && tab.owner !== "human" ? (
-                        <span className="text-ink-faint w-full truncate text-xs">
-                          {tab.reservation.agentName}
+                        <span className="flex h-4 items-center">
+                          <AgentIndicator name={tab.reservation.agentName} />
                         </span>
                       ) : (
                         <span className="text-ink-faint w-full truncate text-xs">
@@ -150,7 +162,9 @@ export function TabStrip({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
             .join("\n")}
           type="button"
         >
-          {tab.busy ? (
+          {held ? (
+            <AgentIndicator name={held.agentName} />
+          ) : tab.busy ? (
             <span className="size-1.5 flex-shrink-0 animate-pulse rounded-full bg-current" />
           ) : null}
           <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -183,38 +197,7 @@ export function TabStrip({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
           className="flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto overflow-y-hidden"
           role="tablist"
         >
-          {groupByAgent(tabs).map((group) =>
-            group.agent === null ? (
-              group.tabs.map(face)
-            ) : (
-              <div
-                className="flex shrink-0 items-stretch gap-0.5 rounded-t-2xl px-1.5"
-                data-colour={agentColour(group.agent)}
-                key={`${group.agent}-${group.tabs[0]?.id}`}
-                style={{
-                  background: "color-mix(in srgb, var(--agent) 13%, transparent)",
-                  boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--agent) 38%, transparent)",
-                }}
-              >
-                <span
-                  className="flex max-w-40 min-w-0 items-center gap-1.5 self-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                  style={{
-                    background: "color-mix(in srgb, var(--agent) 20%, transparent)",
-                    color: "var(--agent)",
-                  }}
-                  title={`${group.agent} is working here: ${group.task}`}
-                >
-                  <span
-                    aria-hidden="true"
-                    className="size-1.5 flex-shrink-0 animate-pulse rounded-full"
-                    style={{ background: "var(--agent)" }}
-                  />
-                  <span className="truncate">{group.agent}</span>
-                </span>
-                {group.tabs.map(face)}
-              </div>
-            ),
-          )}
+          {tabs.map(face)}
         </div>
         <Button
           aria-label="New tab"

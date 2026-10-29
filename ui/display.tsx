@@ -35,7 +35,6 @@ type Props = {
   onShortcut: (event: KeyboardEvent) => boolean;
   /** The size the engine is painting, which the settings panel reports. */
   onSurface: (size: string) => void;
-  onPaste: (text: string) => void;
 };
 
 function pause(milliseconds: number): Promise<void> {
@@ -65,7 +64,6 @@ export function Display({
   onReady,
   onShortcut,
   onSurface,
-  onPaste,
 }: Props) {
   const viewport = useRef<HTMLDivElement | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
@@ -79,28 +77,19 @@ export function Display({
   const pendingMove = useRef<Point | null>(null);
   const touch = useRef<Point | null>(null);
   const pointerKind = useRef("mouse");
-  const live = useRef({ profileId, tabId, interactive });
-  live.current = { profileId, tabId, interactive };
+  const live = useRef({ profileId, tabId, interactive, epoch });
+  if (
+    live.current.profileId !== profileId ||
+    live.current.tabId !== tabId ||
+    live.current.interactive !== interactive ||
+    live.current.epoch !== epoch
+  ) {
+    live.current = { profileId, tabId, interactive, epoch };
+  }
 
-  /** Input keeps its event order, including field focus, edits, blur and the next focus. */
-  const request: PageRequest = useCallback(
-    (op, args, receive) => {
-      const { profileId: profile, tabId: tab } = live.current;
-      const task = queue.current
-        .catch(() => undefined)
-        .then(async () => {
-          if (
-            op.startsWith("editor_") &&
-            (live.current.tabId !== tab ||
-              live.current.profileId !== profile ||
-              !live.current.interactive)
-          ) {
-            throw new Error("The page no longer has input control");
-          }
-          const reply = await action(op, typeof args === "function" ? args() : args, tab, profile);
-          receive?.(reply);
-          return reply;
-        });
+  const serial = useCallback(
+    (work: () => Promise<unknown>) => {
+      const task = queue.current.catch(() => undefined).then(work);
       queue.current = task.catch((cause: unknown) => {
         onNotice(failure(cause).message);
       });
@@ -108,12 +97,53 @@ export function Display({
     },
     [onNotice],
   );
+
+  /** Input keeps its event order, including field focus, edits, blur and the next focus. */
+  const request: PageRequest = useCallback(
+    (op, args, receive) => {
+      const { profileId: profile, tabId: tab } = live.current;
+      return serial(async () => {
+        if (
+          op.startsWith("editor_") &&
+          (live.current.tabId !== tab ||
+            live.current.profileId !== profile ||
+            !live.current.interactive)
+        ) {
+          throw new Error("The page no longer has input control");
+        }
+        const reply = await action(op, typeof args === "function" ? args() : args, tab, profile);
+        receive?.(reply);
+        return reply;
+      });
+    },
+    [serial],
+  );
   const enqueue = useCallback(
     (op: string, args: Record<string, unknown>) => {
       background(request(op, args), () => undefined);
     },
     [request],
   );
+
+  const paste = (text: string) => {
+    const target = live.current;
+    if (!text || !target.interactive) {
+      return;
+    }
+    background(
+      serial(async () => {
+        if (live.current !== target) {
+          return;
+        }
+        // Focus, clipboard transfer and later typing share the same input queue.
+        await action("clipboard_write", { text }, target.tabId, target.profileId);
+        if (live.current === target) {
+          await action("clipboard_paste", {}, target.tabId, target.profileId);
+        }
+      }),
+      () => undefined,
+    );
+  };
 
   const point = useCallback((event: { clientX: number; clientY: number }): Point => {
     const box = canvas.current?.getBoundingClientRect();
@@ -510,6 +540,14 @@ export function Display({
     if (onShortcut(event.nativeEvent)) {
       return;
     }
+    // Let the device supply its clipboard through the native paste event.
+    if (
+      !event.altKey &&
+      (((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") ||
+        (event.shiftKey && !event.ctrlKey && !event.metaKey && event.key === "Insert"))
+    ) {
+      return;
+    }
     event.preventDefault();
     if (!interactive) {
       return;
@@ -536,7 +574,7 @@ export function Display({
         onPaste={(event) => {
           event.preventDefault();
           if (interactive) {
-            onPaste(event.clipboardData.getData("text/plain"));
+            paste(event.clipboardData.getData("text/plain"));
           }
         }}
         onPointerCancel={onPointerCancel}

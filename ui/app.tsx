@@ -457,17 +457,6 @@ export function App() {
     [guard],
   );
 
-  const paste = useCallback(
-    (value: string) =>
-      guard(async () => {
-        const profile = live.current.profileId;
-        const target = live.current.tabId;
-        await action("clipboard_write", { text: value }, target, profile);
-        await action("clipboard_paste", {}, target, profile);
-      })(),
-    [guard],
-  );
-
   // A page asking for files opens the panel, as a file dialog would.
   useEffect(() => {
     if (tab?.filePicker && !panel && !dialog) {
@@ -525,7 +514,6 @@ export function App() {
             epoch={epoch}
             interactive={interactive}
             onNotice={warn}
-            onPaste={paste}
             onReady={setReady}
             onShortcut={shortcut}
             onSurface={setSurface}
