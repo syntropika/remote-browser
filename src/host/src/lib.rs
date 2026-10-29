@@ -25,7 +25,9 @@ pub mod reservations;
 pub enum Error {
     #[error("{0}")]
     Invalid(String),
-    #[error("Browser completion is unknown. Restart the MCP server before further actions")]
+    #[error(
+        "Browser completion is unknown. Take control of this tab or restart its browser session before further actions"
+    )]
     Uncertain,
     #[error("The human has control. Resume automation from the host application when finished")]
     HumanControl,

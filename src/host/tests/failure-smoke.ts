@@ -42,7 +42,7 @@ export async function run(engine: string, host: string) {
         );
         assert.equal(
           result.content[0].text,
-          "Browser completion is unknown. Restart the MCP server before further actions",
+          "Browser completion is unknown. Take control of this tab or restart its browser session before further actions",
         );
         const { tabs } = await client.call("browser_tabs", {
           action: "list",
@@ -70,6 +70,21 @@ export async function run(engine: string, host: string) {
         assert.equal(event.traceId, result._meta.traceId);
         assert(records().every((e) => e.timestamp && e.level));
         assert(!JSON.stringify(records()).includes(server.origin));
+        await runtime.dashboard.action("view", failed);
+        await runtime.dashboard.action("screenshot", failed, { since: 0 });
+        await runtime.dashboard.action("take", failed, { displayId: "recovery-screen" });
+        const recovered = (await runtime.dashboard.action("tabs")).find(
+          (tab: any) => tab.id === failed,
+        );
+        assert.equal(recovered.owner, "human");
+        assert.equal(recovered.uncertain, false);
+        assert.equal(recovered.reservation, null);
+        await client.call("browser_snapshot", { leaseId: failedLease }, true);
+        await runtime.dashboard.action("close", failed, { displayId: "recovery-screen" });
+        assert(!(await runtime.dashboard.action("tabs")).some((tab: any) => tab.id === failed));
+        const closing = await reservePage(client);
+        await runtime.dashboard.action("close", closing.tabId);
+        await client.call("browser_snapshot", { leaseId: closing.leaseId }, true);
       } finally {
         release();
         await runtime.stop();

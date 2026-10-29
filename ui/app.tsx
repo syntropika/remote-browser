@@ -12,6 +12,7 @@ import {
   HandoffDialog,
   MediaDialog,
   NewProfileDialog,
+  RestartBrowserDialog,
   WebsiteDialog,
 } from "./dialogs.js";
 import { useDisplaySession } from "./display-session.js";
@@ -45,7 +46,7 @@ export function App() {
   const [healthNote, setHealthNote] = useState("Checking the session");
   const [ready, setReady] = useState(false);
   const [epoch, setEpoch] = useState(0);
-  const [dialog, setDialog] = useState<"" | "profile" | "clipboard">("");
+  const [dialog, setDialog] = useState<"" | "profile" | "clipboard" | "restart">("");
   const [panel, setPanel] = useState<"" | "files" | "settings">("");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("sessions");
   const [preview, setPreview] = useState<ManagedFile | null>(null);
@@ -353,6 +354,10 @@ export function App() {
     })();
 
   const menu = (key: string) => {
+    if (key === "restart") {
+      setDialog("restart");
+      return;
+    }
     if (key === "clipboard") {
       setDialog("clipboard");
       return;
@@ -588,6 +593,23 @@ export function App() {
           await selectProfile(created.id || profileId);
         }}
       />
+      {dialog === "restart" ? (
+        <RestartBrowserDialog
+          isOpen
+          name={profiles.find((profile) => profile.id === profileId)?.name || "this session"}
+          onClose={() => setDialog("")}
+          onRestart={async () => {
+            const target = live.current.profileId;
+            await action("restart", {}, null, target);
+            setReady(false);
+            setEpoch((value) => value + 1);
+            if (target === live.current.profileId) {
+              await selectProfile(target);
+              done("Browser session restarted.");
+            }
+          }}
+        />
+      ) : null}
       {panel === "settings" ? (
         <Settings
           initialSection={settingsSection}
@@ -622,6 +644,7 @@ export function App() {
             setEpoch((value) => value + 1);
             setPanel("");
           }}
+          onRestart={() => setDialog("restart")}
           onSavePolicy={async (policy) => {
             const saved = record(await api("/api/policies", { profileId, policy }));
             setPolicies(list(saved.policies).map(readPolicy));

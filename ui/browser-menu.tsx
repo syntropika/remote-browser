@@ -123,13 +123,17 @@ export function BrowserMenu({
                 <Dropdown.Item
                   id="control"
                   textValue={human ? "Return this tab to agents" : "Ask for control"}
-                  isDisabled={!tab || tab.uncertain}
+                  isDisabled={!tab}
                 >
                   <Icon name="hand" />
                   {human ? "Return this tab to agents" : "Ask for control"}
                 </Dropdown.Item>
               </Dropdown.Section>
               <Dropdown.Section aria-label="This browser">
+                <Dropdown.Item id="restart" textValue="Restart browser session">
+                  <Icon name="reload" />
+                  Restart browser session
+                </Dropdown.Item>
                 <Dropdown.Item id="settings" textValue="Settings">
                   <Icon name="settings" />
                   Settings

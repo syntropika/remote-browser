@@ -12,6 +12,7 @@ accounts over MCP.
 - Save screenshots, record the session, and manage uploads and downloads per session.
 - Copy and paste between your machine and the page.
 - Give every MCP client its own API key, scoped to the sessions it may use.
+- Recover blocked tabs by taking control, or restart a browser session from its menu.
 
 ## How it runs
 

@@ -143,10 +143,22 @@ atomic operations across tabs.
 
 Agent actions preserve the dashboard's selected tab unless `browser_tabs` action
 `select` is requested. A user can watch a reserved tab; interacting requires **Take
-control**. Takeover waits for an in-flight native operation to finish, revokes its lease,
+control**. Takeover stops pending navigation, revokes its lease,
 invalidates element references and blocks further agent calls, including observations.
 **Return to agents** permits a fresh reservation; it does not reactivate old tokens.
 Other tabs remain usable. MCP does not automatically reclaim a user-owned tab.
+
+An interrupted operation can leave a tab's completion unknown. The dashboard can still
+select and view that tab. Taking control revokes the agent's reservation and recovers the
+tab after the engine acknowledges the takeover; closing it also ends the reservation.
+Agent operations stay blocked until this human recovery, and old tokens never become
+valid again. Actions already committed by a website are not rolled back.
+
+Use **More options → Restart browser session**, or the recovery button in **Settings →
+Sessions**, when a session cannot recover. Confirmation closes that session's tabs and
+stops its agents while the dashboard, other sessions, API keys, saved cookies and managed
+files remain available. Some websites may require sign-in again. A restart also works when
+the session's engine has stopped responding.
 
 ## Session health
 

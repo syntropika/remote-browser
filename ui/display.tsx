@@ -48,6 +48,7 @@ function modifiers(event: MouseEvent | KeyboardEvent | React.PointerEvent | Reac
   return {
     ctrl: event.ctrlKey,
     alt: event.altKey,
+    altGraph: event.getModifierState("AltGraph"),
     shift: event.shiftKey,
     meta: event.metaKey,
   };

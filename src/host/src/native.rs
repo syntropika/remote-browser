@@ -385,9 +385,19 @@ impl NativeClient {
         if let Some(profile) = &self.profile_id {
             crate::identity::check_profile(profile)?;
         }
+        let recovery = human && matches!(op, "take" | "close");
+        let inspection = human && matches!(op, "view" | "screenshot" | "display");
+        if op != "shutdown" && self.state.closing.load(Ordering::SeqCst) {
+            return Err(Error::Invalid(
+                "This browser session has stopped; refresh the dashboard or reserve a new tab"
+                    .into(),
+            ));
+        }
         if op != "shutdown"
             && (self.state.failed.load(Ordering::SeqCst)
-                || tab.is_some_and(|tab| self.state.unknown.lock().unwrap().contains(tab)))
+                || (!recovery
+                    && !inspection
+                    && tab.is_some_and(|tab| self.state.unknown.lock().unwrap().contains(tab))))
         {
             return Err(Error::Uncertain);
         }
@@ -462,11 +472,15 @@ impl NativeClient {
                 other => Error::Invalid(other.into()),
             });
         }
-        result.get("value").cloned().ok_or_else(|| {
+        let value = result.get("value").cloned().ok_or_else(|| {
             guard.armed = true;
             guard.reason = "invalid_response_envelope";
             Error::Protocol("Invalid engine response; completion is unknown".into())
-        })
+        })?;
+        if recovery && let Some(tab) = tab {
+            self.state.unknown.lock().unwrap().remove(tab);
+        }
+        Ok(value)
     }
     pub async fn close(&self) -> Result<()> {
         self.state.media.stop().await;
@@ -585,6 +599,7 @@ import { writeFileSync,writeSync } from 'node:fs';
 for await (const line of createInterface({input:process.stdin})) {
  const r=JSON.parse(line);
  if(r.op==='wait') { writeFileSync(process.argv[3]+'/received','');continue; }
+ if(r.op==='take' && r.args?.reject) { writeSync(1,JSON.stringify({id:r.id,error:'take rejected'})+'\n');continue; }
  writeSync(1,JSON.stringify({id:r.id,value:{ok:true}})+'\n');
  if(r.op==='shutdown')break;
 }
@@ -624,6 +639,51 @@ for await (const line of createInterface({input:process.stdin})) {
                 .await
                 .is_ok()
         );
+        for op in ["view", "screenshot", "display"] {
+            assert!(
+                client
+                    .request(op, Some("tab-a"), Value::Null, true)
+                    .await
+                    .is_ok(),
+                "A human must be able to inspect a quarantined tab with {op}"
+            );
+        }
+        assert!(matches!(
+            client
+                .request("input", Some("tab-a"), Value::Null, true)
+                .await,
+            Err(Error::Uncertain)
+        ));
+        assert!(matches!(
+            client
+                .request("take", Some("tab-a"), Value::Null, false)
+                .await,
+            Err(Error::Uncertain)
+        ));
+        assert!(
+            client
+                .request("take", Some("tab-a"), json!({"reject":true}), true)
+                .await
+                .is_err()
+        );
+        assert!(
+            client.uncertain(),
+            "A rejected takeover must not clear quarantine"
+        );
+        client.state.unknown.lock().unwrap().insert("tab-b".into());
+        client
+            .request("close", Some("tab-b"), Value::Null, true)
+            .await
+            .expect("A human must be able to close a quarantined tab");
+        assert!(
+            client.uncertain(),
+            "Closing another tab must not clear this tab"
+        );
+        client
+            .request("take", Some("tab-a"), Value::Null, true)
+            .await
+            .expect("Explicit human takeover must recover the quarantined tab");
+        assert!(!client.uncertain());
         client.close().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }

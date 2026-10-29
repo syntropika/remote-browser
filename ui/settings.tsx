@@ -30,6 +30,7 @@ type Props = {
   onNewSession: () => void;
   onSavePolicy: (policy: Policy) => Promise<void>;
   onReconnect: () => void;
+  onRestart: () => void;
   onClose: () => void;
 };
 
@@ -86,6 +87,7 @@ export function Settings({
   onNewSession,
   onSavePolicy,
   onReconnect,
+  onRestart,
   onClose,
 }: Props) {
   const native = useNativeExtensions();
@@ -243,6 +245,17 @@ export function Settings({
                     <Button onPress={onNewSession} size="sm" variant="primary">
                       <Icon name="plus" />
                       Create
+                    </Button>
+                  </Row>
+                </Group>
+                <Group title="Recovery">
+                  <Row
+                    description="Closes this session's tabs and stops its agents. Saved cookies and files are kept."
+                    title="Restart this browser session"
+                  >
+                    <Button onPress={onRestart} size="sm" variant="secondary">
+                      <Icon name="reload" />
+                      Restart browser
                     </Button>
                   </Row>
                 </Group>

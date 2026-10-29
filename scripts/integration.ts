@@ -13,6 +13,8 @@ const local = [
   "files",
   "parity",
   "failure",
+  "keyboard-layout",
+  "restart",
   "handoff",
   "logging",
   "metadata",
@@ -40,6 +42,7 @@ const optional = [
   "dashboard-mobile",
   "dashboard-editor",
   "dashboard-viewers",
+  "dashboard-recovery",
 ];
 const { values } = parseArgs({
   options: {
@@ -70,6 +73,7 @@ if (values.list) {
               "dashboard-mobile",
               "dashboard-editor",
               "dashboard-viewers",
+              "dashboard-recovery",
             ]
           : []),
       ];
@@ -90,6 +94,8 @@ if (values.list) {
     "files",
     "parity",
     "failure",
+    "keyboard-layout",
+    "restart",
     "handoff",
     "logging",
     "metadata",
@@ -100,6 +106,7 @@ if (values.list) {
     "dashboard-mobile",
     "dashboard-editor",
     "dashboard-viewers",
+    "dashboard-recovery",
   ]);
   if (suites.some((suite) => hostSuites.has(suite)) && !host) {
     throw new Error("Pass --host-binary or REMOTE_BROWSER_HOST_BINARY for host suites");

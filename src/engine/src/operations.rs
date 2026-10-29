@@ -43,6 +43,24 @@ fn finish_call(
 }
 
 impl Engine {
+    pub(super) fn cancel_navigation(&mut self, at: usize) {
+        let tab = self.tabs[at].id.clone();
+        if self.navigations.iter().any(|pending| pending.tab == tab) {
+            self.tabs[at].browser.stop_load();
+        }
+        let mut index = 0;
+        while index < self.navigations.len() {
+            if self.navigations[index].tab == tab {
+                let pending = self.navigations.remove(index);
+                if let Some(operation) = pending.operation {
+                    finish_call(pending.id, operation, Err("humanControl".into()));
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+
     pub(super) fn dispatch(&mut self, call: &Call) {
         let operation = remote_browser_native::logging::Operation::begin(
             remote_browser_native::logging::Context::incoming(

@@ -536,6 +536,13 @@ struct Action {
 }
 async fn action(State(host): State<Host>, headers: HeaderMap, Json(input): Json<Action>) -> Reply {
     authorize_mutation(&host, &headers)?;
+    if input.op == "restart" {
+        host.profiles
+            .restart(&input.profile_id)
+            .await
+            .map_err(failure)?;
+        return Ok(Json(json!({"restarted":true})));
+    }
     let browser = host
         .profiles
         .browser(Some(&input.profile_id))

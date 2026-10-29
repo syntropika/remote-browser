@@ -1185,9 +1185,16 @@ impl Engine {
                         (code, Some(character))
                     }
                 };
-                // Ctrl+A selects a page; it does not write an A.
-                let text =
-                    text.filter(|_| modifiers & (CONTROL_DOWN | ALT_DOWN | COMMAND_DOWN) == 0);
+                // Layout modifiers can produce text, while ordinary Alt/Ctrl/Command
+                // shortcuts must remain non-text key events.
+                let layout_text = modifiers & COMMAND_DOWN == 0
+                    && (args["altGraph"].as_bool().unwrap_or_default()
+                        || (modifiers & ALT_DOWN != 0
+                            && modifiers & CONTROL_DOWN == 0
+                            && text.is_some_and(|text| !text.is_ascii_alphanumeric())));
+                let text = text.filter(|_| {
+                    layout_text || modifiers & (CONTROL_DOWN | ALT_DOWN | COMMAND_DOWN) == 0
+                });
                 let mut event = KeyEvent {
                     type_: KeyEventType::RAWKEYDOWN,
                     modifiers,
@@ -1201,10 +1208,14 @@ impl Engine {
                 if let Some(text) = text {
                     event.type_ = KeyEventType::CHAR;
                     event.windows_key_code = text as i32;
+                    if layout_text {
+                        event.modifiers &= !(CONTROL_DOWN | ALT_DOWN);
+                    }
                     host.send_key_event(Some(&event));
                     event.windows_key_code = code;
                 }
                 event.type_ = KeyEventType::KEYUP;
+                event.modifiers = modifiers;
                 host.send_key_event(Some(&event));
             }
             "text" => {
@@ -1263,7 +1274,9 @@ impl Engine {
                 | "editor_key"
                 | "editor_blur"
         );
+        let human_recovery = call.human && matches!(call.op.as_str(), "take" | "close");
         if (acts || call.op == "release")
+            && !human_recovery
             && !matches!(call.op.as_str(), "agent_dialog" | "js_dialog")
             && self
                 .navigations
@@ -1272,7 +1285,7 @@ impl Engine {
         {
             return Err("busy".into());
         }
-        if acts || call.lease_id.is_some() {
+        if (acts || call.lease_id.is_some()) && !human_recovery {
             let tab = self.tabs[at].id.clone();
             let taken = self.tabs[at].human;
             if call.human {
@@ -1511,10 +1524,12 @@ impl Engine {
                 if self.tabs.len() == 1 {
                     return Err("the last tab cannot be closed".into());
                 }
+                self.cancel_navigation(at);
                 self.discard(at);
                 Ok(Value::Null)
             }
             "take" => {
+                self.cancel_navigation(at);
                 self.reservations.remove(&self.tabs[at].id);
                 self.release(at);
                 self.tabs[at].human = true;

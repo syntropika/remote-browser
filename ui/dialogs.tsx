@@ -16,6 +16,66 @@ type Shell = {
   size?: "sm" | "md" | "lg";
 };
 
+export function RestartBrowserDialog({
+  isOpen,
+  name,
+  onClose,
+  onRestart,
+}: {
+  isOpen: boolean;
+  name: string;
+  onClose: () => void;
+  onRestart: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <Overlay
+      isOpen={isOpen}
+      onClose={() => {
+        if (!busy) {
+          onClose();
+        }
+      }}
+      title="Restart browser session?"
+      size="sm"
+    >
+      <p className="text-ink-dim text-sm">
+        Restarting {name} closes its tabs and stops its agents. Saved cookies and files stay on this
+        device. Some sites may ask you to sign in again.
+      </p>
+      {error ? (
+        <p className="text-danger text-sm" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <Button isDisabled={busy} onPress={onClose} variant="ghost">
+          Cancel
+        </Button>
+        <Button
+          isDisabled={busy}
+          onPress={asyncHandler(async () => {
+            setBusy(true);
+            setError("");
+            try {
+              await onRestart();
+              onClose();
+            } catch (cause) {
+              setError(failure(cause).message);
+            } finally {
+              setBusy(false);
+            }
+          })}
+          variant="primary"
+        >
+          {busy ? "Restarting…" : "Restart browser"}
+        </Button>
+      </div>
+    </Overlay>
+  );
+}
+
 /** A website's blocking dialog, resolved through its native callback. */
 export function WebsiteDialog({
   dialog,

@@ -269,7 +269,7 @@ export function Chrome({
               <Button
                 aria-label={holding === "you" ? "Return this tab to agents" : "Ask for control"}
                 className="hidden @2xl:inline-flex"
-                isDisabled={!tab || tab.uncertain}
+                isDisabled={!tab}
                 isIconOnly
                 onPress={holding === "you" ? onReturn : onTake}
                 size="sm"

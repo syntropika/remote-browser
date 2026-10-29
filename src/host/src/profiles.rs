@@ -40,7 +40,7 @@ pub struct ProfileInfo {
 }
 struct Entry {
     definition: ProfileDefinition,
-    browser: OnceCell<Automation>,
+    browser: RwLock<OnceCell<Automation>>,
 }
 #[derive(Clone)]
 pub struct Profiles {
@@ -91,7 +91,7 @@ impl Profiles {
                 definition.id.clone(),
                 Arc::new(Entry {
                     definition: definition.clone(),
-                    browser: OnceCell::new(),
+                    browser: RwLock::new(OnceCell::new()),
                 }),
             );
         }
@@ -133,50 +133,78 @@ impl Profiles {
         let entry = self.entries.read().await.get(id).cloned().ok_or_else(|| {
             Error::Invalid("Unknown profileId; list browser_profiles first".into())
         })?;
+        let browser = entry.browser.read().await;
+        let browser = browser
+            .get_or_try_init(|| self.start_browser(id, &entry.definition))
+            .await?;
+        Ok(browser.clone().with_profile(id))
+    }
+    async fn start_browser(&self, id: &str, definition: &ProfileDefinition) -> Result<Automation> {
         let config = self.config.lock().await;
         let binary = config.engine_binary.clone();
         let files = config.files_root.as_ref().map(|root| root.join(id));
         drop(config);
-        let browser = entry
-            .browser
-            .get_or_try_init(|| {
-                crate::logging::Context::current()
-                    .for_profile(id)
-                    .scope(async {
-                        crate::logging::lifecycle("profiles", "profile_starting", None);
-                        let result = Automation::embedded_with_files(
-                            &binary,
-                            &entry.definition.data_directory,
-                            files.as_deref(),
-                            self.timeout,
-                        )
-                        .await;
-                        if result.is_ok() {
-                            crate::logging::lifecycle("profiles", "profile_ready", None);
-                        }
-                        result
-                    })
+        crate::logging::Context::current()
+            .for_profile(id)
+            .scope(async {
+                crate::logging::lifecycle("profiles", "profile_starting", None);
+                let result = Automation::embedded_with_files(
+                    &binary,
+                    &definition.data_directory,
+                    files.as_deref(),
+                    self.timeout,
+                )
+                .await;
+                if result.is_ok() {
+                    crate::logging::lifecycle("profiles", "profile_ready", None);
+                }
+                result
             })
-            .await?;
-        Ok(browser.clone().with_profile(id))
+            .await
+    }
+    pub async fn restart(&self, id: &str) -> Result<()> {
+        crate::identity::owner()?;
+        let entry = self.entries.read().await.get(id).cloned().ok_or_else(|| {
+            Error::Invalid("Unknown profileId; list browser_profiles first".into())
+        })?;
+        let profiles = self.clone();
+        let id = id.to_owned();
+        let context = crate::logging::Context::current().for_profile(&id);
+        // Finish recovery even if the requesting dashboard disconnects mid-restart.
+        tokio::spawn(context.scope(async move {
+            let mut browser = entry.browser.write().await;
+            if let Some(previous) = browser.take() {
+                previous.close().await?;
+            }
+            browser
+                .get_or_try_init(|| profiles.start_browser(&id, &entry.definition))
+                .await?;
+            Ok(())
+        }))
+        .await
+        .map_err(|_| Error::Protocol("Browser restart was interrupted".into()))?
     }
     pub async fn list(&self) -> Vec<ProfileInfo> {
-        let mut profiles: Vec<_> = self
+        let entries: Vec<_> = self
             .entries
             .read()
             .await
             .iter()
             .filter(|(id, _)| crate::identity::check_profile(id).is_ok())
-            .map(|(id, entry)| ProfileInfo {
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect();
+        let mut profiles = Vec::with_capacity(entries.len());
+        for (id, entry) in entries {
+            profiles.push(ProfileInfo {
                 id: id.clone(),
                 name: entry.definition.name.clone(),
-                connected: entry.browser.initialized(),
-                is_default: id == &self.default_id,
+                connected: entry.browser.read().await.initialized(),
+                is_default: id == self.default_id,
                 background_tabs: true,
                 concurrent_tabs: true,
                 local_files: true,
-            })
-            .collect();
+            });
+        }
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
         profiles
     }
@@ -212,7 +240,7 @@ impl Profiles {
             id.clone(),
             Arc::new(Entry {
                 definition: definition.clone(),
-                browser: OnceCell::new(),
+                browser: RwLock::new(OnceCell::new()),
             }),
         );
         *config = updated;
@@ -274,7 +302,7 @@ impl Profiles {
         let entries: Vec<_> = self.entries.read().await.values().cloned().collect();
         let mut cleanup = tokio::task::JoinSet::new();
         for entry in entries {
-            if let Some(browser) = entry.browser.get() {
+            if let Some(browser) = entry.browser.read().await.get() {
                 let browser = browser.clone();
                 cleanup.spawn(async move {
                     let _ = tokio::time::timeout(Duration::from_secs(5), browser.close()).await;
