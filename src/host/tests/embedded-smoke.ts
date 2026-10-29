@@ -116,9 +116,11 @@ export async function run(binary: string) {
           began = resolve;
         });
         let slowDone = false;
-        const slow = first.call("navigate", a, { url: `${server.origin}/slow` }, oa).finally(() => {
-          slowDone = true;
-        });
+        const slow = first
+          .call("navigate", a, { url: `${server.origin}/slow` }, { ...oa, error: true })
+          .finally(() => {
+            slowDone = true;
+          });
         await deadline(started, 3000);
         const observation = first.call("screenshot", a, {}, { human: true });
         assert((await first.call("tabs")).find((t: any) => t.id === a).busy);
@@ -126,7 +128,8 @@ export async function run(binary: string) {
         assert(!slowDone);
         await first.call("evaluate", a, { script: "return 1;" }, { ...oa, error: true });
         const take = first.call("take", a, {}, { human: true });
-        await Promise.all([slow, observation, take]);
+        const [cancelled] = await Promise.all([slow, observation, take]);
+        assert.equal(cancelled, "humanControl", "Human takeover stops pending agent navigation");
         await first.call("navigate", a, { url: server.origin }, { ...oa, error: true });
         await first.call("navigate", a, { url: server.origin }, { human: true });
         await first.call("return", a, {}, { human: true });
