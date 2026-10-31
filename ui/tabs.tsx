@@ -41,11 +41,12 @@ function TabButton({
     <Tooltip delay={180}>
       <Tooltip.Trigger<"button"> {...props} render={renderTabButton} title={undefined} />
       <Tooltip.Content
-        className="max-w-72 break-normal break-words"
+        className="max-w-64 rounded-[5px] px-2 py-1 text-xs leading-4 font-normal break-normal break-words shadow-none"
         crossOffset={12}
         data-colour={agentColour(agentName)}
         offset={4}
         placement="bottom start"
+        showArrow={false}
         shouldFlip={false}
         style={{ background: "var(--agent)", color: "var(--color-page)" }}
       >
@@ -190,7 +191,7 @@ export function TabStrip({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
     const held = tab.reservation && tab.owner !== "human" ? tab.reservation : null;
     return (
       <div
-        className={`group flex h-9 max-w-60 min-w-32 flex-1 items-stretch rounded-t-xl border border-b-0 border-transparent transition-colors ${
+        className={`group flex h-9 max-w-60 min-w-32 flex-1 items-stretch rounded-t-[10px] border border-b-0 border-transparent transition-colors ${
           selected ? "bg-chrome" : "hover:bg-strip/80"
         }`}
         data-colour={held ? agentColour(held.agentName) : undefined}
@@ -200,7 +201,7 @@ export function TabStrip({ tabs, tabId, onSelect, onClose, onOpen }: Props) {
         <TabButton
           agentName={held?.agentName}
           aria-selected={selected}
-          className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-t-xl pr-1 pl-3 text-[13px] font-medium ${
+          className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-t-[10px] pr-1 pl-3 text-[13px] font-medium ${
             selected ? "text-foreground" : "text-ink-faint"
           }`}
           onClick={() => {
